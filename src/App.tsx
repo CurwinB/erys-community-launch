@@ -25,13 +25,11 @@ const App = () => (
       appearance: {
         theme: "dark",
         accentColor: "#00D4FF",
+        walletChainType: "solana-only",
       },
       externalWallets: {
         solana: { connectors: solanaConnectors },
       },
-      solanaClusters: [
-        { name: "mainnet-beta", rpcUrl: "https://api.mainnet-beta.solana.com" },
-      ],
     }}
   >
     <QueryClientProvider client={queryClient}>
