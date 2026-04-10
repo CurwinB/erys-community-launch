@@ -87,10 +87,13 @@ const LaunchPage = () => {
       );
 
       tx.feePayer = new PublicKey(publicKey);
-      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      const { blockhash } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
 
-      // Send via Privy wallet
-      const txSignature = await wallet.sendTransaction(tx, connection);
+      // Serialize and send via Privy wallet
+      const serializedTx = tx.serialize({ requireAllSignatures: false });
+      const result = await wallet.signAndSendTransaction({ transaction: serializedTx });
+      const txSignature = result.signature;
 
       // Call contribute edge function to verify and record
       const { error } = await supabase.functions.invoke("contribute", {
