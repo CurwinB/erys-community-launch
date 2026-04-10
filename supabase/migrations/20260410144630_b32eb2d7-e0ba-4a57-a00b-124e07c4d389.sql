@@ -1,0 +1,1 @@
+ALTER TABLE public.contributions ADD CONSTRAINT contributions_tx_signature_unique UNIQUE (tx_signature);
