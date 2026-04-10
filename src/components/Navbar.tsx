@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Wallet } from "lucide-react";
+import WalletButton from "@/components/WalletButton";
 
 const Navbar = () => {
   return (
@@ -30,10 +30,7 @@ const Navbar = () => {
               Schedule a Launch
             </Button>
           </Link>
-          <Button variant="outline" size="sm" className="gap-2">
-            <Wallet className="h-4 w-4" />
-            <span className="hidden sm:inline">Connect Wallet</span>
-          </Button>
+          <WalletButton />
         </div>
       </div>
     </nav>
