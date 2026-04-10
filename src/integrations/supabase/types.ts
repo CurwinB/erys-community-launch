@@ -17,24 +17,30 @@ export type Database = {
       contributions: {
         Row: {
           amount_lamports: number
+          basis_points: number | null
           contributed_at: string
           id: string
+          is_fee_claimer: boolean | null
           launch_id: string
           tx_signature: string
           wallet_address: string
         }
         Insert: {
           amount_lamports: number
+          basis_points?: number | null
           contributed_at?: string
           id?: string
+          is_fee_claimer?: boolean | null
           launch_id: string
           tx_signature: string
           wallet_address: string
         }
         Update: {
           amount_lamports?: number
+          basis_points?: number | null
           contributed_at?: string
           id?: string
+          is_fee_claimer?: boolean | null
           launch_id?: string
           tx_signature?: string
           wallet_address?: string
@@ -51,13 +57,16 @@ export type Database = {
       }
       launches: {
         Row: {
+          claimer_count: number | null
           created_at: string
           created_by_wallet: string
           description: string | null
           escrow_wallet_encrypted_private_key: string
           escrow_wallet_public_key: string
+          excluded_contributors: number | null
           execution_attempts: number
           execution_error: string | null
+          fee_share_config_key: string | null
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
@@ -73,13 +82,16 @@ export type Database = {
           website_url: string | null
         }
         Insert: {
+          claimer_count?: number | null
           created_at?: string
           created_by_wallet: string
           description?: string | null
           escrow_wallet_encrypted_private_key: string
           escrow_wallet_public_key: string
+          excluded_contributors?: number | null
           execution_attempts?: number
           execution_error?: string | null
+          fee_share_config_key?: string | null
           id?: string
           image_url?: string | null
           ipfs_metadata_url?: string | null
@@ -95,13 +107,16 @@ export type Database = {
           website_url?: string | null
         }
         Update: {
+          claimer_count?: number | null
           created_at?: string
           created_by_wallet?: string
           description?: string | null
           escrow_wallet_encrypted_private_key?: string
           escrow_wallet_public_key?: string
+          excluded_contributors?: number | null
           execution_attempts?: number
           execution_error?: string | null
+          fee_share_config_key?: string | null
           id?: string
           image_url?: string | null
           ipfs_metadata_url?: string | null
@@ -115,6 +130,27 @@ export type Database = {
           token_symbol?: string
           twitter_url?: string | null
           website_url?: string | null
+        }
+        Relationships: []
+      }
+      platform_fee_claims: {
+        Row: {
+          amount_lamports: number
+          claimed_at: string
+          id: string
+          tx_signature: string
+        }
+        Insert: {
+          amount_lamports: number
+          claimed_at?: string
+          id?: string
+          tx_signature: string
+        }
+        Update: {
+          amount_lamports?: number
+          claimed_at?: string
+          id?: string
+          tx_signature?: string
         }
         Relationships: []
       }
