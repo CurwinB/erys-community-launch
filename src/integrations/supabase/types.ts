@@ -14,7 +14,110 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      contributions: {
+        Row: {
+          amount_lamports: number
+          contributed_at: string
+          id: string
+          launch_id: string
+          tx_signature: string
+          wallet_address: string
+        }
+        Insert: {
+          amount_lamports: number
+          contributed_at?: string
+          id?: string
+          launch_id: string
+          tx_signature: string
+          wallet_address: string
+        }
+        Update: {
+          amount_lamports?: number
+          contributed_at?: string
+          id?: string
+          launch_id?: string
+          tx_signature?: string
+          wallet_address?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contributions_launch_id_fkey"
+            columns: ["launch_id"]
+            isOneToOne: false
+            referencedRelation: "launches"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      launches: {
+        Row: {
+          created_at: string
+          created_by_wallet: string
+          description: string | null
+          escrow_wallet_encrypted_private_key: string
+          escrow_wallet_public_key: string
+          execution_attempts: number
+          execution_error: string | null
+          id: string
+          image_url: string | null
+          ipfs_metadata_url: string | null
+          launch_datetime: string
+          max_contribution_lamports: number | null
+          min_contribution_lamports: number
+          status: Database["public"]["Enums"]["launch_status"]
+          telegram_url: string | null
+          token_mint_address: string | null
+          token_name: string
+          token_symbol: string
+          twitter_url: string | null
+          website_url: string | null
+        }
+        Insert: {
+          created_at?: string
+          created_by_wallet: string
+          description?: string | null
+          escrow_wallet_encrypted_private_key: string
+          escrow_wallet_public_key: string
+          execution_attempts?: number
+          execution_error?: string | null
+          id?: string
+          image_url?: string | null
+          ipfs_metadata_url?: string | null
+          launch_datetime: string
+          max_contribution_lamports?: number | null
+          min_contribution_lamports: number
+          status?: Database["public"]["Enums"]["launch_status"]
+          telegram_url?: string | null
+          token_mint_address?: string | null
+          token_name: string
+          token_symbol: string
+          twitter_url?: string | null
+          website_url?: string | null
+        }
+        Update: {
+          created_at?: string
+          created_by_wallet?: string
+          description?: string | null
+          escrow_wallet_encrypted_private_key?: string
+          escrow_wallet_public_key?: string
+          execution_attempts?: number
+          execution_error?: string | null
+          id?: string
+          image_url?: string | null
+          ipfs_metadata_url?: string | null
+          launch_datetime?: string
+          max_contribution_lamports?: number | null
+          min_contribution_lamports?: number
+          status?: Database["public"]["Enums"]["launch_status"]
+          telegram_url?: string | null
+          token_mint_address?: string | null
+          token_name?: string
+          token_symbol?: string
+          twitter_url?: string | null
+          website_url?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -23,7 +126,12 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      launch_status:
+        | "scheduled"
+        | "executing"
+        | "launched"
+        | "execution_failed"
+        | "cancelled"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +258,14 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      launch_status: [
+        "scheduled",
+        "executing",
+        "launched",
+        "execution_failed",
+        "cancelled",
+      ],
+    },
   },
 } as const
