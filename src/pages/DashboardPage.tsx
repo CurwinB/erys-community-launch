@@ -7,6 +7,7 @@ import { formatSol } from "@/lib/constants";
 import { Wallet, Coins, Rocket, ExternalLink, Loader2, AlertTriangle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "@/hooks/use-toast";
+import { useWallet } from "@/hooks/useWallet";
 
 type Tab = "contributions" | "launches";
 
@@ -19,16 +20,15 @@ interface ClaimablePosition {
 
 const DashboardPage = () => {
   const [activeTab, setActiveTab] = useState<Tab>("contributions");
-  const [isConnected] = useState(false); // Will be wired with Privy
   const [claimingMint, setClaimingMint] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  const { connected, publicKey, connect, wallet } = useWallet();
 
-  // Placeholder wallet — will come from Privy
-  const walletAddress = "";
+  const walletAddress = publicKey || "";
 
   const { data: myContributions } = useQuery({
     queryKey: ["my-contributions", walletAddress],
-    enabled: isConnected && !!walletAddress,
+    enabled: connected && !!walletAddress,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("contributions")
@@ -40,10 +40,9 @@ const DashboardPage = () => {
     },
   });
 
-  // Fetch claimable positions from Bags via edge function
   const { data: claimablePositions } = useQuery({
     queryKey: ["claimable-positions", walletAddress],
-    enabled: isConnected && !!walletAddress,
+    enabled: connected && !!walletAddress,
     queryFn: async () => {
       const { data, error } = await supabase.functions.invoke("claim-fees", {
         body: { action: "claimable-positions", wallet: walletAddress },
@@ -51,12 +50,12 @@ const DashboardPage = () => {
       if (error) throw error;
       return (data as ClaimablePosition[]) || [];
     },
-    refetchInterval: 30000, // Refresh every 30s
+    refetchInterval: 30000,
   });
 
   const { data: myLaunches } = useQuery({
     queryKey: ["my-launches", walletAddress],
-    enabled: isConnected && !!walletAddress,
+    enabled: connected && !!walletAddress,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("launches")
@@ -68,44 +67,37 @@ const DashboardPage = () => {
     },
   });
 
-  // Calculate total claimable across all positions
   const totalClaimable = claimablePositions?.reduce(
     (sum: number, p: ClaimablePosition) => sum + (p.claimableAmount || 0),
     0
   ) || 0;
 
-  // Get claimable amount for a specific mint
   const getClaimableForMint = (mint: string | null): number => {
     if (!mint || !claimablePositions) return 0;
     const pos = claimablePositions.find((p: ClaimablePosition) => p.mint === mint);
     return pos?.claimableAmount || 0;
   };
 
-  // Claim fees mutation
   const claimMutation = useMutation({
     mutationFn: async (mint: string) => {
-      // Step 1: Get pre-signed transaction from edge function
+      if (!wallet) throw new Error("Wallet not connected");
+
+      // Step 1: Get pre-signed transaction from Bags via edge function
       const { data, error } = await supabase.functions.invoke("claim-fees", {
         body: { action: "claim", wallet: walletAddress, mint },
       });
       if (error) throw error;
 
-      // Step 2: The transaction is pre-signed by Bags
-      // Frontend must partial-sign via Privy (preserving Bags' signature)
-      // then submit via the send action
-      //
-      // TODO: Wire with Privy's signTransaction:
-      // const tx = VersionedTransaction.deserialize(Buffer.from(data.transaction, 'base64'));
-      // const signedTx = await privy.signTransaction(tx); // partial sign — preserves existing sigs
-      // const serialized = Buffer.from(signedTx.serialize()).toString('base64');
-      //
-      // Step 3: Submit the fully-signed transaction
-      // const { data: sendResult, error: sendErr } = await supabase.functions.invoke("claim-fees", {
-      //   body: { action: "send", transaction: serialized },
-      // });
+      // Step 2: Partial-sign via Privy, preserving Bags' existing signature
+      const txBytes = Uint8Array.from(atob(data.transaction), (c) => c.charCodeAt(0));
+      const signed = await wallet.signTransaction({ transaction: txBytes });
 
-      // For now, throw until Privy is wired
-      throw new Error("Privy wallet integration required for claiming. Coming soon.");
+      // Step 3: Submit the fully-signed transaction
+      const serializedSigned = btoa(String.fromCharCode(...new Uint8Array(signed.signedTransaction)));
+      const { error: sendErr } = await supabase.functions.invoke("claim-fees", {
+        body: { action: "send", transaction: serializedSigned },
+      });
+      if (sendErr) throw sendErr;
     },
     onSuccess: () => {
       toast({ title: "Fees Claimed!", description: "Your fee claim transaction was confirmed." });
@@ -123,14 +115,14 @@ const DashboardPage = () => {
     claimMutation.mutate(mint);
   };
 
-  if (!isConnected) {
+  if (!connected) {
     return (
       <main className="min-h-screen">
         <div className="container mx-auto flex min-h-[60vh] flex-col items-center justify-center px-4">
           <Wallet className="mb-4 h-12 w-12 text-muted-foreground" />
           <h2 className="mb-2 text-xl font-bold text-foreground">Connect Your Wallet</h2>
           <p className="mb-6 text-sm text-muted-foreground">Connect your wallet to view your contributions and launches.</p>
-          <Button className="gap-2">
+          <Button className="gap-2" onClick={connect}>
             <Wallet className="h-4 w-4" />
             Connect Wallet
           </Button>
@@ -144,7 +136,6 @@ const DashboardPage = () => {
       <div className="container mx-auto px-4 py-12">
         <h1 className="text-2xl font-bold text-foreground md:text-3xl">My Erys Dashboard.</h1>
 
-        {/* Tabs */}
         <div className="mt-8 flex gap-1 border-b border-border">
           {(["contributions", "launches"] as Tab[]).map((tab) => (
             <button
@@ -161,11 +152,9 @@ const DashboardPage = () => {
           ))}
         </div>
 
-        {/* Content */}
         <div className="mt-6">
           {activeTab === "contributions" ? (
             <div className="space-y-4">
-              {/* Total Claimable Summary */}
               <div className="border border-border bg-card p-6">
                 <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Total Claimable Fees</span>
                 <p className="mt-1 font-mono text-3xl font-bold text-primary">
@@ -215,9 +204,7 @@ const DashboardPage = () => {
                               onClick={() => c.launches?.token_mint_address && handleClaim(c.launches.token_mint_address)}
                               className="gap-1"
                             >
-                              {isClaiming ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : null}
+                              {isClaiming ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
                               {claimable > 0 ? `Claim ${formatSol(claimable)} SOL` : "No Fees"}
                             </Button>
                           )}
