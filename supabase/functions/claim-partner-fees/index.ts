@@ -5,7 +5,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const BAGS_API_BASE = "https://api.bags.fm";
+const BAGS_API_BASE = "https://public-api-v2.bags.fm/api/v1";
 const CLAIM_THRESHOLD_LAMPORTS = 100_000_000; // 0.1 SOL
 
 Deno.serve(async (req) => {
