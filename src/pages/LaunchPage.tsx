@@ -1,17 +1,27 @@
 import { useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import CountdownTimer from "@/components/CountdownTimer";
 import StatusBadge from "@/components/StatusBadge";
-import { formatSol, shortenAddress } from "@/lib/constants";
-import { ExternalLink, Users, Coins, Wallet, ArrowRight } from "lucide-react";
+import { formatSol, shortenAddress, solToLamports } from "@/lib/constants";
+import { ExternalLink, Users, Coins, Wallet, Loader2 } from "lucide-react";
 import { useState } from "react";
+import { useWallet } from "@/hooks/useWallet";
+import { useToast } from "@/hooks/use-toast";
+import LaunchHeader from "@/components/launch/LaunchHeader";
+import LaunchStats from "@/components/launch/LaunchStats";
+import ContributionFeed from "@/components/launch/ContributionFeed";
+import HowItWorks from "@/components/launch/HowItWorks";
 
 const LaunchPage = () => {
   const { id } = useParams<{ id: string }>();
   const [solAmount, setSolAmount] = useState("");
+  const [isContributing, setIsContributing] = useState(false);
+  const { connected, publicKey, connect, wallet } = useWallet();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   const { data: launch, isLoading } = useQuery({
     queryKey: ["launch", id],
@@ -45,6 +55,72 @@ const LaunchPage = () => {
   const totalEscrow = contributions?.reduce((sum, c) => sum + Number(c.amount_lamports), 0) || 0;
   const contributorCount = contributions?.length || 0;
 
+  const handleContribute = async () => {
+    if (!connected || !publicKey || !wallet) {
+      connect();
+      return;
+    }
+
+    const sol = parseFloat(solAmount);
+    if (!sol || sol <= 0) {
+      toast({ title: "Invalid amount", description: "Enter a valid SOL amount.", variant: "destructive" });
+      return;
+    }
+
+    if (!launch) return;
+
+    const lamports = solToLamports(sol);
+
+    setIsContributing(true);
+    try {
+      // Import web3.js dynamically to keep bundle smaller
+      const { Connection, PublicKey, SystemProgram, Transaction } = await import("@solana/web3.js");
+
+      const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
+
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: new PublicKey(publicKey),
+          toPubkey: new PublicKey(launch.escrow_wallet_public_key),
+          lamports,
+        })
+      );
+
+      tx.feePayer = new PublicKey(publicKey);
+      const { blockhash } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+
+      // Serialize and send via Privy wallet
+      const serializedTx = tx.serialize({ requireAllSignatures: false });
+      const result = await wallet.signAndSendTransaction({
+        transaction: serializedTx,
+        chain: "solana:mainnet",
+      });
+      const txSignature = result.signature;
+
+      // Call contribute edge function to verify and record
+      const { error } = await supabase.functions.invoke("contribute", {
+        body: {
+          launch_id: id,
+          wallet_address: publicKey,
+          amount_lamports: lamports,
+          tx_signature: typeof txSignature === "string" ? txSignature : (txSignature as any).signature,
+        },
+      });
+
+      if (error) throw error;
+
+      toast({ title: "Contribution Recorded!", description: `${sol} SOL contributed successfully.` });
+      setSolAmount("");
+      queryClient.invalidateQueries({ queryKey: ["contributions", id] });
+    } catch (err: any) {
+      console.error("Contribution error:", err);
+      toast({ title: "Contribution Failed", description: err.message || "Something went wrong.", variant: "destructive" });
+    } finally {
+      setIsContributing(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="container mx-auto px-4 py-16">
@@ -63,88 +139,25 @@ const LaunchPage = () => {
 
   const maxContrib = launch.max_contribution_lamports ? Number(launch.max_contribution_lamports) : null;
   const progressPercent = maxContrib ? Math.min((totalEscrow / maxContrib) * 100, 100) : 0;
+  const isScheduled = launch.status === "scheduled";
+  const isPastLaunchTime = new Date(launch.launch_datetime) <= new Date();
+  const canContribute = isScheduled && !isPastLaunchTime;
 
   return (
     <main className="min-h-screen">
-      {/* Header */}
-      <section className="border-b border-border bg-card">
-        <div className="container mx-auto flex flex-col gap-6 px-4 py-8 md:flex-row md:items-center">
-          <div className="h-20 w-20 flex-shrink-0 overflow-hidden rounded-sm bg-muted">
-            {launch.image_url ? (
-              <img src={launch.image_url} alt={launch.token_name} className="h-full w-full object-cover" />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center text-2xl font-bold text-muted-foreground">
-                {launch.token_symbol.charAt(0)}
-              </div>
-            )}
-          </div>
-          <div className="flex-1">
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-foreground md:text-3xl">{launch.token_name}</h1>
-              <span className="font-mono text-sm text-muted-foreground">${launch.token_symbol}</span>
-              <StatusBadge status={launch.status as any} />
-            </div>
-            {launch.description && (
-              <p className="mt-2 text-sm text-muted-foreground">{launch.description}</p>
-            )}
-            <div className="mt-3 flex gap-2">
-              {launch.twitter_url && (
-                <a href={launch.twitter_url} target="_blank" rel="noopener noreferrer">
-                  <Button variant="outline" size="icon" className="h-8 w-8">
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </Button>
-                </a>
-              )}
-              {launch.telegram_url && (
-                <a href={launch.telegram_url} target="_blank" rel="noopener noreferrer">
-                  <Button variant="outline" size="icon" className="h-8 w-8">
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </Button>
-                </a>
-              )}
-              {launch.website_url && (
-                <a href={launch.website_url} target="_blank" rel="noopener noreferrer">
-                  <Button variant="outline" size="icon" className="h-8 w-8">
-                    <ExternalLink className="h-3.5 w-3.5" />
-                  </Button>
-                </a>
-              )}
-            </div>
-          </div>
-        </div>
-      </section>
+      <LaunchHeader launch={launch} />
 
-      {/* Content */}
       <div className="container mx-auto grid gap-6 px-4 py-8 lg:grid-cols-5">
-        {/* Left column */}
         <div className="space-y-6 lg:col-span-3">
-          {/* Countdown */}
-          {launch.status === "scheduled" && (
+          {isScheduled && (
             <div className="border border-border bg-card p-6">
               <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Launches in</span>
               <CountdownTimer targetDate={launch.launch_datetime} size="lg" className="mt-3" />
             </div>
           )}
 
-          {/* Stats */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="border border-border bg-card p-4">
-              <div className="flex items-center gap-2">
-                <Coins className="h-4 w-4 text-primary" />
-                <span className="text-[10px] uppercase tracking-widest text-muted-foreground">SOL in Escrow</span>
-              </div>
-              <p className="mt-2 font-mono text-2xl font-bold text-foreground">{formatSol(totalEscrow)}</p>
-            </div>
-            <div className="border border-border bg-card p-4">
-              <div className="flex items-center gap-2">
-                <Users className="h-4 w-4 text-primary" />
-                <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Contributors</span>
-              </div>
-              <p className="mt-2 font-mono text-2xl font-bold text-foreground">{contributorCount}</p>
-            </div>
-          </div>
+          <LaunchStats totalEscrow={totalEscrow} contributorCount={contributorCount} />
 
-          {/* Progress bar */}
           {maxContrib && (
             <div className="border border-border bg-card p-4">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -160,43 +173,8 @@ const LaunchPage = () => {
             </div>
           )}
 
-          {/* Contributor feed */}
-          <div className="border border-border bg-card">
-            <div className="border-b border-border p-4">
-              <h3 className="text-sm font-semibold text-foreground">Recent Contributions</h3>
-            </div>
-            <div className="max-h-64 overflow-y-auto">
-              {contributions && contributions.length > 0 ? (
-                contributions.map((c) => (
-                  <div key={c.id} className="flex items-center justify-between border-b border-border px-4 py-3 last:border-0">
-                    <span className="font-mono text-xs text-muted-foreground">{shortenAddress(c.wallet_address)}</span>
-                    <span className="font-mono text-sm font-semibold text-primary">{formatSol(Number(c.amount_lamports))} SOL</span>
-                  </div>
-                ))
-              ) : (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">No contributions yet. Be the first.</div>
-              )}
-            </div>
-          </div>
-
-          {/* Explainer */}
-          <div className="grid gap-4 md:grid-cols-3">
-            {[
-              { step: "1", title: "Contribute SOL", body: "Send SOL to the escrow before launch." },
-              { step: "2", title: "Token Launches", body: "Launches automatically at scheduled time." },
-              { step: "3", title: "Earn Forever", body: "Earn Bags trading fees proportional to your contribution." },
-            ].map((s) => (
-              <div key={s.step} className="flex items-start gap-3 border border-border bg-card p-4">
-                <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-sm bg-primary font-mono text-xs font-bold text-primary-foreground">
-                  {s.step}
-                </span>
-                <div>
-                  <h4 className="text-sm font-semibold text-foreground">{s.title}</h4>
-                  <p className="text-xs text-muted-foreground">{s.body}</p>
-                </div>
-              </div>
-            ))}
-          </div>
+          <ContributionFeed contributions={contributions || []} />
+          <HowItWorks />
         </div>
 
         {/* Right column - Contribution card */}
@@ -217,14 +195,29 @@ const LaunchPage = () => {
                     value={solAmount}
                     onChange={(e) => setSolAmount(e.target.value)}
                     className="pr-12 font-mono"
+                    disabled={!canContribute}
                   />
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">SOL</span>
                 </div>
               </div>
 
-              <Button className="w-full gap-2">
-                <Wallet className="h-4 w-4" />
-                Connect Wallet to Contribute
+              <Button
+                className="w-full gap-2"
+                disabled={!canContribute || isContributing}
+                onClick={handleContribute}
+              >
+                {isContributing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Wallet className="h-4 w-4" />
+                )}
+                {!canContribute
+                  ? "Contributions Closed"
+                  : !connected
+                    ? "Connect Wallet to Contribute"
+                    : isContributing
+                      ? "Sending..."
+                      : "Contribute SOL"}
               </Button>
 
               <p className="text-[10px] leading-relaxed text-muted-foreground">
