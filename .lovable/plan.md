@@ -1,20 +1,45 @@
 
 
-# Correction: Execute-Launch API Call Order
+# Erys — Full Build Plan (Final)
 
-The user flagged a critical ordering issue in the `execute-launch` edge function sequence from the previous plan.
+All previous plan details remain unchanged. This is the single clarification added before implementation begins.
 
-## Previous (incorrect) order:
-1. `create-launch-transaction`
-2. `send-transaction`
-3. `fee-share/config`
+## Critical Fix: Claim Transaction Partial Signing
 
-## Correct order:
-1. **`fee-share/config`** — register all contributor wallets as fee claimers with proportional basis points FIRST, so the fee share configuration exists on-chain before the token goes live
-2. **`create-launch-transaction`** — build the launch transaction using total escrowed SOL as `initialBuyLamports`
-3. **`send-transaction`** — submit the signed launch transaction; mark `launched` only after confirmation
+The `claim-txs/v3` endpoint returns a transaction that is **already partially signed by Bags**. The frontend must preserve that existing signature when the user signs via Privy.
 
-The fee share config must be in place before the token launches, otherwise contributors won't be registered as claimers and fees would be lost. This will be enforced in the `execute-launch` edge function implementation. If the `fee-share/config` call fails, the function sets status to `execution_failed` and does not proceed to launch.
+**What must happen:**
+1. `claim-fees` edge function calls `POST /token-launch/claim-txs/v3` and returns the serialized transaction to the frontend as-is
+2. Frontend deserializes the transaction (as a `VersionedTransaction` or `Transaction` object)
+3. Frontend uses Privy's `signTransaction` — which adds the user's signature without replacing existing signatures (partial sign)
+4. Frontend submits the fully-signed transaction via `POST /solana/send-transaction`
 
-No other changes to the plan. Ready to begin implementation on approval.
+**What must NOT happen:**
+- Do not rebuild or re-create the transaction from scratch
+- Do not use any signing method that clears existing signatures
+- Do not call `signAndSendTransaction` if it would strip Bags' signature
+
+This will be enforced in the frontend claim flow implementation.
+
+## Implementation Order
+
+1. Database migration — add columns to `launches` and `contributions`, create `platform_fee_claims` table, add service_role UPDATE policies
+2. Save memory updates (fee-share construction, partial signing rule)
+3. `execute-launch` edge function (fee-share/config → create-launch-transaction → send-transaction)
+4. `claim-fees` edge function (claimable-positions proxy + claim-txs/v3 proxy)
+5. `claim-partner-fees` edge function (automated platform fee claiming)
+6. Dashboard wiring with real claimable balances and partial-sign claim flow
+7. Privy integration scaffold across all pages
+
+## Secrets Needed Before Edge Functions
+
+| Secret | Status |
+|---|---|
+| `BAGS_API_KEY` | Not set — user must provide |
+| `BAGS_PARTNER_WALLET` | Not set — user must provide |
+| `BAGS_PARTNER_CONFIG` | Not set — user must provide |
+| `ESCROW_ENCRYPTION_KEY` | Not set — user must provide |
+| `ERYS_PLATFORM_PRIVATE_KEY` | Not set — user must provide |
+
+Will prompt user for these before deploying edge functions.
 
