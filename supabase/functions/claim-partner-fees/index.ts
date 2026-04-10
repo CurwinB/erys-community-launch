@@ -27,7 +27,7 @@ Deno.serve(async (req) => {
     const statsRes = await fetch(
       `${BAGS_API_BASE}/fee-share/partner-config/stats?partner=${encodeURIComponent(BAGS_PARTNER_WALLET)}`,
       {
-        headers: { Authorization: `Bearer ${BAGS_API_KEY}` },
+        headers: { "x-api-key": BAGS_API_KEY },
       }
     );
 
@@ -59,7 +59,7 @@ Deno.serve(async (req) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${BAGS_API_KEY}`,
+        "x-api-key": BAGS_API_KEY,
       },
       body: JSON.stringify({
         partner: BAGS_PARTNER_WALLET,
@@ -82,7 +82,7 @@ Deno.serve(async (req) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${BAGS_API_KEY}`,
+        "x-api-key": BAGS_API_KEY,
       },
       body: JSON.stringify({
         transaction: claimTxData.transaction,
