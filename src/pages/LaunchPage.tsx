@@ -92,7 +92,10 @@ const LaunchPage = () => {
 
       // Serialize and send via Privy wallet
       const serializedTx = tx.serialize({ requireAllSignatures: false });
-      const result = await wallet.signAndSendTransaction({ transaction: serializedTx });
+      const result = await wallet.signAndSendTransaction({
+        transaction: serializedTx,
+        chain: "solana:mainnet",
+      });
       const txSignature = result.signature;
 
       // Call contribute edge function to verify and record
