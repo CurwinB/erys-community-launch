@@ -1,5 +1,3 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.0";
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -26,11 +24,10 @@ Deno.serve(async (req) => {
     }
 
     if (action === "claimable-positions") {
-      // Proxy GET /token-launch/claimable-positions?wallet=<wallet>
       const res = await fetch(
         `${BAGS_API_BASE}/token-launch/claimable-positions?wallet=${encodeURIComponent(wallet)}`,
         {
-          headers: { Authorization: `Bearer ${BAGS_API_KEY}` },
+          headers: { "x-api-key": BAGS_API_KEY },
         }
       );
 
@@ -56,14 +53,13 @@ Deno.serve(async (req) => {
         );
       }
 
-      // Call POST /token-launch/claim-txs/v3
       // Returns a pre-signed transaction — must be returned as-is to frontend
       // Frontend will partial-sign via Privy (preserving Bags' signature)
       const res = await fetch(`${BAGS_API_BASE}/token-launch/claim-txs/v3`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${BAGS_API_KEY}`,
+          "x-api-key": BAGS_API_KEY,
         },
         body: JSON.stringify({
           feeClaimer: wallet,
@@ -79,7 +75,6 @@ Deno.serve(async (req) => {
         );
       }
 
-      // Return the pre-signed transaction exactly as received
       // CRITICAL: Do not modify, rebuild, or re-sign this transaction
       // It contains Bags' partial signature that must be preserved
       const data = await res.json();
@@ -89,7 +84,6 @@ Deno.serve(async (req) => {
     }
 
     if (action === "send") {
-      // Proxy the signed transaction submission
       if (!body.transaction) {
         return new Response(
           JSON.stringify({ error: "Missing required field: transaction" }),
@@ -101,7 +95,7 @@ Deno.serve(async (req) => {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${BAGS_API_KEY}`,
+          "x-api-key": BAGS_API_KEY,
         },
         body: JSON.stringify({ transaction: body.transaction }),
       });

@@ -70,7 +70,6 @@ Deno.serve(async (req) => {
       const excludedIds = contributions.slice(100).map((c: any) => c.id);
       excludedCount = excludedIds.length;
 
-      // Mark excluded contributors
       for (const id of excludedIds) {
         await supabase
           .from("contributions")
@@ -114,8 +113,6 @@ Deno.serve(async (req) => {
     // Handle rounding remainder — add to largest contributor
     const currentSum = basisPoints.reduce((a, b) => a + b, 0);
     const remainder = 10000 - currentSum;
-
-    // Largest contributor is first (already sorted desc)
     basisPoints[0] += remainder;
 
     // Verify sum
@@ -159,7 +156,7 @@ Deno.serve(async (req) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${BAGS_API_KEY}`,
+        "x-api-key": BAGS_API_KEY,
       },
       body: JSON.stringify({
         payer: launch.escrow_wallet_public_key,
@@ -178,10 +175,10 @@ Deno.serve(async (req) => {
     }
 
     const feeShareData = await feeShareRes.json();
-    const configKey = feeShareData.configKey;
+    const configKey = feeShareData.response?.meteoraConfigKey;
 
     if (!configKey) {
-      await setFailed(supabase, launch.id, "fee-share/config returned no configKey");
+      await setFailed(supabase, launch.id, "fee-share/config returned no configKey (meteoraConfigKey missing from response)");
       return errorResponse("No configKey returned");
     }
 
@@ -206,7 +203,7 @@ Deno.serve(async (req) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${BAGS_API_KEY}`,
+        "x-api-key": BAGS_API_KEY,
       },
       body: JSON.stringify({
         creator: launch.escrow_wallet_public_key,
@@ -239,16 +236,12 @@ Deno.serve(async (req) => {
         .eq("id", launch.id);
     }
 
-    // Sign the transaction with escrow private key
-    // The transaction from Bags needs to be signed by the escrow wallet
-    // We send it back to Bags' send-transaction endpoint
-
     // STEP 3: send-transaction
     const sendTxRes = await fetch(`${BAGS_API_BASE}/solana/send-transaction`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${BAGS_API_KEY}`,
+        "x-api-key": BAGS_API_KEY,
       },
       body: JSON.stringify({
         transaction,
@@ -264,7 +257,6 @@ Deno.serve(async (req) => {
 
     const sendTxData = await sendTxRes.json();
 
-    // Only mark as launched after confirmation
     await supabase
       .from("launches")
       .update({ status: "launched" })
@@ -315,7 +307,6 @@ async function decryptEscrowKey(
   encryptedData: string,
   encryptionKeyHex: string
 ): Promise<string> {
-  // encryptedData format: iv:authTag:ciphertext (all hex-encoded)
   const parts = encryptedData.split(":");
   if (parts.length !== 3) {
     throw new Error("Invalid encrypted data format. Expected iv:authTag:ciphertext");
@@ -328,7 +319,6 @@ async function decryptEscrowKey(
   const ciphertext = hexToUint8Array(ciphertextHex);
   const keyBytes = hexToUint8Array(encryptionKeyHex);
 
-  // Import the key for AES-256-GCM
   const cryptoKey = await crypto.subtle.importKey(
     "raw",
     keyBytes,
@@ -337,7 +327,6 @@ async function decryptEscrowKey(
     ["decrypt"]
   );
 
-  // Combine ciphertext + authTag (WebCrypto expects them concatenated)
   const combined = new Uint8Array(ciphertext.length + authTag.length);
   combined.set(ciphertext);
   combined.set(authTag, ciphertext.length);
