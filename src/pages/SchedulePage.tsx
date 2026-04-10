@@ -317,7 +317,7 @@ const SchedulePage = () => {
           {/* Info box */}
           <div className="border-l-2 border-primary bg-muted p-4">
             <p className="text-xs leading-relaxed text-muted-foreground">
-              When you schedule a launch a unique escrow wallet is generated for this launch. All contributor SOL is held there until your token launches automatically at the scheduled time. Erys takes 25% of trading fees as a platform fee. The remaining 75% is distributed to contributors proportional to their SOL contribution.
+              When you schedule a launch a unique escrow wallet is generated for this launch. All contributor SOL is held there until your token launches automatically at the scheduled time.
             </p>
           </div>
 
