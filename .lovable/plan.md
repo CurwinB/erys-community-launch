@@ -1,76 +1,61 @@
 
 
-# Fix API Headers, ConfigKey Parsing, Build Contribute Function
+# Fix Bags API Base URL + Build Priority Features
 
-## 1. Fix `Authorization: Bearer` → `x-api-key` (10 occurrences across 3 files)
+## 1. Fix BAGS_API_BASE in all edge functions
 
-**`execute-launch/index.ts`** — lines 162, 209, 251:
+All three functions currently use:
 ```
-Authorization: `Bearer ${BAGS_API_KEY}`  →  "x-api-key": BAGS_API_KEY
-```
-
-**`claim-fees/index.ts`** — lines 33, 66, 104:
-```
-Authorization: `Bearer ${BAGS_API_KEY}`  →  "x-api-key": BAGS_API_KEY
+https://api.bags.fm
 ```
 
-**`claim-partner-fees/index.ts`** — lines 30, 62, 85:
+Must be changed to:
 ```
-Authorization: `Bearer ${BAGS_API_KEY}`  →  "x-api-key": BAGS_API_KEY
-```
-
-## 2. Fix configKey extraction in `execute-launch`
-
-Line 181: change `feeShareData.configKey` → `feeShareData.response?.meteoraConfigKey`
-
-The existing null check on line 183 already handles the undefined case and will call `setFailed` — no additional code needed since the guard is already there.
-
-## 3. Database: Add unique constraint on `contributions.tx_signature`
-
-Migration:
-```sql
-ALTER TABLE public.contributions ADD CONSTRAINT contributions_tx_signature_unique UNIQUE (tx_signature);
+https://public-api-v2.bags.fm/api/v1
 ```
 
-This prevents double-recording at the database level regardless of edge function race conditions.
+**Files:** `claim-fees/index.ts`, `claim-partner-fees/index.ts`, `execute-launch/index.ts`
 
-## 4. Build `contribute` edge function
+This single change fixes the 404s across all Bags API calls.
 
-New file: `supabase/functions/contribute/index.ts`
+---
 
-**Input:** `{ launch_id, wallet_address, amount_lamports, tx_signature }`
+## 2. Wire contribute flow on LaunchPage (highest priority)
 
-**Verification sequence:**
+Update `src/pages/LaunchPage.tsx`:
+- The "Connect Wallet to Contribute" button currently does nothing
+- Wire it to: (1) connect wallet via Privy, (2) send SOL transfer to escrow wallet, (3) call `contribute` edge function with `launch_id`, `wallet_address`, `amount_lamports`, `tx_signature`
+- Show loading/success/error states
+- Disable contribution if launch is not `scheduled` or launch time has passed
 
-1. Validate all required fields present
-2. Verify launch exists, `status = 'scheduled'`, `launch_datetime` is in the future
-3. Verify amount is within `min_contribution_lamports` / `max_contribution_lamports`
-4. **On-chain verification with retry** — call Solana RPC `getTransaction` with `commitment: "confirmed"`, retry up to 3 times with 2-second gaps if transaction not found yet
-5. **Verify destination** — confirm the transaction transfers SOL to the launch's `escrow_wallet_public_key`
-6. **Verify amount** — confirm transferred lamports matches `amount_lamports`
-7. **Verify signer** — confirm `wallet_address` matches the actual signer/fee-payer of the on-chain transaction (prevents someone claiming another person's tx)
-8. Insert into `contributions` table (unique constraint on `tx_signature` catches any race condition duplicates)
+This requires Privy to be integrated first (step 3 below), so both will be built together.
 
-**Solana RPC:** Uses public `https://api.mainnet-beta.solana.com` (or devnet equivalent). The `getTransaction` response includes `transaction.message.accountKeys[0]` as the fee payer — compare against `wallet_address`.
+---
 
-**Retry logic:**
-```
-for attempt 1..3:
-  call getTransaction(tx_signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 })
-  if found → proceed to validation
-  if not found and attempt < 3 → wait 2 seconds
-  if not found after 3 attempts → return error "Transaction not confirmed yet, try again"
-```
+## 3. Privy wallet integration scaffold
 
-## 5. Deploy and test all 4 functions
+- Install `@privy-io/react-auth` and `@privy-io/solana` (or equivalent)
+- Create a `PrivyProvider` wrapper in `App.tsx`
+- Create a `useWallet` hook that exposes: `connect`, `disconnect`, `publicKey`, `signTransaction`, `sendTransaction`
+- Wire connect/disconnect button into `Navbar.tsx`
+- Wire into LaunchPage contribute flow and DashboardPage claim flow (replacing TODO markers)
 
-Deploy `execute-launch`, `claim-fees`, `claim-partner-fees`, and `contribute`. Test each with `curl_edge_functions`.
+**Secret needed:** `PRIVY_APP_ID` — this is a publishable client-side key, will be stored in `.env` as `VITE_PRIVY_APP_ID`
+
+---
+
+## 4. Wire Schedule page to create-launch edge function (lower priority, after above)
+
+Currently `SchedulePage.tsx` inserts directly into Supabase with placeholder escrow keys. Instead it should call an edge function that generates a real escrow wallet and stores the encrypted private key.
+
+---
 
 ## Implementation order
 
-1. Fix all 10 `x-api-key` headers across 3 files
-2. Fix `configKey` → `feeShareData.response?.meteoraConfigKey`
-3. Add unique constraint migration on `contributions.tx_signature`
-4. Build `contribute` edge function with retry + signer verification
-5. Deploy and test all functions
+1. Fix `BAGS_API_BASE` in all 3 edge functions → redeploy → test with curl
+2. Ask user for Privy App ID
+3. Install Privy, create provider + hook
+4. Wire contribute flow on LaunchPage
+5. Wire claim flow on DashboardPage (replace TODOs with real partial-sign logic)
+6. Wire Schedule page to edge function (if time permits)
 
