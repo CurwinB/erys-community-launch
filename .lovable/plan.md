@@ -1,61 +1,58 @@
 
 
-# Fix Bags API Base URL + Build Priority Features
+# Replace Privy with Dynamic.xyz
 
-## 1. Fix BAGS_API_BASE in all edge functions
+## Summary
+Remove all Privy packages and references. Install Dynamic.xyz SDK for Solana-only wallet connection. Update provider, hook, wallet button, and both page flows.
 
-All three functions currently use:
-```
-https://api.bags.fm
-```
+## Build error fix (CSS)
+Move the `@import url(...)` in `src/index.css` from line 5 to line 1 (before `@tailwind` directives) to fix the `@import must precede all other statements` build error.
 
-Must be changed to:
-```
-https://public-api-v2.bags.fm/api/v1
-```
+## Changes
 
-**Files:** `claim-fees/index.ts`, `claim-partner-fees/index.ts`, `execute-launch/index.ts`
+### 1. Package swap
+- **Remove**: `@privy-io/react-auth` (and any sub-packages)
+- **Install**: `@dynamic-labs/sdk-react-core`, `@dynamic-labs/solana`
 
-This single change fixes the 404s across all Bags API calls.
+### 2. Environment variable
+- Remove `VITE_PRIVY_APP_ID` from `.env`
+- Add `VITE_DYNAMIC_ENVIRONMENT_ID` — will prompt user for value
 
----
+### 3. `src/App.tsx`
+- Remove `PrivyProvider`, `toSolanaWalletConnectors`, `PRIVY_APP_ID`
+- Wrap app in `DynamicContextProvider` with `SolanaWalletConnectors` and `environmentId` from env
 
-## 2. Wire contribute flow on LaunchPage (highest priority)
+### 4. `src/hooks/useWallet.ts`
+- Replace Privy hooks with `useDynamicContext` and `isSolanaWallet`
+- Expose `ready` (sdkHasLoaded), `connected`, `publicKey`, `wallet`
+- Remove `connect`/`disconnect` (handled by DynamicWidget)
 
-Update `src/pages/LaunchPage.tsx`:
-- The "Connect Wallet to Contribute" button currently does nothing
-- Wire it to: (1) connect wallet via Privy, (2) send SOL transfer to escrow wallet, (3) call `contribute` edge function with `launch_id`, `wallet_address`, `amount_lamports`, `tx_signature`
-- Show loading/success/error states
-- Disable contribution if launch is not `scheduled` or launch time has passed
+### 5. `src/components/WalletButton.tsx`
+- Replace entire component with `<DynamicWidget />` from `@dynamic-labs/sdk-react-core`
 
-This requires Privy to be integrated first (step 3 below), so both will be built together.
+### 6. `src/components/Navbar.tsx`
+- Use updated WalletButton (no interface change needed)
 
----
+### 7. `src/pages/LaunchPage.tsx`
+- Replace Privy `signAndSendTransaction` with Dynamic signer:
+  ```
+  const signer = await wallet.getSigner()
+  const txSignature = await signer.signAndSendTransaction(tx)
+  ```
 
-## 3. Privy wallet integration scaffold
+### 8. `src/pages/DashboardPage.tsx`
+- Replace Privy `signTransaction` with Dynamic signer:
+  ```
+  const signer = await wallet.getSigner()
+  const signed = await signer.signTransaction(versionedTx)
+  ```
 
-- Install `@privy-io/react-auth` and `@privy-io/solana` (or equivalent)
-- Create a `PrivyProvider` wrapper in `App.tsx`
-- Create a `useWallet` hook that exposes: `connect`, `disconnect`, `publicKey`, `signTransaction`, `sendTransaction`
-- Wire connect/disconnect button into `Navbar.tsx`
-- Wire into LaunchPage contribute flow and DashboardPage claim flow (replacing TODO markers)
+### 9. Deploy and test
+- Verify build succeeds
+- Test wallet connect via DynamicWidget
 
-**Secret needed:** `PRIVY_APP_ID` — this is a publishable client-side key, will be stored in `.env` as `VITE_PRIVY_APP_ID`
-
----
-
-## 4. Wire Schedule page to create-launch edge function (lower priority, after above)
-
-Currently `SchedulePage.tsx` inserts directly into Supabase with placeholder escrow keys. Instead it should call an edge function that generates a real escrow wallet and stores the encrypted private key.
-
----
-
-## Implementation order
-
-1. Fix `BAGS_API_BASE` in all 3 edge functions → redeploy → test with curl
-2. Ask user for Privy App ID
-3. Install Privy, create provider + hook
-4. Wire contribute flow on LaunchPage
-5. Wire claim flow on DashboardPage (replace TODOs with real partial-sign logic)
-6. Wire Schedule page to edge function (if time permits)
+## Technical details
+- `DynamicWidget` provides built-in connect/disconnect, address display, and private key export — no custom UI needed
+- `isSolanaWallet()` type guard is required before calling `getSigner()`
+- No wagmi connector needed (Solana-only)
 
