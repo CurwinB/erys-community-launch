@@ -4,9 +4,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import CountdownTimer from "@/components/CountdownTimer";
-import StatusBadge from "@/components/StatusBadge";
-import { formatSol, shortenAddress, solToLamports } from "@/lib/constants";
-import { ExternalLink, Users, Coins, Wallet, Loader2 } from "lucide-react";
+import { formatSol, solToLamports } from "@/lib/constants";
+import { Wallet, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { useWallet } from "@/hooks/useWallet";
 import { useToast } from "@/hooks/use-toast";
@@ -19,7 +18,7 @@ const LaunchPage = () => {
   const { id } = useParams<{ id: string }>();
   const [solAmount, setSolAmount] = useState("");
   const [isContributing, setIsContributing] = useState(false);
-  const { connected, publicKey, connect, wallet } = useWallet();
+  const { connected, publicKey, wallet } = useWallet();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -57,7 +56,7 @@ const LaunchPage = () => {
 
   const handleContribute = async () => {
     if (!connected || !publicKey || !wallet) {
-      connect();
+      toast({ title: "Connect Wallet", description: "Please connect your wallet first.", variant: "destructive" });
       return;
     }
 
@@ -73,7 +72,6 @@ const LaunchPage = () => {
 
     setIsContributing(true);
     try {
-      // Import web3.js dynamically to keep bundle smaller
       const { Connection, PublicKey, SystemProgram, Transaction } = await import("@solana/web3.js");
 
       const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
@@ -90,13 +88,9 @@ const LaunchPage = () => {
       const { blockhash } = await connection.getLatestBlockhash();
       tx.recentBlockhash = blockhash;
 
-      // Serialize and send via Privy wallet
-      const serializedTx = tx.serialize({ requireAllSignatures: false });
-      const result = await wallet.signAndSendTransaction({
-        transaction: serializedTx,
-        chain: "solana:mainnet",
-      });
-      const txSignature = result.signature;
+      // Sign and send via Dynamic Solana signer
+      const signer = await wallet.getSigner();
+      const txSignature = await signer.signAndSendTransaction(tx);
 
       // Call contribute edge function to verify and record
       const { error } = await supabase.functions.invoke("contribute", {
@@ -104,7 +98,7 @@ const LaunchPage = () => {
           launch_id: id,
           wallet_address: publicKey,
           amount_lamports: lamports,
-          tx_signature: typeof txSignature === "string" ? txSignature : (txSignature as any).signature,
+          tx_signature: typeof txSignature === "string" ? txSignature : (txSignature as any).signature || txSignature,
         },
       });
 

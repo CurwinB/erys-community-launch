@@ -8,6 +8,7 @@ import { Wallet, Coins, Rocket, ExternalLink, Loader2, AlertTriangle } from "luc
 import { useState } from "react";
 import { toast } from "@/hooks/use-toast";
 import { useWallet } from "@/hooks/useWallet";
+import { DynamicWidget } from "@dynamic-labs/sdk-react-core";
 
 type Tab = "contributions" | "launches";
 
@@ -22,7 +23,7 @@ const DashboardPage = () => {
   const [activeTab, setActiveTab] = useState<Tab>("contributions");
   const [claimingMint, setClaimingMint] = useState<string | null>(null);
   const queryClient = useQueryClient();
-  const { connected, publicKey, connect, wallet } = useWallet();
+  const { connected, publicKey, wallet } = useWallet();
 
   const walletAddress = publicKey || "";
 
@@ -88,12 +89,15 @@ const DashboardPage = () => {
       });
       if (error) throw error;
 
-      // Step 2: Partial-sign via Privy, preserving Bags' existing signature
+      // Step 2: Partial-sign via Dynamic signer, preserving Bags' existing signature
+      const signer = await wallet.getSigner();
       const txBytes = Uint8Array.from(atob(data.transaction), (c) => c.charCodeAt(0));
-      const signed = await wallet.signTransaction({ transaction: txBytes });
+      const { VersionedTransaction } = await import("@solana/web3.js");
+      const versionedTx = VersionedTransaction.deserialize(txBytes);
+      const signed = await signer.signTransaction(versionedTx);
 
       // Step 3: Submit the fully-signed transaction
-      const serializedSigned = btoa(String.fromCharCode(...new Uint8Array(signed.signedTransaction)));
+      const serializedSigned = btoa(String.fromCharCode(...new Uint8Array(signed.serialize())));
       const { error: sendErr } = await supabase.functions.invoke("claim-fees", {
         body: { action: "send", transaction: serializedSigned },
       });
@@ -122,10 +126,7 @@ const DashboardPage = () => {
           <Wallet className="mb-4 h-12 w-12 text-muted-foreground" />
           <h2 className="mb-2 text-xl font-bold text-foreground">Connect Your Wallet</h2>
           <p className="mb-6 text-sm text-muted-foreground">Connect your wallet to view your contributions and launches.</p>
-          <Button className="gap-2" onClick={connect}>
-            <Wallet className="h-4 w-4" />
-            Connect Wallet
-          </Button>
+          <DynamicWidget />
         </div>
       </main>
     );
