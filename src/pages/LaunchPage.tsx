@@ -90,7 +90,7 @@ const LaunchPage = () => {
 
       // Sign and send via Dynamic Solana signer
       const signer = await wallet.getSigner();
-      const txSignature = await signer.signAndSendTransaction(tx);
+      const txSignature = await signer.signAndSendTransaction(tx as any);
 
       // Call contribute edge function to verify and record
       const { error } = await supabase.functions.invoke("contribute", {

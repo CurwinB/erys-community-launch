@@ -94,7 +94,7 @@ const DashboardPage = () => {
       const txBytes = Uint8Array.from(atob(data.transaction), (c) => c.charCodeAt(0));
       const { VersionedTransaction } = await import("@solana/web3.js");
       const versionedTx = VersionedTransaction.deserialize(txBytes);
-      const signed = await signer.signTransaction(versionedTx);
+      const signed = await signer.signTransaction(versionedTx as any);
 
       // Step 3: Submit the fully-signed transaction
       const serializedSigned = btoa(String.fromCharCode(...new Uint8Array(signed.serialize())));
