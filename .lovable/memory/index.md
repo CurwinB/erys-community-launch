@@ -3,13 +3,16 @@
 ## Core
 Erys: Solana token launch platform on Bags.fm. Dark theme bg #0A0A0A, accent #00D4FF, cards #111111.
 Inter body, JetBrains Mono for countdowns/numbers. Sharp edges, no rounded bubbly UI.
-Wallet auth: Dynamic.xyz (NOT Privy). DynamicWidget for connect/disconnect. isSolanaWallet() guard before getSigner().
 Escrow wallets use AES-256-GCM with ESCROW_ENCRYPTION_KEY secret. Never client-side decrypt.
 Contributions require on-chain tx verification before DB insert.
 Execute-launch order: fee-share/config FIRST, then create-launch-transaction, then send-transaction.
 Launch status enum: scheduled → executing → launched | execution_failed | cancelled.
-Claim txs from Bags are pre-signed. Dynamic signer must partial-sign, never replace existing signatures.
+Claim txs from Bags are pre-signed. Dynamic must partial-sign, never replace existing signatures.
 Partner wallet goes in `partner` field, NEVER in claimersArray. Max 100 claimers, BP sum = 10000.
+Creator minimum: 750 BP fee share floor (10% of 7500), 5% token distribution floor.
+ATA reserve: deduct numContributors * 0.00203928 SOL from initialBuyLamports before launch.
+Dynamic.xyz for wallet auth, NOT Privy. embeddedWallets: createOnLogin: 'users-without-wallets'.
+Alchemy RPC: SOLANA_RPC_URL (Supabase secret) + VITE_SOLANA_RPC_URL (frontend .env).
 
 ## Memories
 - [Brand tokens](mem://design/brand) — Full color palette, font choices, glow effects
