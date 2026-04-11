@@ -5,7 +5,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const SOLANA_RPC = "https://api.mainnet-beta.solana.com";
+const SOLANA_RPC = Deno.env.get("SOLANA_RPC_URL")!;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {

@@ -19,6 +19,9 @@ const App = () => (
     settings={{
       environmentId: import.meta.env.VITE_DYNAMIC_ENVIRONMENT_ID || "placeholder",
       walletConnectors: [SolanaWalletConnectors],
+      embeddedWallets: {
+        createOnLogin: 'users-without-wallets' as any,
+      },
     }}
   >
     <QueryClientProvider client={queryClient}>
