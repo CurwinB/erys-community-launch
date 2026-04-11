@@ -22,6 +22,7 @@ interface ClaimablePosition {
 const DashboardPage = () => {
   const [activeTab, setActiveTab] = useState<Tab>("contributions");
   const [claimingMint, setClaimingMint] = useState<string | null>(null);
+  const [cancellingLaunchId, setCancellingLaunchId] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const { connected, publicKey, wallet } = useWallet();
 
@@ -83,20 +84,17 @@ const DashboardPage = () => {
     mutationFn: async (mint: string) => {
       if (!wallet) throw new Error("Wallet not connected");
 
-      // Step 1: Get pre-signed transaction from Bags via edge function
       const { data, error } = await supabase.functions.invoke("claim-fees", {
         body: { action: "claim", wallet: walletAddress, mint },
       });
       if (error) throw error;
 
-      // Step 2: Partial-sign via Dynamic signer, preserving Bags' existing signature
       const signer = await wallet.getSigner();
       const txBytes = Uint8Array.from(atob(data.transaction), (c) => c.charCodeAt(0));
       const { VersionedTransaction } = await import("@solana/web3.js");
       const versionedTx = VersionedTransaction.deserialize(txBytes);
       const signed = await signer.signTransaction(versionedTx as any);
 
-      // Step 3: Submit the fully-signed transaction
       const serializedSigned = btoa(String.fromCharCode(...new Uint8Array(signed.serialize())));
       const { error: sendErr } = await supabase.functions.invoke("claim-fees", {
         body: { action: "send", transaction: serializedSigned },
@@ -114,9 +112,37 @@ const DashboardPage = () => {
     },
   });
 
+  const cancelMutation = useMutation({
+    mutationFn: async (launchId: string) => {
+      const { data, error } = await supabase.functions.invoke("refund-launch", {
+        body: { launch_id: launchId, wallet_address: walletAddress },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      return data;
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Launch Cancelled",
+        description: `Refunded ${data.refunded}/${data.total} contributors.`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["my-launches"] });
+      setCancellingLaunchId(null);
+    },
+    onError: (err: any) => {
+      toast({ title: "Cancel Failed", description: err.message, variant: "destructive" });
+      setCancellingLaunchId(null);
+    },
+  });
+
   const handleClaim = (mint: string) => {
     setClaimingMint(mint);
     claimMutation.mutate(mint);
+  };
+
+  const handleCancel = (launchId: string) => {
+    setCancellingLaunchId(launchId);
+    cancelMutation.mutate(launchId);
   };
 
   if (!connected) {
@@ -209,22 +235,24 @@ const DashboardPage = () => {
                                 </Button>
                               </a>
                             )}
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={claimable === 0 || isClaiming}
-                              onClick={() => c.launches?.token_mint_address && handleClaim(c.launches.token_mint_address)}
-                              className="gap-1"
-                            >
-                              {isClaiming ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                              {claimable > 0 ? `Claim ${formatSol(claimable)} SOL` : "No Fees"}
-                            </Button>
-                          )}
-                          {!isLaunched && !isExcluded && (
-                            <Button size="sm" variant="outline" disabled>
-                              Claim Fees
-                            </Button>
-                          )}
+                            {isLaunched && !isExcluded && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={claimable === 0 || isClaiming}
+                                onClick={() => c.launches?.token_mint_address && handleClaim(c.launches.token_mint_address)}
+                                className="gap-1"
+                              >
+                                {isClaiming ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                                {claimable > 0 ? `Claim ${formatSol(claimable)} SOL` : "No Fees"}
+                              </Button>
+                            )}
+                            {!isLaunched && !isExcluded && (
+                              <Button size="sm" variant="outline" disabled>
+                                Claim Fees
+                              </Button>
+                            )}
+                          </div>
                         </div>
                       </div>
                       {isExcluded && (
@@ -258,27 +286,55 @@ const DashboardPage = () => {
               </Link>
 
               {myLaunches && myLaunches.length > 0 ? (
-                myLaunches.map((l: any) => (
-                  <div key={l.id} className="flex items-center justify-between border border-border bg-card p-4">
-                    <div className="flex items-center gap-3">
-                      <div className="h-10 w-10 rounded-sm bg-muted flex items-center justify-center text-sm font-bold text-muted-foreground">
-                        {l.token_symbol.charAt(0)}
+                myLaunches.map((l: any) => {
+                  const isCancelling = cancellingLaunchId === l.id;
+                  const canCancel = l.status === "scheduled";
+
+                  return (
+                    <div key={l.id} className="flex items-center justify-between border border-border bg-card p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-sm bg-muted flex items-center justify-center text-sm font-bold text-muted-foreground">
+                          {l.token_symbol.charAt(0)}
+                        </div>
+                        <div>
+                          <p className="font-semibold text-foreground">{l.token_name}</p>
+                          <p className="font-mono text-xs text-muted-foreground">${l.token_symbol}</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-semibold text-foreground">{l.token_name}</p>
-                        <p className="font-mono text-xs text-muted-foreground">${l.token_symbol}</p>
+                      <div className="flex items-center gap-2">
+                        <StatusBadge status={l.status} />
+                        {l.status === "launched" && l.token_mint_address && (
+                          <a
+                            href={`https://bags.fm/token/${l.token_mint_address}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <Button size="sm" variant="ghost" className="gap-1 text-xs">
+                              Trade <ExternalLink className="h-3 w-3" />
+                            </Button>
+                          </a>
+                        )}
+                        {canCancel && (
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            className="gap-1"
+                            disabled={isCancelling}
+                            onClick={() => handleCancel(l.id)}
+                          >
+                            {isCancelling ? <Loader2 className="h-3 w-3 animate-spin" /> : <XCircle className="h-3 w-3" />}
+                            Cancel
+                          </Button>
+                        )}
+                        <Link to={`/launch/${l.id}`}>
+                          <Button size="sm" variant="outline" className="gap-1">
+                            View <ExternalLink className="h-3 w-3" />
+                          </Button>
+                        </Link>
                       </div>
                     </div>
-                    <div className="flex items-center gap-4">
-                      <StatusBadge status={l.status} />
-                      <Link to={`/launch/${l.id}`}>
-                        <Button size="sm" variant="outline" className="gap-1">
-                          View <ExternalLink className="h-3 w-3" />
-                        </Button>
-                      </Link>
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <div className="flex flex-col items-center justify-center rounded-sm border border-dashed border-border py-12">
                   <Rocket className="mb-3 h-8 w-8 text-muted-foreground" />
