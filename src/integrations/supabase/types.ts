@@ -19,9 +19,14 @@ export type Database = {
           amount_lamports: number
           basis_points: number | null
           contributed_at: string
+          distribution_error: string | null
+          distribution_tx_signature: string | null
           id: string
           is_fee_claimer: boolean | null
           launch_id: string
+          refund_tx_signature: string | null
+          token_amount: number | null
+          tokens_distributed: boolean | null
           tx_signature: string
           wallet_address: string
         }
@@ -29,9 +34,14 @@ export type Database = {
           amount_lamports: number
           basis_points?: number | null
           contributed_at?: string
+          distribution_error?: string | null
+          distribution_tx_signature?: string | null
           id?: string
           is_fee_claimer?: boolean | null
           launch_id: string
+          refund_tx_signature?: string | null
+          token_amount?: number | null
+          tokens_distributed?: boolean | null
           tx_signature: string
           wallet_address: string
         }
@@ -39,9 +49,14 @@ export type Database = {
           amount_lamports?: number
           basis_points?: number | null
           contributed_at?: string
+          distribution_error?: string | null
+          distribution_tx_signature?: string | null
           id?: string
           is_fee_claimer?: boolean | null
           launch_id?: string
+          refund_tx_signature?: string | null
+          token_amount?: number | null
+          tokens_distributed?: boolean | null
           tx_signature?: string
           wallet_address?: string
         }
@@ -61,6 +76,8 @@ export type Database = {
           created_at: string
           created_by_wallet: string
           description: string | null
+          distribution_completed: boolean | null
+          distribution_completed_at: string | null
           escrow_wallet_encrypted_private_key: string
           escrow_wallet_public_key: string
           excluded_contributors: number | null
@@ -78,6 +95,7 @@ export type Database = {
           token_mint_address: string | null
           token_name: string
           token_symbol: string
+          total_tokens_distributed: number | null
           twitter_url: string | null
           website_url: string | null
         }
@@ -86,6 +104,8 @@ export type Database = {
           created_at?: string
           created_by_wallet: string
           description?: string | null
+          distribution_completed?: boolean | null
+          distribution_completed_at?: string | null
           escrow_wallet_encrypted_private_key: string
           escrow_wallet_public_key: string
           excluded_contributors?: number | null
@@ -103,6 +123,7 @@ export type Database = {
           token_mint_address?: string | null
           token_name: string
           token_symbol: string
+          total_tokens_distributed?: number | null
           twitter_url?: string | null
           website_url?: string | null
         }
@@ -111,6 +132,8 @@ export type Database = {
           created_at?: string
           created_by_wallet?: string
           description?: string | null
+          distribution_completed?: boolean | null
+          distribution_completed_at?: string | null
           escrow_wallet_encrypted_private_key?: string
           escrow_wallet_public_key?: string
           excluded_contributors?: number | null
@@ -128,6 +151,7 @@ export type Database = {
           token_mint_address?: string | null
           token_name?: string
           token_symbol?: string
+          total_tokens_distributed?: number | null
           twitter_url?: string | null
           website_url?: string | null
         }

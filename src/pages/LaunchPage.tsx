@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import CountdownTimer from "@/components/CountdownTimer";
 import { formatSol, solToLamports } from "@/lib/constants";
-import { Wallet, Loader2 } from "lucide-react";
+import { Wallet, Loader2, ExternalLink } from "lucide-react";
 import { useState } from "react";
 import { useWallet } from "@/hooks/useWallet";
 import { useToast } from "@/hooks/use-toast";
@@ -218,6 +218,20 @@ const LaunchPage = () => {
                 Your SOL is held in escrow until launch. You will be registered as a permanent Bags fee share recipient proportional to your contribution. If this launch is cancelled your SOL is refunded automatically.
               </p>
             </div>
+
+            {launch.status === "launched" && launch.token_mint_address && (
+              <a
+                href={`https://bags.fm/token/${launch.token_mint_address}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block"
+              >
+                <div className="flex items-center justify-center gap-2 border border-primary/30 bg-card p-3">
+                  <span className="text-sm font-semibold text-primary">Trade on Bags.fm</span>
+                  <ExternalLink className="h-3.5 w-3.5 text-primary" />
+                </div>
+              </a>
+            )}
 
             <div className="flex items-center justify-center gap-2 border border-border bg-card p-3">
               <span className="text-[10px] text-muted-foreground">This token will be launched on</span>
