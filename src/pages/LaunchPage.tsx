@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import CountdownTimer from "@/components/CountdownTimer";
 import { formatSol, solToLamports } from "@/lib/constants";
-import { Wallet, Loader2 } from "lucide-react";
+import { Wallet, Loader2, ExternalLink } from "lucide-react";
 import { useState } from "react";
 import { useWallet } from "@/hooks/useWallet";
 import { useToast } from "@/hooks/use-toast";
