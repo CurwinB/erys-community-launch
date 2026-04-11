@@ -1,8 +1,11 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import WalletButton from "@/components/WalletButton";
+import { useWallet } from "@/hooks/useWallet";
 
 const Navbar = () => {
+  const { connected } = useWallet();
+
   return (
     <nav className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
       <div className="container mx-auto flex h-16 items-center justify-between px-4">
@@ -30,6 +33,13 @@ const Navbar = () => {
               Schedule a Launch
             </Button>
           </Link>
+          {connected && (
+            <Link to="/dashboard">
+              <Button size="sm" variant="outline" className="hidden sm:inline-flex">
+                Dashboard
+              </Button>
+            </Link>
+          )}
           <WalletButton />
         </div>
       </div>

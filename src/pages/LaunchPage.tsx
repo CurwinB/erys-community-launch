@@ -74,7 +74,7 @@ const LaunchPage = () => {
     try {
       const { Connection, PublicKey, SystemProgram, Transaction } = await import("@solana/web3.js");
 
-      const connection = new Connection("https://api.mainnet-beta.solana.com", "confirmed");
+      const connection = new Connection(import.meta.env.VITE_SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com", "confirmed");
 
       const tx = new Transaction().add(
         SystemProgram.transfer({
