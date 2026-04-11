@@ -219,6 +219,20 @@ const LaunchPage = () => {
               </p>
             </div>
 
+            {launch.status === "launched" && launch.token_mint_address && (
+              <a
+                href={`https://bags.fm/token/${launch.token_mint_address}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block"
+              >
+                <div className="flex items-center justify-center gap-2 border border-primary/30 bg-card p-3">
+                  <span className="text-sm font-semibold text-primary">Trade on Bags.fm</span>
+                  <ExternalLink className="h-3.5 w-3.5 text-primary" />
+                </div>
+              </a>
+            )}
+
             <div className="flex items-center justify-center gap-2 border border-border bg-card p-3">
               <span className="text-[10px] text-muted-foreground">This token will be launched on</span>
               <a href="https://bags.fm" target="_blank" rel="noopener noreferrer" className="text-[10px] font-semibold text-foreground hover:text-primary transition-colors">
