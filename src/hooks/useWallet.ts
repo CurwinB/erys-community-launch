@@ -1,31 +1,21 @@
-import { usePrivy } from "@privy-io/react-auth";
-import { useWallets } from "@privy-io/react-auth/solana";
-import { useCallback, useMemo } from "react";
+import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
+import { isSolanaWallet } from "@dynamic-labs/solana";
+import { useMemo } from "react";
 
 export function useWallet() {
-  const { login, logout, authenticated, ready } = usePrivy();
-  const { wallets } = useWallets();
+  const { primaryWallet, sdkHasLoaded } = useDynamicContext();
 
-  const wallet = wallets[0] ?? null;
-  const publicKey = wallet?.address ?? null;
-
-  const connect = useCallback(() => {
-    if (!authenticated) login();
-  }, [authenticated, login]);
-
-  const disconnect = useCallback(() => {
-    logout();
-  }, [logout]);
+  const publicKey = primaryWallet?.address || null;
+  const connected = !!primaryWallet && isSolanaWallet(primaryWallet);
+  const wallet = primaryWallet && isSolanaWallet(primaryWallet) ? primaryWallet : null;
 
   return useMemo(
     () => ({
-      ready,
-      connected: authenticated && !!publicKey,
+      ready: sdkHasLoaded,
+      connected,
       publicKey,
       wallet,
-      connect,
-      disconnect,
     }),
-    [ready, authenticated, publicKey, wallet, connect, disconnect]
+    [sdkHasLoaded, connected, publicKey, wallet]
   );
 }
