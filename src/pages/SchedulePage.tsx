@@ -8,6 +8,15 @@ import { Switch } from "@/components/ui/switch";
 import { supabase } from "@/integrations/supabase/client";
 import { solToLamports } from "@/lib/constants";
 import { useToast } from "@/hooks/use-toast";
+import { useWallet } from "@/hooks/useWallet";
+import { Upload, Copy, ExternalLink, Check } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import { supabase } from "@/integrations/supabase/client";
+import { solToLamports } from "@/lib/constants";
+import { useToast } from "@/hooks/use-toast";
 import { Upload, Copy, ExternalLink, Check } from "lucide-react";
 
 const SchedulePage = () => {
