@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/StatusBadge";
 import { formatSol } from "@/lib/constants";
-import { Wallet, Coins, Rocket, ExternalLink, Loader2, AlertTriangle } from "lucide-react";
+import { Wallet, Coins, Rocket, ExternalLink, Loader2, AlertTriangle, XCircle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "@/hooks/use-toast";
 import { useWallet } from "@/hooks/useWallet";
@@ -197,7 +197,18 @@ const DashboardPage = () => {
                             )}
                             <StatusBadge status={c.launches?.status || "scheduled"} />
                           </div>
-                          {isLaunched && !isExcluded && (
+                          <div className="flex flex-col gap-1">
+                            {isLaunched && c.launches?.token_mint_address && (
+                              <a
+                                href={`https://bags.fm/token/${c.launches.token_mint_address}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                <Button size="sm" variant="ghost" className="gap-1 text-xs">
+                                  View on Bags <ExternalLink className="h-3 w-3" />
+                                </Button>
+                              </a>
+                            )}
                             <Button
                               size="sm"
                               variant="outline"
