@@ -1,31 +1,43 @@
 
 
-# Fix Claimable Positions Field Mapping in DashboardPage
+# Build Custom Wallet Dropdown in Navbar
 
-## Problem
-The Bags API returns `baseMint` and `claimableDisplayAmount` on position objects, but the code references `mint` and `claimableAmount`. This causes contributors to always see zero fees.
+## Overview
+Replace the default DynamicWidget display with a custom wallet dropdown showing SOL balance, Erys token balances, and send functionality. Dynamic still handles auth/signing. Alchemy RPC handles all balance reads.
 
 ## Changes
 
-### Edit: `src/pages/DashboardPage.tsx`
+### 1. Install dependency
+`npm install @solana/spl-token`
 
-**1. Update `ClaimablePosition` interface** (lines 15-20):
-```typescript
-interface ClaimablePosition {
-  baseMint: string;
-  claimableDisplayAmount: number;
-  totalClaimableLamportsUserShare: number;
-}
-```
+### 2. New file: `src/components/WalletDropdown.tsx`
+Full custom dropdown component with:
+- **Trigger**: Shortened wallet address button with chevron, monospace font
+- **Dropdown panel**: Positioned below navbar, dark card background matching brand (`bg-card`, `border-border`)
+- **SOL balance**: Fetched via `connection.getBalance()` from Alchemy RPC (`VITE_SOLANA_RPC_URL`)
+- **Erys tokens**: Queried from Supabase (contributions + created launches), then on-chain balance read via `getAssociatedTokenAddress` + `getParsedAccountInfo` for each mint. Only shows tokens with non-zero balance.
+- **Send SOL**: Form with recipient address + amount, builds `SystemProgram.transfer` transaction, signs via Dynamic's `wallet.getSigner().signAndSendTransaction()`
+- **Send token**: Same UX per token, builds SPL transfer with automatic ATA creation for recipient via `createAssociatedTokenAccountInstruction`
+- **Disconnect**: Calls `handleLogOut()` from `useDynamicContext()`
+- **Outside click**: Closes dropdown on mousedown outside ref
+- **Balance refresh**: Loads on every dropdown open
 
-**2. Update `totalClaimable` calculation** (lines 72-75):
-Change `p.claimableAmount` → `p.claimableDisplayAmount`
+Uses `ErysToken` interface with `mint`, `name`, `symbol`, `image_url`, `balance` (bigint), `decimals`, `launch_id`.
 
-**3. Update `getClaimableForMint` function** (lines 77-81):
-Change `p.mint` → `p.baseMint` and `pos?.claimableAmount` → `pos?.claimableDisplayAmount`
+### 3. Edit: `src/components/Navbar.tsx`
+- Import `WalletDropdown`, `useDynamicContext`, `DynamicWidget`
+- When connected: show `<WalletDropdown />` and a hidden `<DynamicWidget />` (keeps Dynamic internal state active)
+- When not connected: show `<DynamicWidget />` as the connect button
+- Remove the `WalletButton` import
 
-**4. Update claim mutation mint parameter** (line 88):
-The `mint` passed to `claimMutation.mutate()` already comes from `c.launches?.token_mint_address` (line 225), which is the correct on-chain mint address matching `baseMint`. No change needed there — the lookup in `getClaimableForMint` is what needed fixing.
+### 4. Delete or keep `src/components/WalletButton.tsx`
+No longer imported — can be deleted for cleanup.
 
-Four small field-name replacements, no structural changes.
+## Technical notes
+- `Connection` created with `import.meta.env.VITE_SOLANA_RPC_URL` (already in `.env`)
+- Toast uses sonner-compatible `toast` from `sonner` (project has both legacy and sonner; will use sonner for consistency)
+- All Supabase queries use existing `contributions` and `launches` tables — no schema changes needed
+- Token decimals default to 6 (standard for Bags tokens), overridden by on-chain parsed data
+
+## No database changes required
 
