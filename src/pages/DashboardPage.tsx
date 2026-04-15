@@ -13,10 +13,9 @@ import { DynamicWidget } from "@dynamic-labs/sdk-react-core";
 type Tab = "contributions" | "launches";
 
 interface ClaimablePosition {
-  mint: string;
-  claimableAmount: number;
-  tokenName?: string;
-  tokenSymbol?: string;
+  baseMint: string;
+  claimableDisplayAmount: number;
+  totalClaimableLamportsUserShare: number;
 }
 
 const DashboardPage = () => {
@@ -70,14 +69,14 @@ const DashboardPage = () => {
   });
 
   const totalClaimable = claimablePositions?.reduce(
-    (sum: number, p: ClaimablePosition) => sum + (p.claimableAmount || 0),
+    (sum: number, p: ClaimablePosition) => sum + (p.claimableDisplayAmount || 0),
     0
   ) || 0;
 
   const getClaimableForMint = (mint: string | null): number => {
     if (!mint || !claimablePositions) return 0;
-    const pos = claimablePositions.find((p: ClaimablePosition) => p.mint === mint);
-    return pos?.claimableAmount || 0;
+    const pos = claimablePositions.find((p: ClaimablePosition) => p.baseMint === mint);
+    return pos?.claimableDisplayAmount || 0;
   };
 
   const claimMutation = useMutation({
