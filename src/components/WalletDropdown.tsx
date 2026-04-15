@@ -57,7 +57,7 @@ const WalletDropdown = () => {
     try {
       const walletPubkey = new PublicKey(publicKey);
       console.log("Fetching SOL balance for:", publicKey);
-      console.log("Using RPC:", ALCHEMY_RPC);
+      console.log("Using RPC:", ALCHEMY_RPC?.split("/v2/")[0] + "/v2/***");
       const lamports = await connection.getBalance(walletPubkey, "confirmed");
       console.log("SOL balance in lamports:", lamports);
       setSolBalance(lamports / LAMPORTS_PER_SOL);
