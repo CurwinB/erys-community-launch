@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import WalletButton from "@/components/WalletButton";
+import { DynamicWidget } from "@dynamic-labs/sdk-react-core";
+import WalletDropdown from "@/components/WalletDropdown";
 import { useWallet } from "@/hooks/useWallet";
 
 const Navbar = () => {
@@ -40,7 +41,16 @@ const Navbar = () => {
               </Button>
             </Link>
           )}
-          <WalletButton />
+          {connected ? (
+            <>
+              <WalletDropdown />
+              <div className="hidden">
+                <DynamicWidget />
+              </div>
+            </>
+          ) : (
+            <DynamicWidget />
+          )}
         </div>
       </div>
     </nav>
