@@ -277,19 +277,20 @@ const WalletDropdown = () => {
       setRecipientNeedsAta(false);
       return;
     }
-    let cancelled = false;
-    (async () => {
+
+    const timer = setTimeout(async () => {
       try {
         const mintPubkey = new PublicKey(selectedToken.mint);
         const toPubkey = new PublicKey(sendTo);
         const toAta = await getAssociatedTokenAddress(mintPubkey, toPubkey);
         const info = await connection.getAccountInfo(toAta);
-        if (!cancelled) setRecipientNeedsAta(!info);
+        setRecipientNeedsAta(!info);
       } catch {
-        if (!cancelled) setRecipientNeedsAta(false);
+        setRecipientNeedsAta(false);
       }
-    })();
-    return () => { cancelled = true; };
+    }, 500);
+
+    return () => clearTimeout(timer);
   }, [sendMode, sendTo, selectedToken]);
 
   if (!connected || !publicKey) return null;
