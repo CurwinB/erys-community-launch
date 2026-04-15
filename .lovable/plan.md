@@ -1,45 +1,31 @@
 
 
-# Clean up execute-launch: Remove distribution, add token amount pre-calculation
+# Fix Claimable Positions Field Mapping in DashboardPage
 
-## What changes
+## Problem
+The Bags API returns `baseMint` and `claimableDisplayAmount` on position objects, but the code references `mint` and `claimableAmount`. This causes contributors to always see zero fees.
 
-### Edit: `supabase/functions/execute-launch/index.ts`
+## Changes
 
-**1. Remove SOLANA_RPC_URL** (line 26) — no longer needed since distribution is handled by Railway.
+### Edit: `src/pages/DashboardPage.tsx`
 
-**2. Add token amount pre-calculation** — Insert after the basis points update loop (after line 173), before the escrow decryption:
-
+**1. Update `ClaimablePosition` interface** (lines 15-20):
 ```typescript
-// Pre-calculate proportional token amounts for Railway distributor
-const totalLamportsForTokenCalc = filtered.reduce(
-  (sum: bigint, f) => sum + BigInt(f.contribution.amount_lamports),
-  0n
-);
-
-for (let i = 0; i < filtered.length; i++) {
-  const proportionalBps = Math.floor(
-    (Number(BigInt(filtered[i].contribution.amount_lamports)) / Number(totalLamportsForTokenCalc)) * 10000
-  );
-  await supabase
-    .from("contributions")
-    .update({ token_amount: proportionalBps })
-    .eq("id", filtered[i].contribution.id);
+interface ClaimablePosition {
+  baseMint: string;
+  claimableDisplayAmount: number;
+  totalClaimableLamportsUserShare: number;
 }
 ```
 
-**3. Remove distribute-tokens invoke** (lines 321-325) — delete the `supabase.functions.invoke("distribute-tokens", ...)` call. The function ends right after marking status as "launched" and returning the success response.
+**2. Update `totalClaimable` calculation** (lines 72-75):
+Change `p.claimableAmount` → `p.claimableDisplayAmount`
 
-**4. Remove comment on line 347** — delete `// (Token distribution moved to distribute-tokens edge function)`
+**3. Update `getClaimableForMint` function** (lines 77-81):
+Change `p.mint` → `p.baseMint` and `pos?.claimableAmount` → `pos?.claimableDisplayAmount`
 
-### Also: Delete `supabase/functions/distribute-tokens/index.ts`
-This edge function is no longer needed since Railway handles distribution externally.
+**4. Update claim mutation mint parameter** (line 88):
+The `mint` passed to `claimMutation.mutate()` already comes from `c.launches?.token_mint_address` (line 225), which is the correct on-chain mint address matching `baseMint`. No change needed there — the lookup in `getClaimableForMint` is what needed fixing.
 
-### Deploy
-Redeploy `execute-launch` after changes.
-
-## What stays unchanged
-- ATA reserve calculation (lines 196-214) — kept as-is
-- All fee-share/config, create-launch-transaction, send-transaction steps
-- All utility functions (setFailed, errorResponse, decryptEscrowKey, hexToUint8Array)
+Four small field-name replacements, no structural changes.
 
