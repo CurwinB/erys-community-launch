@@ -6,7 +6,8 @@ const corsHeaders = {
 };
 
 const BAGS_API_BASE = "https://public-api-v2.bags.fm/api/v1";
-const ATA_COST_LAMPORTS = 2_039_280n; // 0.00203928 SOL per ATA creation
+const TX_FEE_PER_TRANSFER = 5_000n; // 0.000005 SOL per SPL token transfer
+const ATA_COST_PER_CONTRIBUTOR = 2_039_280n; // 0.00203928 SOL per ATA creation
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -192,21 +193,24 @@ Deno.serve(async (req) => {
       ESCROW_ENCRYPTION_KEY
     );
 
-    // ATA Reserve: Calculate cost before launching
-    const ataReserve = ATA_COST_LAMPORTS * BigInt(filtered.length);
+    // Reserve enough SOL to send tokens to every contributor:
+    // - 0.00203928 SOL per contributor for ATA creation
+    // - 0.000005 SOL per contributor for transaction fees
+    // Everything else goes into the initial buy
+    const totalReserve = BigInt(filtered.length) * (ATA_COST_PER_CONTRIBUTOR + TX_FEE_PER_TRANSFER);
     const allContribTotal = contributions.reduce(
       (sum: bigint, c: any) => sum + BigInt(c.amount_lamports),
       0n
     );
-    const netBuyLamports = allContribTotal - ataReserve;
+    const netBuyLamports = allContribTotal - totalReserve;
 
     if (netBuyLamports < 10_000_000n) {
       await setFailed(
         supabase,
         launch.id,
-        `Insufficient SOL after ATA reserve. Total: ${allContribTotal}, Reserve: ${ataReserve}, Net: ${netBuyLamports}`
+        `Insufficient SOL after token distribution reserve. Total: ${allContribTotal}, Reserve: ${totalReserve}, Net: ${netBuyLamports}`
       );
-      return errorResponse("Not enough SOL to cover ATA fees and minimum buy");
+      return errorResponse("Not enough SOL raised to cover token distribution costs and initial buy");
     }
 
     // STEP 1: fee-share/config — MUST be first
