@@ -55,7 +55,11 @@ const WalletDropdown = () => {
     setLoadingBalances(true);
 
     try {
-      const lamports = await connection.getBalance(new PublicKey(publicKey));
+      const walletPubkey = new PublicKey(publicKey);
+      console.log("Fetching SOL balance for:", publicKey);
+      console.log("Using RPC:", ALCHEMY_RPC);
+      const lamports = await connection.getBalance(walletPubkey, "confirmed");
+      console.log("SOL balance in lamports:", lamports);
       setSolBalance(lamports / LAMPORTS_PER_SOL);
 
       const { data: contributions } = await supabase
@@ -150,34 +154,76 @@ const WalletDropdown = () => {
   };
 
   const handleSendSol = async () => {
-    if (!wallet || !isSolanaWallet(wallet) || !publicKey) return;
+    if (!wallet || !isSolanaWallet(wallet) || !publicKey) {
+      console.error("No wallet connected");
+      return;
+    }
     if (!sendTo || !sendAmount) return;
 
     setSending(true);
     try {
+      console.log("=== SEND SOL START ===");
+      console.log("From:", publicKey);
+      console.log("To:", sendTo);
+      console.log("Amount SOL:", sendAmount);
+
       const lamports = Math.floor(parseFloat(sendAmount) * LAMPORTS_PER_SOL);
-      const tx = new Transaction().add(
+      console.log("Lamports:", lamports);
+
+      let toPubkey: PublicKey;
+      try {
+        toPubkey = new PublicKey(sendTo);
+      } catch {
+        toast.error("Invalid address", { description: "Recipient address is not a valid Solana address" });
+        return;
+      }
+
+      console.log("Fetching blockhash from Alchemy...");
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      console.log("Blockhash:", blockhash);
+      console.log("Last valid block height:", lastValidBlockHeight);
+
+      const tx = new Transaction();
+      tx.add(
         SystemProgram.transfer({
           fromPubkey: new PublicKey(publicKey),
-          toPubkey: new PublicKey(sendTo),
+          toPubkey,
           lamports,
         })
       );
       tx.feePayer = new PublicKey(publicKey);
-      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      tx.recentBlockhash = blockhash;
 
+      console.log("Transaction built. Requesting signature from Dynamic...");
       const signer = await wallet.getSigner();
       const txSignature = await signer.signAndSendTransaction(tx as any);
+      const sig = typeof txSignature === "string"
+        ? txSignature
+        : (txSignature as any)?.signature || (txSignature as any)?.hash || JSON.stringify(txSignature);
+      console.log("Transaction signature:", sig);
+      console.log("Solscan:", `https://solscan.io/tx/${sig}`);
+      console.log("=== SEND SOL END ===");
 
-      const sig = typeof txSignature === "string" ? txSignature : (txSignature as any)?.signature || "confirmed";
       toast.success("SOL Sent", {
-        description: `Transaction: ${String(sig).slice(0, 8)}...`,
+        description: (
+          <a
+            href={`https://solscan.io/tx/${sig}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline text-primary"
+          >
+            View on Solscan
+          </a>
+        ),
       });
       setSendMode(null);
       setSendTo("");
       setSendAmount("");
       loadBalances();
     } catch (err: any) {
+      console.error("=== SEND SOL FAILED ===");
+      console.error("Error:", err.message);
+      console.error("Full error:", err);
       toast.error("Send Failed", { description: err.message });
     } finally {
       setSending(false);
@@ -185,24 +231,43 @@ const WalletDropdown = () => {
   };
 
   const handleSendToken = async () => {
-    if (!wallet || !isSolanaWallet(wallet) || !publicKey || !selectedToken)
+    if (!wallet || !isSolanaWallet(wallet) || !publicKey || !selectedToken) {
+      console.error("No wallet or token selected");
       return;
+    }
     if (!sendTo || !sendAmount) return;
 
     setSending(true);
     try {
+      console.log("=== SEND TOKEN START ===");
+      console.log("Token:", selectedToken.symbol, selectedToken.mint);
+      console.log("From:", publicKey);
+      console.log("To:", sendTo);
+      console.log("Amount:", sendAmount);
+
+      let toPubkey: PublicKey;
+      try {
+        toPubkey = new PublicKey(sendTo);
+      } catch {
+        toast.error("Invalid address", { description: "Recipient address is not a valid Solana address" });
+        return;
+      }
+
       const mintPubkey = new PublicKey(selectedToken.mint);
       const fromPubkey = new PublicKey(publicKey);
-      const toPubkey = new PublicKey(sendTo);
 
       const fromAta = await getAssociatedTokenAddress(mintPubkey, fromPubkey);
       const toAta = await getAssociatedTokenAddress(mintPubkey, toPubkey);
+      console.log("From ATA:", fromAta.toBase58());
+      console.log("To ATA:", toAta.toBase58());
 
       const toAtaInfo = await connection.getAccountInfo(toAta);
+      console.log("Recipient ATA exists:", !!toAtaInfo);
 
       const tx = new Transaction();
 
       if (!toAtaInfo) {
+        console.log("Creating ATA for recipient. Cost: ~0.00204 SOL from sender");
         tx.add(
           createAssociatedTokenAccountInstruction(
             fromPubkey,
@@ -213,11 +278,10 @@ const WalletDropdown = () => {
         );
       }
 
-      const amount = BigInt(
-        Math.floor(
-          parseFloat(sendAmount) * Math.pow(10, selectedToken.decimals)
-        )
-      );
+      const decimals = selectedToken.decimals || 6;
+      const amount = BigInt(Math.floor(parseFloat(sendAmount) * Math.pow(10, decimals)));
+      console.log("Token amount (raw):", amount.toString());
+      console.log("Token decimals:", decimals);
 
       tx.add(
         createTransferInstruction(
@@ -230,14 +294,35 @@ const WalletDropdown = () => {
         )
       );
 
-      tx.feePayer = fromPubkey;
-      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      console.log("Fetching blockhash from Alchemy...");
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      console.log("Blockhash:", blockhash);
+      console.log("Last valid block height:", lastValidBlockHeight);
 
+      tx.feePayer = fromPubkey;
+      tx.recentBlockhash = blockhash;
+
+      console.log("Transaction built. Requesting signature from Dynamic...");
       const signer = await wallet.getSigner();
-      await signer.signAndSendTransaction(tx as any);
+      const txSignature = await signer.signAndSendTransaction(tx as any);
+      const sig = typeof txSignature === "string"
+        ? txSignature
+        : (txSignature as any)?.signature || (txSignature as any)?.hash || JSON.stringify(txSignature);
+      console.log("Transaction signature:", sig);
+      console.log("Solscan:", `https://solscan.io/tx/${sig}`);
+      console.log("=== SEND TOKEN END ===");
 
       toast.success(`${selectedToken.symbol} Sent`, {
-        description: "Transaction confirmed",
+        description: (
+          <a
+            href={`https://solscan.io/tx/${sig}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline text-primary"
+          >
+            View on Solscan
+          </a>
+        ),
       });
       setSendMode(null);
       setSendTo("");
@@ -245,6 +330,9 @@ const WalletDropdown = () => {
       setSelectedToken(null);
       loadBalances();
     } catch (err: any) {
+      console.error("=== SEND TOKEN FAILED ===");
+      console.error("Error:", err.message);
+      console.error("Full error:", err);
       toast.error("Send Failed", { description: err.message });
     } finally {
       setSending(false);
@@ -347,9 +435,11 @@ const WalletDropdown = () => {
               <div className="border-b border-border p-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-primary to-accent">
-                      <span className="text-xs font-bold text-white">SOL</span>
-                    </div>
+                    <img
+                      src="https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png"
+                      className="h-8 w-8 rounded-full object-cover"
+                      alt="SOL"
+                    />
                     <div>
                       <p className="text-sm font-medium text-foreground">
                         Solana
