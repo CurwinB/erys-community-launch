@@ -23,7 +23,7 @@ Deno.serve(async (req) => {
   const BAGS_PARTNER_WALLET = Deno.env.get("BAGS_PARTNER_WALLET")!;
   const BAGS_PARTNER_CONFIG = Deno.env.get("BAGS_PARTNER_CONFIG")!;
   const ESCROW_ENCRYPTION_KEY = Deno.env.get("ESCROW_ENCRYPTION_KEY")!;
-  const SOLANA_RPC_URL = Deno.env.get("SOLANA_RPC_URL")!;
+  
 
   try {
     // Find launches ready to execute
@@ -169,6 +169,22 @@ Deno.serve(async (req) => {
       await supabase
         .from("contributions")
         .update({ basis_points: basisPoints[i], is_fee_claimer: true })
+        .eq("id", filtered[i].contribution.id);
+    }
+
+    // Pre-calculate proportional token amounts for Railway distributor
+    const totalLamportsForTokenCalc = filtered.reduce(
+      (sum: bigint, f) => sum + BigInt(f.contribution.amount_lamports),
+      0n
+    );
+
+    for (let i = 0; i < filtered.length; i++) {
+      const proportionalBps = Math.floor(
+        (Number(BigInt(filtered[i].contribution.amount_lamports)) / Number(totalLamportsForTokenCalc)) * 10000
+      );
+      await supabase
+        .from("contributions")
+        .update({ token_amount: proportionalBps })
         .eq("id", filtered[i].contribution.id);
     }
 
@@ -318,11 +334,6 @@ Deno.serve(async (req) => {
       .update({ status: "launched" })
       .eq("id", launch.id);
 
-    // Trigger token distribution asynchronously
-    // Don't await - this runs independently to avoid timeout
-    supabase.functions.invoke("distribute-tokens", {
-      body: { launch_id: launch.id }
-    }).catch((err: any) => console.error("distribute-tokens invoke error:", err));
 
     return new Response(
       JSON.stringify({
@@ -344,7 +355,7 @@ Deno.serve(async (req) => {
   }
 });
 
-// (Token distribution moved to distribute-tokens edge function)
+
 
 // =========================================
 // Utility Functions
