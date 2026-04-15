@@ -1,33 +1,37 @@
 
 
-# Add 500ms Debounce to ATA Check Effect
+# Fix WalletDropdown: Balance Logging, SOL Logo, and Send Diagnostics
 
-## Edit: `src/components/WalletDropdown.tsx`
+## Changes — all in `src/components/WalletDropdown.tsx`
 
-Replace the existing ATA check `useEffect` (lines ~208-228) with a debounced version using `setTimeout`. The check will only fire after the user stops typing for 500ms instead of on every keystroke.
+### 1. Add diagnostic logging to SOL balance fetch (lines 57-59)
+Replace the bare `getBalance` call with a try/catch that logs the wallet address, RPC URL, and lamport result. On failure, log the error and set balance to 0.
 
-```typescript
-useEffect(() => {
-  if (sendMode !== "token" || !selectedToken || !sendTo || sendTo.length < 32) {
-    setRecipientNeedsAta(false);
-    return;
-  }
-
-  const timer = setTimeout(async () => {
-    try {
-      const mintPubkey = new PublicKey(selectedToken.mint);
-      const toPubkey = new PublicKey(sendTo);
-      const toAta = await getAssociatedTokenAddress(mintPubkey, toPubkey);
-      const info = await connection.getAccountInfo(toAta);
-      setRecipientNeedsAta(!info);
-    } catch {
-      setRecipientNeedsAta(false);
-    }
-  }, 500);
-
-  return () => clearTimeout(timer);
-}, [sendMode, sendTo, selectedToken]);
+### 2. Use official SOL logo (lines 350-352)
+Replace the gradient circle + "SOL" text with:
+```html
+<img src="https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png" className="h-8 w-8 rounded-full object-cover" alt="SOL" />
 ```
 
-Single effect replacement. No other changes.
+### 3. Replace `handleSendSol` (lines 152-185)
+Full rewrite with:
+- Address validation before building tx
+- Console logging at every step (from/to/amount/lamports/blockhash/signature)
+- Solscan link in toast on success
+- Signature extraction handles string, object with `.signature`, object with `.hash`, and fallback to JSON.stringify
+
+### 4. Replace `handleSendToken` (lines 187-252)
+Full rewrite with:
+- Address validation before building tx
+- Console logging at every step (token info, ATAs, recipient ATA existence, raw amount, blockhash, signature)
+- Solscan link in toast on success
+- Same robust signature extraction
+
+### Note on Connection
+The user's prompt suggests `useMemo` for the Connection, but it's already created as a module-level constant (line 34-35), which is correct and simpler. Keeping it as-is since module-level is equivalent and doesn't require hook overhead. The diagnostic logging in `loadBalances` will confirm the RPC URL is correct.
+
+### Note on toast API
+The current code uses `toast.success()` / `toast.error()` from sonner. The user's prompt uses `toast({ title, description, variant })` which is the shadcn/ui toast API. Will use sonner's API to stay consistent with the existing code, but include the Solscan links as JSX descriptions.
+
+No other files changed.
 
