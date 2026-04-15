@@ -1,37 +1,32 @@
 
 
-# Fix WalletDropdown: Balance Logging, SOL Logo, and Send Diagnostics
+# Fix Alchemy RPC Key and Remove Key Logging
 
-## Changes — all in `src/components/WalletDropdown.tsx`
+## Problem
+The `.env` has the literal placeholder `YOUR_KEY` instead of the real Alchemy API key, causing 401 errors. Also, the diagnostic logging prints the full RPC URL (including API key) to the browser console.
 
-### 1. Add diagnostic logging to SOL balance fetch (lines 57-59)
-Replace the bare `getBalance` call with a try/catch that logs the wallet address, RPC URL, and lamport result. On failure, log the error and set balance to 0.
+## Changes
 
-### 2. Use official SOL logo (lines 350-352)
-Replace the gradient circle + "SOL" text with:
-```html
-<img src="https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png" className="h-8 w-8 rounded-full object-cover" alt="SOL" />
+### 1. Update `.env` — replace placeholder with real key
+```
+VITE_SOLANA_RPC_URL="https://solana-mainnet.g.alchemy.com/v2/<real-key>"
+```
+The user needs to provide their key (they shared it in chat: `wCCpZ1gym...`). I'll update it.
+
+### 2. Edit `src/components/WalletDropdown.tsx` — mask RPC URL in logs
+Replace:
+```typescript
+console.log("Using RPC:", ALCHEMY_RPC)
+```
+With:
+```typescript
+console.log("Using RPC:", ALCHEMY_RPC?.split("/v2/")[0] + "/v2/***")
 ```
 
-### 3. Replace `handleSendSol` (lines 152-185)
-Full rewrite with:
-- Address validation before building tx
-- Console logging at every step (from/to/amount/lamports/blockhash/signature)
-- Solscan link in toast on success
-- Signature extraction handles string, object with `.signature`, object with `.hash`, and fallback to JSON.stringify
+This logs enough to confirm the endpoint without exposing the key.
 
-### 4. Replace `handleSendToken` (lines 187-252)
-Full rewrite with:
-- Address validation before building tx
-- Console logging at every step (token info, ATAs, recipient ATA existence, raw amount, blockhash, signature)
-- Solscan link in toast on success
-- Same robust signature extraction
+### Security note
+`VITE_` prefixed env vars are bundled into the client-side JS — anyone can find the key in the built source. This is standard for RPC keys (Alchemy rate-limits by key, not a true secret). But logging it to console makes it trivially visible, so masking the log is worthwhile.
 
-### Note on Connection
-The user's prompt suggests `useMemo` for the Connection, but it's already created as a module-level constant (line 34-35), which is correct and simpler. Keeping it as-is since module-level is equivalent and doesn't require hook overhead. The diagnostic logging in `loadBalances` will confirm the RPC URL is correct.
-
-### Note on toast API
-The current code uses `toast.success()` / `toast.error()` from sonner. The user's prompt uses `toast({ title, description, variant })` which is the shadcn/ui toast API. Will use sonner's API to stay consistent with the existing code, but include the Solscan links as JSX descriptions.
-
-No other files changed.
+No other changes needed.
 
