@@ -47,6 +47,7 @@ const WalletDropdown = () => {
   const [sendAmount, setSendAmount] = useState("");
   const [selectedToken, setSelectedToken] = useState<ErysToken | null>(null);
   const [sending, setSending] = useState(false);
+  const [recipientNeedsAta, setRecipientNeedsAta] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const loadBalances = async () => {
