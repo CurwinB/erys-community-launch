@@ -467,6 +467,11 @@ const WalletDropdown = () => {
                     onChange={(e) => setSendAmount(e.target.value)}
                     className="font-mono text-xs"
                   />
+                  {recipientNeedsAta && (
+                    <p className="text-xs text-yellow-500">
+                      ⚠ Recipient has no token account. ATA creation will cost ~0.00204 SOL.
+                    </p>
+                  )}
                   <Button
                     size="sm"
                     className="w-full"
