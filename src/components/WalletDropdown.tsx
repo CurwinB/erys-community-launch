@@ -168,8 +168,9 @@ const WalletDropdown = () => {
       const signer = await wallet.getSigner();
       const txSignature = await signer.signAndSendTransaction(tx as any);
 
+      const sig = typeof txSignature === "string" ? txSignature : (txSignature as any)?.signature || "confirmed";
       toast.success("SOL Sent", {
-        description: `Transaction: ${typeof txSignature === "string" ? txSignature.slice(0, 8) : "confirmed"}...`,
+        description: `Transaction: ${String(sig).slice(0, 8)}...`,
       });
       setSendMode(null);
       setSendTo("");
