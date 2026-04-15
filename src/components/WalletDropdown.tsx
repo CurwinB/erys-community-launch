@@ -271,6 +271,27 @@ const WalletDropdown = () => {
     if (open && publicKey) loadBalances();
   }, [open, publicKey]);
 
+  // Check if recipient needs ATA creation
+  useEffect(() => {
+    if (sendMode !== "token" || !selectedToken || !sendTo || sendTo.length < 32) {
+      setRecipientNeedsAta(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const mintPubkey = new PublicKey(selectedToken.mint);
+        const toPubkey = new PublicKey(sendTo);
+        const toAta = await getAssociatedTokenAddress(mintPubkey, toPubkey);
+        const info = await connection.getAccountInfo(toAta);
+        if (!cancelled) setRecipientNeedsAta(!info);
+      } catch {
+        if (!cancelled) setRecipientNeedsAta(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sendMode, sendTo, selectedToken]);
+
   if (!connected || !publicKey) return null;
 
   return (
