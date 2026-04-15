@@ -166,7 +166,7 @@ const WalletDropdown = () => {
       tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
 
       const signer = await wallet.getSigner();
-      const txSignature = await signer.signAndSendTransaction(tx);
+      const txSignature = await signer.signAndSendTransaction(tx as any);
 
       toast.success("SOL Sent", {
         description: `Transaction: ${typeof txSignature === "string" ? txSignature.slice(0, 8) : "confirmed"}...`,
@@ -232,7 +232,7 @@ const WalletDropdown = () => {
       tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
 
       const signer = await wallet.getSigner();
-      await signer.signAndSendTransaction(tx);
+      await signer.signAndSendTransaction(tx as any);
 
       toast.success(`${selectedToken.symbol} Sent`, {
         description: "Transaction confirmed",
@@ -278,7 +278,7 @@ const WalletDropdown = () => {
         onClick={() => setOpen(!open)}
         className="flex items-center gap-2 rounded-sm border border-border bg-card px-3 py-2 text-sm font-mono text-foreground hover:border-primary/50 transition-colors"
       >
-        <div className="h-2 w-2 rounded-full bg-green-500" />
+        <div className="h-2 w-2 rounded-full bg-primary" />
         {publicKey.slice(0, 4)}...{publicKey.slice(-4)}
         <ChevronDown className="h-3 w-3 text-muted-foreground" />
       </button>
@@ -323,7 +323,7 @@ const WalletDropdown = () => {
               <div className="border-b border-border p-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-purple-500 to-blue-500">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-primary to-accent">
                       <span className="text-xs font-bold text-white">SOL</span>
                     </div>
                     <div>
