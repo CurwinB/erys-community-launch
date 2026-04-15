@@ -318,27 +318,11 @@ Deno.serve(async (req) => {
       .update({ status: "launched" })
       .eq("id", launch.id);
 
-    // =========================================
-    // STEP 4: Token Distribution
-    // =========================================
-    const tokenMint = mintAddress || launch.token_mint_address;
-
-    if (tokenMint) {
-      try {
-        await distributeTokens(
-          supabase,
-          SOLANA_RPC_URL,
-          launch,
-          filtered,
-          escrowPrivateKey,
-          tokenMint,
-          creatorWallet
-        );
-      } catch (distErr: any) {
-        console.error("Token distribution error:", distErr);
-        // Distribution failure doesn't fail the launch
-      }
-    }
+    // Trigger token distribution asynchronously
+    // Don't await - this runs independently to avoid timeout
+    supabase.functions.invoke("distribute-tokens", {
+      body: { launch_id: launch.id }
+    }).catch((err: any) => console.error("distribute-tokens invoke error:", err));
 
     return new Response(
       JSON.stringify({
