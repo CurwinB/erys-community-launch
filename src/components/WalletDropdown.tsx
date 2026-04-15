@@ -47,6 +47,7 @@ const WalletDropdown = () => {
   const [sendAmount, setSendAmount] = useState("");
   const [selectedToken, setSelectedToken] = useState<ErysToken | null>(null);
   const [sending, setSending] = useState(false);
+  const [recipientNeedsAta, setRecipientNeedsAta] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const loadBalances = async () => {
@@ -270,6 +271,27 @@ const WalletDropdown = () => {
     if (open && publicKey) loadBalances();
   }, [open, publicKey]);
 
+  // Check if recipient needs ATA creation
+  useEffect(() => {
+    if (sendMode !== "token" || !selectedToken || !sendTo || sendTo.length < 32) {
+      setRecipientNeedsAta(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const mintPubkey = new PublicKey(selectedToken.mint);
+        const toPubkey = new PublicKey(sendTo);
+        const toAta = await getAssociatedTokenAddress(mintPubkey, toPubkey);
+        const info = await connection.getAccountInfo(toAta);
+        if (!cancelled) setRecipientNeedsAta(!info);
+      } catch {
+        if (!cancelled) setRecipientNeedsAta(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sendMode, sendTo, selectedToken]);
+
   if (!connected || !publicKey) return null;
 
   return (
@@ -445,6 +467,11 @@ const WalletDropdown = () => {
                     onChange={(e) => setSendAmount(e.target.value)}
                     className="font-mono text-xs"
                   />
+                  {recipientNeedsAta && (
+                    <p className="text-xs text-yellow-500">
+                      ⚠ Recipient has no token account. ATA creation will cost ~0.00204 SOL.
+                    </p>
+                  )}
                   <Button
                     size="sm"
                     className="w-full"
