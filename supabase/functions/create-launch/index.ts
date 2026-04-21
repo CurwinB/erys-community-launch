@@ -63,11 +63,18 @@ Deno.serve(async (req) => {
 
     if (tokenInfoRes.ok) {
       const tokenInfoData = await tokenInfoRes.json();
-      tokenMint = tokenInfoData.mint || tokenInfoData.tokenMint || null;
-      ipfsMetadataUrl = tokenInfoData.metadataUrl || tokenInfoData.ipfsUrl || null;
+      console.log("create-token-info response:", JSON.stringify(tokenInfoData));
+      tokenMint = tokenInfoData.response?.tokenMint || null;
+      ipfsMetadataUrl = tokenInfoData.response?.tokenLaunch?.uri || null;
+      console.log("tokenMint:", tokenMint, "ipfsMetadataUrl:", ipfsMetadataUrl);
     } else {
-      console.error("create-token-info failed:", await tokenInfoRes.text());
-      // Continue without token mint — it will be set during execute-launch
+      const errText = await tokenInfoRes.text();
+      console.error("create-token-info failed:", errText);
+      return errorResponse(`Bags create-token-info failed: ${errText}`, 500);
+    }
+
+    if (!tokenMint || !ipfsMetadataUrl) {
+      return errorResponse("Bags API did not return tokenMint or metadata URI. Cannot create launch.", 500);
     }
 
     // Step 2: Generate escrow keypair using Web Crypto (Ed25519 via raw bytes)

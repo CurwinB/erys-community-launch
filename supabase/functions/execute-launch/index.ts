@@ -265,6 +265,29 @@ Deno.serve(async (req) => {
       return errorResponse("No configKey returned");
     }
 
+    // Submit all fee-share transactions returned by Bags before launch tx.
+    // With >15 claimers, Bags returns multiple txs (lookup tables, etc.)
+    const feeShareTransactions = feeShareData.response?.transactions || [];
+    console.log(`fee-share/config returned ${feeShareTransactions.length} transactions`);
+
+    for (let i = 0; i < feeShareTransactions.length; i++) {
+      const txObj = feeShareTransactions[i];
+      const sendRes = await fetch(`${BAGS_API_BASE}/solana/send-transaction`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": BAGS_API_KEY },
+        body: JSON.stringify({
+          transaction: txObj.transaction,
+          signerPrivateKey: escrowPrivateKey,
+        }),
+      });
+      if (!sendRes.ok) {
+        const errText = await sendRes.text();
+        await setFailed(supabase, launch.id, `fee-share tx ${i + 1}/${feeShareTransactions.length} failed: ${errText}`);
+        return errorResponse(`fee-share transaction failed: ${errText}`);
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
     // Store configKey
     await supabase
       .from("launches")
@@ -276,6 +299,11 @@ Deno.serve(async (req) => {
       .eq("id", launch.id);
 
     // STEP 2: create-launch-transaction (using netBuyLamports, not allContribTotal)
+    if (!launch.ipfs_metadata_url || !launch.token_mint_address) {
+      await setFailed(supabase, launch.id, "Missing ipfs_metadata_url or token_mint_address — cannot build launch transaction");
+      return errorResponse("Launch is missing IPFS URI or token mint");
+    }
+
     const createTxRes = await fetch(`${BAGS_API_BASE}/token-launch/create-launch-transaction`, {
       method: "POST",
       headers: {
@@ -283,16 +311,11 @@ Deno.serve(async (req) => {
         "x-api-key": BAGS_API_KEY,
       },
       body: JSON.stringify({
-        creator: launch.escrow_wallet_public_key,
-        name: launch.token_name,
-        symbol: launch.token_symbol,
-        description: launch.description || "",
-        imageUrl: launch.image_url || "",
-        initialBuyLamports: Number(netBuyLamports).toString(),
+        ipfs: launch.ipfs_metadata_url,
+        tokenMint: launch.token_mint_address,
+        wallet: launch.escrow_wallet_public_key,
+        initialBuyLamports: Number(netBuyLamports),
         configKey,
-        twitter: launch.twitter_url || undefined,
-        telegram: launch.telegram_url || undefined,
-        website: launch.website_url || undefined,
       }),
     });
 
