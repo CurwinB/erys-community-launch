@@ -1,4 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.0";
+import { Keypair, Transaction, VersionedTransaction } from "https://esm.sh/@solana/web3.js@1.91.1";
+import bs58 from "https://esm.sh/bs58@5.0.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -270,15 +272,16 @@ Deno.serve(async (req) => {
     const feeShareTransactions = feeShareData.response?.transactions || [];
     console.log(`fee-share/config returned ${feeShareTransactions.length} transactions`);
 
+    // Reconstruct escrow keypair once for signing all txs (escrowPrivateKey is hex of 64-byte secret)
+    const escrowKeypair = Keypair.fromSecretKey(hexToUint8Array(escrowPrivateKey));
+
     for (let i = 0; i < feeShareTransactions.length; i++) {
       const txObj = feeShareTransactions[i];
+      const signedTxBase58 = signWithKeypair(txObj.transaction, escrowKeypair);
       const sendRes = await fetch(`${BAGS_API_BASE}/solana/send-transaction`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-key": BAGS_API_KEY },
-        body: JSON.stringify({
-          transaction: txObj.transaction,
-          signerPrivateKey: escrowPrivateKey,
-        }),
+        body: JSON.stringify({ transaction: signedTxBase58 }),
       });
       if (!sendRes.ok) {
         const errText = await sendRes.text();
@@ -326,27 +329,22 @@ Deno.serve(async (req) => {
     }
 
     const createTxData = await createTxRes.json();
-    const transaction = createTxData.transaction;
-    const mintAddress = createTxData.mint;
+    const transaction = createTxData.response;
 
-    if (mintAddress) {
-      await supabase
-        .from("launches")
-        .update({ token_mint_address: mintAddress })
-        .eq("id", launch.id);
+    if (!transaction || typeof transaction !== "string") {
+      await setFailed(supabase, launch.id, "create-launch-transaction returned no transaction string");
+      return errorResponse("create-launch-transaction returned no transaction");
     }
 
     // STEP 3: send-transaction
+    const signedLaunchTx = signWithKeypair(transaction, escrowKeypair);
     const sendTxRes = await fetch(`${BAGS_API_BASE}/solana/send-transaction`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "x-api-key": BAGS_API_KEY,
       },
-      body: JSON.stringify({
-        transaction,
-        signerPrivateKey: escrowPrivateKey,
-      }),
+      body: JSON.stringify({ transaction: signedLaunchTx }),
     });
 
     if (!sendTxRes.ok) {
@@ -453,6 +451,21 @@ function hexToUint8Array(hex: string): Uint8Array {
     bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
   }
   return bytes;
+}
+
+// Sign a base58-encoded transaction (versioned or legacy) with the given keypair
+// and return the base58-encoded signed transaction.
+function signWithKeypair(txBase58: string, keypair: Keypair): string {
+  const txBytes = bs58.decode(txBase58);
+  try {
+    const tx = VersionedTransaction.deserialize(txBytes);
+    tx.sign([keypair]);
+    return bs58.encode(tx.serialize());
+  } catch {
+    const tx = Transaction.from(txBytes);
+    tx.partialSign(keypair);
+    return bs58.encode(tx.serialize());
+  }
 }
 
 // =========================================

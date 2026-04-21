@@ -40,22 +40,22 @@ Deno.serve(async (req) => {
       return errorResponse("Missing required fields", 400);
     }
 
-    // Step 1: Create token info on Bags API
+    // Step 1: Create token info on Bags API (multipart/form-data — do NOT set Content-Type)
+    const formData = new FormData();
+    formData.append("name", token_name);
+    formData.append("symbol", token_symbol.toUpperCase());
+    formData.append("description", description || "");
+    if (image_url) formData.append("imageUrl", image_url);
+    if (twitter_url) formData.append("twitter", twitter_url);
+    if (telegram_url) formData.append("telegram", telegram_url);
+    if (website_url) formData.append("website", website_url);
+
     const tokenInfoRes = await fetch(`${BAGS_API_BASE}/token-launch/create-token-info`, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
         "x-api-key": BAGS_API_KEY,
       },
-      body: JSON.stringify({
-        name: token_name,
-        symbol: token_symbol,
-        description: description || "",
-        imageUrl: image_url || "",
-        twitter: twitter_url || undefined,
-        telegram: telegram_url || undefined,
-        website: website_url || undefined,
-      }),
+      body: formData,
     });
 
     let tokenMint: string | null = null;

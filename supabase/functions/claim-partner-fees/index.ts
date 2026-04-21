@@ -1,4 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.0";
+import { Keypair, Transaction, VersionedTransaction } from "https://esm.sh/@solana/web3.js@1.91.1";
+import bs58 from "https://esm.sh/bs58@5.0.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -41,7 +43,7 @@ Deno.serve(async (req) => {
     }
 
     const stats = await statsRes.json();
-    const unclaimedLamports = stats.unclaimedLamports || stats.unclaimed || 0;
+    const unclaimedLamports = Number(stats.response?.unclaimedFees ?? 0);
 
     if (Number(unclaimedLamports) < CLAIM_THRESHOLD_LAMPORTS) {
       return new Response(
@@ -54,15 +56,15 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Step 2: Generate claim transaction
-    const claimTxRes = await fetch(`${BAGS_API_BASE}/fee-share/partner-config/claim-txs`, {
+    // Step 2: Generate claim transaction(s)
+    const claimTxRes = await fetch(`${BAGS_API_BASE}/fee-share/partner-config/claim-tx`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "x-api-key": BAGS_API_KEY,
       },
       body: JSON.stringify({
-        partner: BAGS_PARTNER_WALLET,
+        partnerWallet: BAGS_PARTNER_WALLET,
       }),
     });
 
@@ -76,31 +78,54 @@ Deno.serve(async (req) => {
     }
 
     const claimTxData = await claimTxRes.json();
+    const claimTransactions = claimTxData.response?.transactions || [];
 
-    // Step 3: Sign server-side with platform private key and submit
-    const sendRes = await fetch(`${BAGS_API_BASE}/solana/send-transaction`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": BAGS_API_KEY,
-      },
-      body: JSON.stringify({
-        transaction: claimTxData.transaction,
-        signerPrivateKey: ERYS_PLATFORM_PRIVATE_KEY,
-      }),
-    });
-
-    if (!sendRes.ok) {
-      const errText = await sendRes.text();
-      console.error("Partner claim send failed:", errText);
+    if (claimTransactions.length === 0) {
       return new Response(
-        JSON.stringify({ error: `Send failed: ${errText}` }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ message: "No partner claim transactions returned" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const sendData = await sendRes.json();
-    const txSignature = sendData.signature || sendData.txSignature;
+    // Step 3: Sign each tx locally with platform key (base58-encoded secret) and submit
+    const platformKeypair = Keypair.fromSecretKey(bs58.decode(ERYS_PLATFORM_PRIVATE_KEY));
+    const signatures: string[] = [];
+
+    for (const txObj of claimTransactions) {
+      const txBytes = bs58.decode(txObj.transaction);
+      let signedTxBase58: string;
+      try {
+        const tx = VersionedTransaction.deserialize(txBytes);
+        tx.sign([platformKeypair]);
+        signedTxBase58 = bs58.encode(tx.serialize());
+      } catch {
+        const tx = Transaction.from(txBytes);
+        tx.partialSign(platformKeypair);
+        signedTxBase58 = bs58.encode(tx.serialize());
+      }
+
+      const sendRes = await fetch(`${BAGS_API_BASE}/solana/send-transaction`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": BAGS_API_KEY },
+        body: JSON.stringify({ transaction: signedTxBase58 }),
+      });
+
+      if (!sendRes.ok) {
+        const errText = await sendRes.text();
+        console.error("Partner claim send failed:", errText);
+        return new Response(
+          JSON.stringify({ error: `Send failed: ${errText}` }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const sendData = await sendRes.json();
+      const sig = sendData.response || sendData.signature || sendData.txSignature;
+      if (sig) signatures.push(sig);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    const txSignature = signatures.join(",");
 
     // Step 4: Log to platform_fee_claims table
     const { error: insertErr } = await supabase
@@ -118,7 +143,7 @@ Deno.serve(async (req) => {
       JSON.stringify({
         success: true,
         claimed: Number(unclaimedLamports),
-        txSignature,
+        txSignatures: signatures,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

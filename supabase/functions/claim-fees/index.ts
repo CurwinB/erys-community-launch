@@ -63,7 +63,7 @@ Deno.serve(async (req) => {
         },
         body: JSON.stringify({
           feeClaimer: wallet,
-          mint,
+          tokenMint: mint,
         }),
       });
 
