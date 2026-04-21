@@ -3,6 +3,7 @@ dotenv.config();
 
 import { getPendingDistributions } from "./db";
 import { distributeTokensForLaunch } from "./distribute";
+import { claimAllPumpfunFees } from "./claimPumpfunFees";
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "30000");
 
@@ -12,6 +13,7 @@ function validateEnv(): void {
     "SUPABASE_SERVICE_ROLE_KEY",
     "SOLANA_RPC_URL",
     "ESCROW_ENCRYPTION_KEY",
+    "BAGS_PARTNER_WALLET",
   ];
   const missing = required.filter((key) => !process.env[key]);
   if (missing.length > 0) {
@@ -59,6 +61,16 @@ async function main(): Promise<void> {
 
   await pollAndDistribute();
   setInterval(pollAndDistribute, POLL_INTERVAL_MS);
+
+  // Pump.fun creator fee claiming runs every 6 hours
+  // But individual launches are only claimed if 24 hours have passed since last claim
+  const PUMPFUN_CLAIM_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+  console.log("Pump.fun fee claiming enabled. Checking every 6 hours.");
+
+  // Run immediately on startup then on interval
+  await claimAllPumpfunFees();
+  setInterval(claimAllPumpfunFees, PUMPFUN_CLAIM_INTERVAL_MS);
 
   process.on("SIGTERM", () => {
     console.log("SIGTERM received. Shutting down gracefully...");
