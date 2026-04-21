@@ -143,3 +143,24 @@ export async function updatePumpfunFeesClaimed(
     console.error(`Error updating Pump.fun fee claim for launch ${launchId}:`, error.message);
   }
 }
+
+// Reset launches stuck in "executing" status whose scheduled launch_datetime
+// is more than 10 minutes in the past. Flips them to "execution_failed" so
+// the existing pg_cron retry job will pick them up and re-execute.
+// Note: launches table has no updated_at column, so we use launch_datetime
+// as the staleness signal — better anyway since it's lifecycle-tied.
+export async function resetStaleExecutingLaunches(): Promise<void> {
+  const staleCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const { error } = await supabase
+    .from("launches")
+    .update({
+      status: "execution_failed",
+      execution_error: "Reset from stale executing state by distributor",
+    })
+    .eq("status", "executing")
+    .lt("launch_datetime", staleCutoff);
+
+  if (error) {
+    console.error("Error resetting stale executing launches:", error.message);
+  }
+}
