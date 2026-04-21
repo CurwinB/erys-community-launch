@@ -11,6 +11,7 @@ import Index from "./pages/Index";
 import LaunchPage from "./pages/LaunchPage";
 import SchedulePage from "./pages/SchedulePage";
 import DashboardPage from "./pages/DashboardPage";
+import AdminPage from "./pages/AdminPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -37,6 +38,7 @@ const App = () => (
             <Route path="/launch/:id" element={<LaunchPage />} />
             <Route path="/schedule" element={<SchedulePage />} />
             <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/admin" element={<AdminPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
