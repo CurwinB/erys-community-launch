@@ -86,11 +86,12 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
 
     // Get new balance after claim to calculate how much was claimed
     const newBalance = await connection.getBalance(escrowKeypair.publicKey, "confirmed");
-    claimedLamports = newBalance - escrowBalance;
+    claimedLamports = newBalance - escrowBalanceBefore;
 
     if (claimedLamports <= 0) {
+      // No real claim happened — do NOT stamp the timestamp, otherwise this
+      // launch is locked out of the next 24h of poll cycles for no reason.
       console.log(`No fees were actually claimed for launch ${launch.id}`);
-      await updatePumpfunFeesClaimed(launch.id, 0);
       return;
     }
 
@@ -100,9 +101,20 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     return;
   }
 
-  // Split fees: 50% to Erys platform, 50% to creator
-  const platformShareLamports = Math.floor(claimedLamports * PLATFORM_SHARE);
-  const creatorShareLamports = claimedLamports - platformShareLamports;
+  // Reserve ~5000 lamports per outgoing transfer so the second tx doesn't
+  // run out of funds after the first transfer's fee is deducted.
+  const distributableLamports = claimedLamports - TX_FEE_RESERVE;
+  if (distributableLamports <= 0) {
+    console.log(
+      `Claimed amount too small to distribute after tx fees for launch ${launch.id}`
+    );
+    await updatePumpfunFeesClaimed(launch.id, claimedLamports);
+    return;
+  }
+
+  // Split distributable amount: 50% to Erys platform, 50% to creator
+  const platformShareLamports = Math.floor(distributableLamports * PLATFORM_SHARE);
+  const creatorShareLamports = distributableLamports - platformShareLamports;
 
   console.log(`Platform share: ${platformShareLamports / LAMPORTS_PER_SOL} SOL`);
   console.log(`Creator share: ${creatorShareLamports / LAMPORTS_PER_SOL} SOL`);
