@@ -174,14 +174,17 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
       })
     );
     creatorTx.feePayer = escrowKeypair.publicKey;
-    const { blockhash } = await connection.getLatestBlockhash();
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
     creatorTx.recentBlockhash = blockhash;
     creatorTx.sign(escrowKeypair);
 
     const creatorSig = await connection.sendRawTransaction(creatorTx.serialize(), {
       preflightCommitment: "confirmed",
     });
-    await connection.confirmTransaction(creatorSig, "confirmed");
+    await connection.confirmTransaction(
+      { signature: creatorSig, blockhash, lastValidBlockHeight },
+      "confirmed"
+    );
     console.log(`Creator fee sent: https://solscan.io/tx/${creatorSig}`);
     creatorSent = true;
   } catch (err: any) {
