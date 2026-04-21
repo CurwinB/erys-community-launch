@@ -579,7 +579,7 @@ async function executePumpfunLaunch(
         action: "create",
         tokenMetadata: {
           name: launch.token_name,
-          symbol: launch.token_symbol,
+          symbol: launch.token_symbol.toUpperCase(),
           uri: launch.ipfs_metadata_url,
         },
         mint: launch.token_mint_address,
