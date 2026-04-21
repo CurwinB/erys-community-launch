@@ -1,68 +1,125 @@
 
 
-# Two Fixes: Semantic Column Use + Remove Distribution Cutoff
+# Four Distributor Fixes: Precision, Concurrency, Stale Recovery, Confirmation API
 
-Both fixes are surgical, isolated, and low-risk. No frontend, no schema, no env changes.
+All changes confined to the Railway distributor (`distributor/src/`). No edge functions, no frontend, no env vars. **One deviation from the prompt is required** (Fix 3) because the `launches` table has no `updated_at` column.
 
-## Fix 1 — Use `basis_points` instead of `token_amount` for pre-launch allocations
+## Fix 1 — Pass `bigint` to `createTransferInstruction`
 
-**File:** `supabase/functions/execute-launch/index.ts` (`executePumpfunLaunch`)
+**File:** `distributor/src/distribute.ts` (`sendTokensToContributor`)
 
-**Problem:** The pre-launch loop writes proportional basis points (a value out of 10,000) into `token_amount`. That column is semantically the actual token quantity distributed post-launch, and `distribute.ts` later overwrites it with the real token amount. Storing BPS there temporarily pollutes the field, makes the DB confusing to inspect mid-launch, and risks any reader between execute and distribute reading a 4-digit "token amount" that's actually a percentage.
+Drop the `Number(tokenAmount)` cast and pass `tokenAmount` directly. `@solana/spl-token`'s `createTransferInstruction` accepts `bigint`, so the cast was a precision-loss hazard for token amounts above `Number.MAX_SAFE_INTEGER` (~9.007e15). With 6-decimal tokens this is ~9 billion whole tokens, which is below typical 1B-supply launches but unsafe for higher-supply tokens.
 
-**Change:** In the pre-launch contribution update loop, write to the `basis_points` column instead of `token_amount`:
+## Fix 2 — Concurrency guard on `claimAllPumpfunFees`
+
+**File:** `distributor/src/index.ts`
+
+Add a module-level `claimRunning` boolean and a `runClaimIfIdle()` wrapper. Replace both call sites (startup `await` and `setInterval`) with the wrapper. Prevents overlapping 6-hour cycles if a previous cycle hangs (e.g. RPC stalls during many sequential transfers).
 
 ```ts
-for (const c of contributions) {
-  const proportionalBps = Math.floor(
-    (Number(BigInt(c.amount_lamports)) / Number(totalLamports)) * 10000
-  );
-  await supabase
-    .from("contributions")
-    .update({ basis_points: proportionalBps })
-    .eq("id", c.id);
+let claimRunning = false;
+
+async function runClaimIfIdle(): Promise<void> {
+  if (claimRunning) {
+    console.log("Fee claim cycle already running, skipping this interval");
+    return;
+  }
+  claimRunning = true;
+  try {
+    await claimAllPumpfunFees();
+  } finally {
+    claimRunning = false;
+  }
 }
 ```
 
-`basis_points` already exists on the `contributions` schema (integer, nullable) and is the semantically correct column. `token_amount` stays null until `distribute.ts` writes the real on-chain token quantity after launch confirmation.
+Same pattern as the existing `processing` Set guard for distributions.
 
-**Safety check:** `distribute.ts` reads `token_amount` only for already-distributed contributions (`tokens_distributed = true`) when computing `previouslyDistributed` for the retry-stable share calc. On a fresh launch nothing is yet distributed, so the field being null is correct and expected.
+## Fix 3 — Recover stale `executing` launches (DEVIATION FROM PROMPT)
 
-## Fix 2 — Remove 48-hour cutoff from `getPendingDistributions`
+**Files:** `distributor/src/db.ts`, `distributor/src/index.ts`
 
-**File:** `distributor/src/db.ts` (`getPendingDistributions`)
+**Deviation:** The prompt's `.lt("updated_at", staleCutoff)` will fail because **the `launches` table has no `updated_at` column** (verified against `supabase/migrations/` and `src/integrations/supabase/types.ts`). The available timestamp columns are `created_at`, `launch_datetime`, `distribution_completed_at`, and `pumpfun_fees_last_claimed_at`.
 
-**Problem:** The query filters `created_at >= now() - 48h`. Any launch that goes `launched` but fails to fully distribute within 48 hours of creation drops off the polling list permanently, even though tokens may still be sitting in escrow. Combined with the partial-failure retry logic just added, this is a silent fund-loss path: retries work for 48h then the launch is invisible to the distributor forever.
-
-**Change:** Drop the cutoff filter and the unused constant:
+**Replacement signal:** Use `launch_datetime` — the scheduled launch time. A launch in `executing` status whose scheduled time is more than 10 minutes in the past is definitively stuck. This is actually a better signal than a generic `updated_at` because it's tied to the launch lifecycle rather than any DB update.
 
 ```ts
-export async function getPendingDistributions(): Promise<Launch[]> {
-  const { data, error } = await supabase
+// distributor/src/db.ts
+export async function resetStaleExecutingLaunches(): Promise<void> {
+  const staleCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const { error } = await supabase
     .from("launches")
-    .select("*")
-    .eq("status", "launched")
-    .eq("distribution_completed", false)
-    .order("created_at", { ascending: true })
-    .limit(5);
+    .update({
+      status: "execution_failed",
+      execution_error: "Reset from stale executing state by distributor",
+    })
+    .eq("status", "executing")
+    .lt("launch_datetime", staleCutoff);
 
   if (error) {
-    console.error("Error fetching pending distributions:", error.message);
-    return [];
+    console.error("Error resetting stale executing launches:", error.message);
   }
-  return (data as Launch[]) || [];
 }
 ```
 
-The `status = launched` + `distribution_completed = false` + `limit 5` ascending-by-creation guarantees the query stays small and prioritizes the oldest stuck launches first. No risk of unbounded growth — completed launches flip `distribution_completed = true` and exit the result set.
+In `index.ts`, import and call at the top of `pollAndDistribute()` so it runs every 30 seconds. Stuck launches flip to `execution_failed`, which the existing pg_cron retry job picks up and re-executes.
 
-## Out of scope
+**Note:** No log on success path to avoid log spam every 30s. Errors still log.
 
-- Audit-flagged low items (precision cast in `sendTokensToContributor`, claim-fee net accounting, claim concurrency guard).
-- No edits to `claimPumpfunFees.ts`, `decrypt.ts`, edge functions other than `execute-launch`, frontend, schema, or env vars.
+## Fix 4 — Replace deprecated `confirmTransaction(signature, commitment)` with strategy form
 
-## Files
+**Files:** `distributor/src/distribute.ts`, `distributor/src/claimPumpfunFees.ts`
 
-- Edit: `supabase/functions/execute-launch/index.ts`
-- Edit: `distributor/src/db.ts`
+The single-string form is deprecated and lacks blockhash expiry tracking — confirmations can hang indefinitely if the blockhash expires. The strategy object form `{ signature, blockhash, lastValidBlockHeight }` properly bounds the wait.
+
+### `distribute.ts` — `sendTokensToContributor`
+
+Destructure `lastValidBlockHeight` alongside `blockhash` from `getLatestBlockhash("confirmed")`, and pass the strategy object to `confirmTransaction`:
+
+```ts
+const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+tx.recentBlockhash = blockhash;
+// ... sign, send ...
+await connection.confirmTransaction(
+  { signature, blockhash, lastValidBlockHeight },
+  "confirmed"
+);
+```
+
+### `claimPumpfunFees.ts` — three call sites
+
+**Platform transfer + creator transfer** (lines ~133, ~157): straightforward — destructure `lastValidBlockHeight` from the existing `getLatestBlockhash()` call already used to set `recentBlockhash`. Pass strategy object to `confirmTransaction`.
+
+**Claim tx** (line ~82): special case. The `VersionedTransaction` is returned **pre-built by PumpPortal** with its blockhash already baked into the message — we don't fetch a blockhash before signing. To use the strategy form we extract the blockhash from the deserialized message and fetch the current block height as a conservative `lastValidBlockHeight`:
+
+```ts
+const tx = VersionedTransaction.deserialize(claimTxBytes);
+tx.sign([escrowKeypair]);
+
+const claimBlockhash = tx.message.recentBlockhash;
+const currentBlockHeight = await connection.getBlockHeight("confirmed");
+// PumpPortal blockhashes have ~150 block validity (~60s). Use a conservative
+// 150-block window from the current height as the expiry cutoff.
+const claimLastValidBlockHeight = currentBlockHeight + 150;
+
+const serialized = tx.serialize();
+const signature = await connection.sendRawTransaction(serialized, {
+  preflightCommitment: "confirmed",
+});
+await connection.confirmTransaction(
+  { signature, blockhash: claimBlockhash, lastValidBlockHeight: claimLastValidBlockHeight },
+  "confirmed"
+);
+```
+
+This bounds the wait at ~60 seconds rather than potentially hanging forever on the deprecated form. If PumpPortal's blockhash was already older than fresh, the confirmation simply expires faster — which is the correct failure mode (we'll retry next 6h cycle).
+
+## Summary of files
+
+- `distributor/src/distribute.ts` — Fix 1 + Fix 4 (one call site)
+- `distributor/src/claimPumpfunFees.ts` — Fix 4 (three call sites)
+- `distributor/src/index.ts` — Fix 2 + Fix 3 wiring
+- `distributor/src/db.ts` — Fix 3 (new function, uses `launch_datetime` not `updated_at`)
+
+No schema migration. No new env vars. No edge function changes.
 
