@@ -492,14 +492,22 @@ async function executePumpfunLaunch(
         .eq("id", c.id);
     }
 
-    // Subtract priority fee + minimal headroom for transaction signing
-    const PRIORITY_FEE_LAMPORTS = 50_000n; // 0.00005 SOL
-    const TX_FEE_LAMPORTS = 5_000n;
-    const initialBuyLamports = totalLamports - PRIORITY_FEE_LAMPORTS - TX_FEE_LAMPORTS;
+    // Reserve SOL for ATA creation + tx fee per contributor (token distribution)
+    const ATA_COST_PER_CONTRIBUTOR = 2_039_280n;
+    const TX_FEE_PER_CONTRIBUTOR = 5_000n;
+    const PRIORITY_FEE_LAMPORTS = 50_000n;
+
+    const contributorCount = BigInt(contributions.length);
+    const ataReserve = contributorCount * (ATA_COST_PER_CONTRIBUTOR + TX_FEE_PER_CONTRIBUTOR);
+    const initialBuyLamports = totalLamports - ataReserve - PRIORITY_FEE_LAMPORTS;
 
     if (initialBuyLamports < 10_000_000n) {
-      await setFailed(supabase, launch.id, "Insufficient SOL for Pump.fun launch");
-      return errorResponse("Insufficient SOL");
+      await setFailed(
+        supabase,
+        launch.id,
+        `Insufficient SOL after ATA reserve. Total: ${totalLamports}, Reserve: ${ataReserve}, Net: ${initialBuyLamports}`
+      );
+      return errorResponse("Not enough SOL to cover token distribution costs and initial buy");
     }
 
     // Call PumpPortal local API to create token transaction

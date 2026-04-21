@@ -45,6 +45,15 @@ Deno.serve(async (req) => {
       return errorResponse("Contribution window has closed (launch datetime has passed)", 400);
     }
 
+    // Close contributions 5 minutes before launch
+    const launchTime = new Date(launch.launch_datetime).getTime();
+    if (launchTime - Date.now() < 5 * 60 * 1000) {
+      return errorResponse(
+        "Contribution window is closed. This launch executes in less than 5 minutes.",
+        400
+      );
+    }
+
     // 3. Validate amount within bounds
     const amount = Number(amount_lamports);
     if (amount < Number(launch.min_contribution_lamports)) {

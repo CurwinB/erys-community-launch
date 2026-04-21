@@ -68,6 +68,22 @@ Deno.serve(async (req) => {
       .getPublicUrl(metadataFileName);
     const ipfsMetadataUrl = urlData.publicUrl;
 
+    // Verify metadata URL is publicly accessible (PumpPortal must fetch it at launch time)
+    try {
+      const verifyRes = await fetch(ipfsMetadataUrl, { method: "HEAD" });
+      if (!verifyRes.ok) {
+        return errorResponse(
+          `Metadata URL is not publicly accessible: ${ipfsMetadataUrl}`,
+          500
+        );
+      }
+    } catch (err: any) {
+      return errorResponse(
+        `Failed to verify metadata URL accessibility: ${err.message}`,
+        500
+      );
+    }
+
     // Step 2: Generate two Ed25519 keypairs (escrow + mint)
     const escrow = await generateSolanaKeypair();
     const mint = await generateSolanaKeypair();
