@@ -75,11 +75,25 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     const tx = VersionedTransaction.deserialize(claimTxBytes);
     tx.sign([escrowKeypair]);
 
+    const claimBlockhash = tx.message.recentBlockhash;
+    const currentBlockHeight = await connection.getBlockHeight("confirmed");
+    // PumpPortal blockhashes have ~150 block validity (~60s). Use a conservative
+    // 150-block window from current height as the expiry cutoff so confirmation
+    // can't hang indefinitely if the blockhash was already partially aged.
+    const claimLastValidBlockHeight = currentBlockHeight + 150;
+
     const serialized = tx.serialize();
     const signature = await connection.sendRawTransaction(serialized, {
       preflightCommitment: "confirmed",
     });
-    await connection.confirmTransaction(signature, "confirmed");
+    await connection.confirmTransaction(
+      {
+        signature,
+        blockhash: claimBlockhash,
+        lastValidBlockHeight: claimLastValidBlockHeight,
+      },
+      "confirmed"
+    );
 
     console.log(`Creator fee claim confirmed: ${signature}`);
     console.log(`Solscan: https://solscan.io/tx/${signature}`);
