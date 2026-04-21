@@ -610,7 +610,7 @@ async function executePumpfunLaunch(
     tx.sign([mintKeypair, escrowKeypair]);
 
     const signedBytes = tx.serialize();
-    const txBase64 = btoa(String.fromCharCode(...signedBytes));
+    const txBase64 = uint8ArrayToBase64(signedBytes);
 
     // Submit via Alchemy RPC
     const rpcRes = await fetch(SOLANA_RPC_URL, {
