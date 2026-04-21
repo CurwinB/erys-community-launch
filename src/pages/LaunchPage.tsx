@@ -52,6 +52,12 @@ const LaunchPage = () => {
     enabled: !!id,
   });
 
+  useEffect(() => {
+    if (!launch?.launch_datetime) return;
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [launch?.launch_datetime]);
+
   const totalEscrow = contributions?.reduce((sum, c) => sum + Number(c.amount_lamports), 0) || 0;
   const contributorCount = contributions?.length || 0;
 
