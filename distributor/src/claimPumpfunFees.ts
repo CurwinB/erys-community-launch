@@ -5,11 +5,11 @@ import { Launch, getPumpfunLaunchesForFeeClaim, updatePumpfunFeesClaimed } from 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
 const ERYS_PLATFORM_WALLET = process.env.BAGS_PARTNER_WALLET!;
 
-// Minimum unclaimed fees before claiming (0.01 SOL in lamports)
-const MIN_CLAIM_THRESHOLD = 10_000_000;
-
 // Erys takes 50% of Pump.fun creator fees
 const PLATFORM_SHARE = 0.5;
+
+// Reserve for the two outgoing SystemProgram.transfer txs (~5000 lamports each)
+const TX_FEE_RESERVE = 10_000;
 
 export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
   console.log(`\nChecking Pump.fun fees for launch ${launch.id} (${launch.token_name})`);
