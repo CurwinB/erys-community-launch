@@ -548,7 +548,7 @@ async function executePumpfunLaunch(
       );
       await supabase
         .from("contributions")
-        .update({ token_amount: proportionalBps })
+        .update({ basis_points: proportionalBps })
         .eq("id", c.id);
     }
 

@@ -38,13 +38,11 @@ export interface Contribution {
 }
 
 export async function getPendingDistributions(): Promise<Launch[]> {
-  const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
   const { data, error } = await supabase
     .from("launches")
     .select("*")
     .eq("status", "launched")
     .eq("distribution_completed", false)
-    .gte("created_at", cutoff)
     .order("created_at", { ascending: true })
     .limit(5);
 
