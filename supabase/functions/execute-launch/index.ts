@@ -539,7 +539,7 @@ async function executePumpfunLaunch(
     const mintKeypair = Keypair.fromSecretKey(mintSecret);
 
     const tx = VersionedTransaction.deserialize(txBytes);
-    tx.sign([escrowKeypair, mintKeypair]);
+    tx.sign([mintKeypair, escrowKeypair]);
 
     const signedBytes = tx.serialize();
     const txBase64 = btoa(String.fromCharCode(...signedBytes));
