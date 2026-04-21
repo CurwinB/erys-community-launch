@@ -1,68 +1,86 @@
 
 
-# Fix Pump.fun Execution: Confirmation, Imports, Encoding, Symbol Casing
+# Fix Pump.fun Fee Claim Bugs (F1, F3, F4, F7, D1)
 
-Four targeted fixes inside `executePumpfunLaunch` in `supabase/functions/execute-launch/index.ts`. No other files touched.
+Five fixes across the Railway distributor and a new Postgres function. No edge functions, no frontend, no new secrets.
 
-## Fix 1 — Confirm on-chain before marking `launched` (Medium)
+## Fix 1 — Remove escrow-balance threshold gate (F1, High)
 
-Currently the function sets `status = "launched"` immediately after Alchemy returns a signature. If the tx fails on-chain (slippage, compute, etc.), the DB lies and Railway tries to distribute non-existent tokens.
+In `distributor/src/claimPumpfunFees.ts`:
+- Delete `MIN_CLAIM_THRESHOLD` constant.
+- Delete the pre-claim threshold check block that early-returns when escrow SOL < 0.01 (and its `updatePumpfunFeesClaimed(launch.id, 0)` skip-stamp).
+- Keep one pre-claim balance read (`escrowBalanceBefore`) used solely for delta math.
+- Always proceed to PumpPortal `collectCreatorFee`. After confirmation, compute `claimedLamports = newBalance - escrowBalanceBefore`. If `<= 0`, log "no fees claimed" and return without stamping (covered by Fix 3).
 
-After receiving `txSignature` from `rpcData.result`, poll `getSignatureStatuses` against `SOLANA_RPC_URL` every 2s for up to 30 attempts (60s total):
+## Fix 2 — Reserve transfer fees before 50/50 split (F3, High)
 
-- If `status.err` is present → call `setFailed(...)` with the on-chain error and return `errorResponse(...)`.
-- If `status.confirmationStatus` is `"confirmed"` or `"finalized"` → break out and update launch to `launched`.
-- If 60s elapses without confirmation → `setFailed(...)` with timeout message and return.
-
-Only after confirmation do we run the existing `update({ status: "launched" })`.
-
-Also log the signature and a Solscan link before polling for easier debugging.
-
-## Fix 2 — Remove redundant dynamic import (Low)
-
-Inside `executePumpfunLaunch` there's:
+After `claimedLamports` is computed and confirmed positive:
 ```ts
-const { Keypair, VersionedTransaction } = await import("https://esm.sh/@solana/web3.js@1.91.1");
+const TX_FEE_RESERVE = 10_000; // ~5000 lamports × 2 transfers
+const distributableLamports = claimedLamports - TX_FEE_RESERVE;
+if (distributableLamports <= 0) {
+  console.log(`Claimed amount too small to distribute after tx fees for launch ${launch.id}`);
+  await updatePumpfunFeesClaimed(launch.id, claimedLamports);
+  return;
+}
+const platformShareLamports = Math.floor(distributableLamports * PLATFORM_SHARE);
+const creatorShareLamports  = distributableLamports - platformShareLamports;
 ```
-`Keypair` and `VersionedTransaction` are already statically imported at the top of the file. Delete that line; the existing top-level imports are used directly.
+Existing `SystemProgram.transfer` blocks for platform and creator stay the same — they just consume `platformShareLamports` / `creatorShareLamports`.
 
-## Fix 3 — Safer base64 encoding (Low)
+## Fix 3 — Don't stamp timestamp on no-op claims (F7, Medium)
 
-Replace:
+Remove every `updatePumpfunFeesClaimed(launch.id, 0)` call on early-return paths (skip and zero-delta). Only call `updatePumpfunFeesClaimed` once a real, non-zero claim has been settled (after the transfers). This lets the next 6-hour cycle retry instead of being locked out for 24h.
+
+## Fix 4 — Raise claim priority fee (F4, Medium)
+
+In the PumpPortal request body:
 ```ts
-const txBase64 = btoa(String.fromCharCode(...signedBytes));
+priorityFee: 0.00005   // was 0.000001
 ```
-with a chunked helper added next to the other utility functions (near `hexToUint8Array` / `signWithKeypair`):
+Matches the launch-execution priority fee.
+
+## Fix 5 — Atomic increment via Postgres RPC (D1, Medium)
+
+**Migration** — create the function:
+```sql
+CREATE OR REPLACE FUNCTION public.increment_pumpfun_fees_claimed(launch_id uuid, amount bigint)
+RETURNS void
+LANGUAGE sql
+AS $$
+  UPDATE public.launches
+  SET pumpfun_fees_last_claimed_at = now(),
+      pumpfun_fees_claimed_total   = COALESCE(pumpfun_fees_claimed_total, 0) + amount
+  WHERE id = launch_id;
+$$;
+```
+
+**`distributor/src/db.ts`** — replace `updatePumpfunFeesClaimed`:
 ```ts
-function uint8ArrayToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunkSize = 1024;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize);
-    binary += String.fromCharCode(...chunk);
+export async function updatePumpfunFeesClaimed(
+  launchId: string,
+  amountLamports: number
+): Promise<void> {
+  const { error } = await supabase.rpc("increment_pumpfun_fees_claimed", {
+    launch_id: launchId,
+    amount: amountLamports,
+  });
+  if (error) {
+    console.error(`Error updating Pump.fun fee claim for launch ${launchId}:`, error.message);
   }
-  return btoa(binary);
 }
 ```
-Call site becomes `const txBase64 = uint8ArrayToBase64(signedBytes);`. Avoids stack-size blow-ups from spreading large transaction byte arrays.
-
-## Fix 4 — Defensive `toUpperCase` on symbol (Low)
-
-In the PumpPortal `trade-local` request body, change:
-```ts
-symbol: launch.token_symbol,
-```
-to:
-```ts
-symbol: launch.token_symbol.toUpperCase(),
-```
+Single atomic UPDATE — no read-then-write race.
 
 ## Out of scope
 
-- Bags launch path, claim flows, distributor, frontend, DB schema — no changes.
-- No new secrets. `SOLANA_RPC_URL` is already configured.
+- P5 already verified: Railway recalculates from on-chain balance, stored `token_amount` BP is unused noise.
+- P1, P2, P4, P6, F5, F6, I1, I2 (low/cosmetic) — not addressed in this pass.
+- No changes to edge functions, frontend, schema columns, or env vars.
 
 ## Files
 
-- Edit: `supabase/functions/execute-launch/index.ts`
+- Edit: `distributor/src/claimPumpfunFees.ts`
+- Edit: `distributor/src/db.ts`
+- New migration: create `public.increment_pumpfun_fees_claimed(uuid, bigint)`
 
