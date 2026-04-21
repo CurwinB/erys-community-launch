@@ -1,125 +1,120 @@
 
 
-# Four Distributor Fixes: Precision, Concurrency, Stale Recovery, Confirmation API
+# Admin Dashboard at /admin — Password-Gated Accounting View
 
-All changes confined to the Railway distributor (`distributor/src/`). No edge functions, no frontend, no env vars. **One deviation from the prompt is required** (Fix 3) because the `launches` table has no `updated_at` column.
+A read-only QuickBooks-style admin view over the existing database. No edge functions, no schema changes, no on-chain reads. Single-password gate via env var.
 
-## Fix 1 — Pass `bigint` to `createTransferInstruction`
+## Files
 
-**File:** `distributor/src/distribute.ts` (`sendTokensToContributor`)
+**New**
+- `src/pages/AdminPage.tsx` — gate + dashboard shell + 4 tabs
+- `src/components/admin/AdminGate.tsx` — password form
+- `src/components/admin/AdminNavbar.tsx` — top bar with logo, red "Admin" badge, logout
+- `src/components/admin/MetricCards.tsx` — 4 summary cards
+- `src/components/admin/LaunchesTab.tsx` — launches ledger + expandable rows
+- `src/components/admin/ContributorsTab.tsx` — contributor activity + filters
+- `src/components/admin/PlatformRevenueTab.tsx` — Bags + Pump.fun revenue
+- `src/components/admin/RefundsTab.tsx` — refunded contributions
+- `src/utils/exportCsv.ts` — CSV download helper
+- `src/lib/adminFormat.ts` — shared SOL/lamport/percent/wallet-truncation formatters
 
-Drop the `Number(tokenAmount)` cast and pass `tokenAmount` directly. `@solana/spl-token`'s `createTransferInstruction` accepts `bigint`, so the cast was a precision-loss hazard for token amounts above `Number.MAX_SAFE_INTEGER` (~9.007e15). With 6-decimal tokens this is ~9 billion whole tokens, which is below typical 1B-supply launches but unsafe for higher-supply tokens.
+**Edited**
+- `src/App.tsx` — add `<Route path="/admin" element={<AdminPage />} />`
+- `.env` — add `VITE_ADMIN_PASSWORD=` placeholder (user sets the value)
 
-## Fix 2 — Concurrency guard on `claimAllPumpfunFees`
+## Step 1 — Password gate
 
-**File:** `distributor/src/index.ts`
+`AdminPage` checks `sessionStorage.getItem("admin_authenticated") === "true"`. If absent, render `AdminGate`. Gate shows centered card on `#0A0A0A` with logo, single password input, and submit button. On submit, compare against `import.meta.env.VITE_ADMIN_PASSWORD`. If match → set sessionStorage, re-render dashboard. If mismatch → red error text below input, clear input. No auth library, no token, no router redirect — pure conditional render. Logout button in `AdminNavbar` clears sessionStorage and `navigate("/")`.
 
-Add a module-level `claimRunning` boolean and a `runClaimIfIdle()` wrapper. Replace both call sites (startup `await` and `setInterval`) with the wrapper. Prevents overlapping 6-hour cycles if a previous cycle hangs (e.g. RPC stalls during many sequential transfers).
+**Caveat (must mention):** `VITE_*` env vars are bundled into the client JS. Anyone who downloads the JS can extract the password. This matches the prompt's "internal use only" framing but is not real security. We'll add a one-line warning comment in `AdminGate.tsx` to make this explicit for future maintainers.
 
-```ts
-let claimRunning = false;
+## Step 2 — Layout
 
-async function runClaimIfIdle(): Promise<void> {
-  if (claimRunning) {
-    console.log("Fee claim cycle already running, skipping this interval");
-    return;
-  }
-  claimRunning = true;
-  try {
-    await claimAllPumpfunFees();
-  } finally {
-    claimRunning = false;
-  }
-}
+```text
+┌─────────────────────────────────────────────────┐
+│ Erys logo  [Admin]                    [Logout]  │
+├─────────────────────────────────────────────────┤
+│ [Revenue] [Launches] [Active] [Contributors]    │ ← 4 metric cards
+├─────────────────────────────────────────────────┤
+│ Launches | Contributors | Revenue | Refunds     │ ← tabs
+├─────────────────────────────────────────────────┤
+│              {active tab content}               │
+└─────────────────────────────────────────────────┘
 ```
 
-Same pattern as the existing `processing` Set guard for distributions.
+Top metrics computed once via a single `useQuery` that fetches `launches` + `contributions` + `platform_fee_claims` aggregates. Reused across tabs via React Query cache.
 
-## Fix 3 — Recover stale `executing` launches (DEVIATION FROM PROMPT)
+## Step 3 — Launches tab
 
-**Files:** `distributor/src/db.ts`, `distributor/src/index.ts`
+One query: `launches` ordered by `launch_datetime desc` + grouped contributions aggregate per launch. Columns exactly as specified.
 
-**Deviation:** The prompt's `.lt("updated_at", staleCutoff)` will fail because **the `launches` table has no `updated_at` column** (verified against `supabase/migrations/` and `src/integrations/supabase/types.ts`). The available timestamp columns are `created_at`, `launch_datetime`, `distribution_completed_at`, and `pumpfun_fees_last_claimed_at`.
+Key calculations (all DB-derived, no on-chain):
+- **SOL In** = `sum(contributions.amount_lamports) / 1e9`
+- **ATA Reserve** = `contributorCount × (2_039_280 + 5_000) / 1e9`
+- **Gas Reserve** = `50_000 / 1e9` (matches execute-launch constant)
+- **Initial Buy** = `SOL In - ATA Reserve - Gas Reserve` (we don't persist `initialBuyLamports`; this is the only computable proxy)
+- **SOL Distributed** = `sum(contributions.token_amount where tokens_distributed=true)` reframed: actually for SOL flow, "distributed" means tokens went out → show `sum(amount_lamports where tokens_distributed=true) / 1e9` as the SOL-equivalent that was honored
+- **Platform Fee**:
+  - Bags: 25% × sum of `platform_fee_claims` rows associated with this launch. **Problem:** `platform_fee_claims` has no `launch_id` column (verified in schema). For Bags we cannot attribute platform fees to a specific launch from the DB alone. Plan: show a single "—" with a tooltip "Platform fees pooled (not per-launch)" for Bags rows, and surface the pooled total only in the Platform Revenue tab.
+  - Pump.fun: `pumpfun_fees_claimed_total × 0.5 / 1e9` ✓ (per-launch, works)
+- **Creator Fee**: same split logic; Bags shows "—", Pump.fun shows `pumpfun_fees_claimed_total × 0.5 / 1e9`
+- **Distribution Complete** = green badge if `distribution_completed`, else amber "Pending"
 
-**Replacement signal:** Use `launch_datetime` — the scheduled launch time. A launch in `executing` status whose scheduled time is more than 10 minutes in the past is definitively stuck. This is actually a better signal than a generic `updated_at` because it's tied to the launch lifecycle rather than any DB update.
+Each row has a chevron → expands a sub-table of that launch's contributions (wallet, SOL in, basis points, token_amount, tokens_distributed, distribution_tx_signature). CSV export above table downloads parent rows only (not expanded sub-rows).
 
-```ts
-// distributor/src/db.ts
-export async function resetStaleExecutingLaunches(): Promise<void> {
-  const staleCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-  const { error } = await supabase
-    .from("launches")
-    .update({
-      status: "execution_failed",
-      execution_error: "Reset from stale executing state by distributor",
-    })
-    .eq("status", "executing")
-    .lt("launch_datetime", staleCutoff);
+## Step 4 — Contributors tab
 
-  if (error) {
-    console.error("Error resetting stale executing launches:", error.message);
-  }
-}
-```
+Single query: `contributions` join `launches` (token_name, token_symbol, platform). Columns as spec'd.
 
-In `index.ts`, import and call at the top of `pollAndDistribute()` so it runs every 30 seconds. Stuck launches flip to `execution_failed`, which the existing pg_cron retry job picks up and re-executes.
+- **Share %** = `basis_points / 100` formatted `12.34%`
+- **Tokens Received** = `token_amount` if `tokens_distributed`, else "—"
+- **Fee Claimed** = column shown for all rows but value only for Bags; uses `is_fee_claimer`. Pump.fun rows show "N/A" (Pump.fun fees auto-distributed by Railway, no per-contributor claim flag).
 
-**Note:** No log on success path to avoid log spam every 30s. Errors still log.
+Filter bar:
+- Platform select (All / Bags / Pump.fun)
+- Status select (All / Distributed / Pending) — driven by `tokens_distributed`
+- Wallet search (case-insensitive substring match, client-side filter on loaded set)
 
-## Fix 4 — Replace deprecated `confirmTransaction(signature, commitment)` with strategy form
+CSV export honors active filters.
 
-**Files:** `distributor/src/distribute.ts`, `distributor/src/claimPumpfunFees.ts`
+## Step 5 — Platform Revenue tab
 
-The single-string form is deprecated and lacks blockhash expiry tracking — confirmations can hang indefinitely if the blockhash expires. The strategy object form `{ signature, blockhash, lastValidBlockHeight }` properly bounds the wait.
+Two side-by-side cards (stack `<lg`).
 
-### `distribute.ts` — `sendTokensToContributor`
+**Bags Revenue** (left):
+- Section total at top: `sum(platform_fee_claims.amount_lamports) / 1e9`
+- Table: claimed_at, amount (SOL, 4dp), tx_signature → link `https://solscan.io/tx/{sig}`
 
-Destructure `lastValidBlockHeight` alongside `blockhash` from `getLatestBlockhash("confirmed")`, and pass the strategy object to `confirmTransaction`:
+**Pump.fun Revenue** (right):
+- Section total at top: `sum(launches.pumpfun_fees_claimed_total × 0.5) / 1e9` for `platform=pumpfun AND pumpfun_fees_claimed_total > 0`
+- Table: token_symbol, launch_datetime, total fees (SOL), Erys share (×0.5), creator share (×0.5), pumpfun_fees_last_claimed_at
 
-```ts
-const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-tx.recentBlockhash = blockhash;
-// ... sign, send ...
-await connection.confirmTransaction(
-  { signature, blockhash, lastValidBlockHeight },
-  "confirmed"
-);
-```
+Combined total banner above both: `Bags total + Pump.fun Erys total`.
 
-### `claimPumpfunFees.ts` — three call sites
+CSV export: combined download with extra `platform` column distinguishing rows.
 
-**Platform transfer + creator transfer** (lines ~133, ~157): straightforward — destructure `lastValidBlockHeight` from the existing `getLatestBlockhash()` call already used to set `recentBlockhash`. Pass strategy object to `confirmTransaction`.
+## Step 6 — Refunds tab
 
-**Claim tx** (line ~82): special case. The `VersionedTransaction` is returned **pre-built by PumpPortal** with its blockhash already baked into the message — we don't fetch a blockhash before signing. To use the strategy form we extract the blockhash from the deserialized message and fetch the current block height as a conservative `lastValidBlockHeight`:
+Query: `contributions where refund_tx_signature is not null` joined to `launches`. Columns as spec'd. **Reason column:** schema has no `refund_reason` field — we'll derive: if parent launch `status = 'cancelled'` → "Launch cancelled", else "Other". Acceptable since refunds only occur on cancellation in current flow.
 
-```ts
-const tx = VersionedTransaction.deserialize(claimTxBytes);
-tx.sign([escrowKeypair]);
+Total SOL refunded at top. CSV export.
 
-const claimBlockhash = tx.message.recentBlockhash;
-const currentBlockHeight = await connection.getBlockHeight("confirmed");
-// PumpPortal blockhashes have ~150 block validity (~60s). Use a conservative
-// 150-block window from the current height as the expiry cutoff.
-const claimLastValidBlockHeight = currentBlockHeight + 150;
+## Step 7 — CSV utility
 
-const serialized = tx.serialize();
-const signature = await connection.sendRawTransaction(serialized, {
-  preflightCommitment: "confirmed",
-});
-await connection.confirmTransaction(
-  { signature, blockhash: claimBlockhash, lastValidBlockHeight: claimLastValidBlockHeight },
-  "confirmed"
-);
-```
+Exact `exportToCsv` implementation from the prompt placed in `src/utils/exportCsv.ts`. Each tab calls it with its current visible rows.
 
-This bounds the wait at ~60 seconds rather than potentially hanging forever on the deprecated form. If PumpPortal's blockhash was already older than fresh, the confirmation simply expires faster — which is the correct failure mode (we'll retry next 6h cycle).
+## Step 8 — Styling
 
-## Summary of files
+All components use existing Tailwind tokens already in `src/index.css` / `tailwind.config.ts`. Sharp corners (`rounded-none`), `bg-[#0A0A0A]`, cards `bg-[#111111]` borders `border-[#1A1A1A]`, accent `text-[#00D4FF]`, success `text-[#00FF88]`, error `text-[#FF4444]`. Platform badges: Bags cyan, Pump.fun green. JetBrains Mono for all numeric cells. SOL formatted to 4dp with `Intl.NumberFormat`. Wallet/tx truncation: `abc…xyz` (first 4, last 4).
 
-- `distributor/src/distribute.ts` — Fix 1 + Fix 4 (one call site)
-- `distributor/src/claimPumpfunFees.ts` — Fix 4 (three call sites)
-- `distributor/src/index.ts` — Fix 2 + Fix 3 wiring
-- `distributor/src/db.ts` — Fix 3 (new function, uses `launch_datetime` not `updated_at`)
+## Step 9 — Routing
 
-No schema migration. No new env vars. No edge function changes.
+In `src/App.tsx` add the import and route inside `<Routes>`. No nav link — `/admin` is intentionally undiscoverable via UI.
+
+## Out of scope
+
+- No new tables, no migrations, no edge functions, no Railway changes.
+- No on-chain RPC calls — all numbers come from existing DB columns.
+- Per-launch attribution of Bags platform fees (schema doesn't support it) — shown as pooled total in Revenue tab only.
+- Real auth — single shared password by design per the prompt.
 
