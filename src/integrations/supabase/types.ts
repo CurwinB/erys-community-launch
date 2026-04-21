@@ -90,6 +90,11 @@ export type Database = {
           launch_datetime: string
           max_contribution_lamports: number | null
           min_contribution_lamports: number
+          platform: string
+          pumpfun_creator_fees_distributed: number | null
+          pumpfun_fees_claimed_total: number | null
+          pumpfun_fees_last_claimed_at: string | null
+          pumpfun_mint_keypair_encrypted: string | null
           status: Database["public"]["Enums"]["launch_status"]
           telegram_url: string | null
           token_mint_address: string | null
@@ -118,6 +123,11 @@ export type Database = {
           launch_datetime: string
           max_contribution_lamports?: number | null
           min_contribution_lamports: number
+          platform?: string
+          pumpfun_creator_fees_distributed?: number | null
+          pumpfun_fees_claimed_total?: number | null
+          pumpfun_fees_last_claimed_at?: string | null
+          pumpfun_mint_keypair_encrypted?: string | null
           status?: Database["public"]["Enums"]["launch_status"]
           telegram_url?: string | null
           token_mint_address?: string | null
@@ -146,6 +156,11 @@ export type Database = {
           launch_datetime?: string
           max_contribution_lamports?: number | null
           min_contribution_lamports?: number
+          platform?: string
+          pumpfun_creator_fees_distributed?: number | null
+          pumpfun_fees_claimed_total?: number | null
+          pumpfun_fees_last_claimed_at?: string | null
+          pumpfun_mint_keypair_encrypted?: string | null
           status?: Database["public"]["Enums"]["launch_status"]
           telegram_url?: string | null
           token_mint_address?: string | null
