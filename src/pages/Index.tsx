@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import LaunchCard from "@/components/LaunchCard";
 import { supabase } from "@/integrations/supabase/client";
-import { Coins, Clock, Shield, ExternalLink, Rocket } from "lucide-react";
+import { Coins, Clock, Shield, ArrowDown } from "lucide-react";
 
 const Index = () => {
   const { data: liveLaunches, isLoading: liveLaunchesLoading } = useQuery({
