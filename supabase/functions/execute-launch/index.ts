@@ -601,8 +601,6 @@ async function executePumpfunLaunch(
     const txBytes = new Uint8Array(txData);
 
     // Sign with both escrow + mint keypairs using @solana/web3.js
-    const { Keypair, VersionedTransaction } = await import("https://esm.sh/@solana/web3.js@1.91.1");
-
     const escrowKeypair = Keypair.fromSecretKey(escrowSecret);
     const mintKeypair = Keypair.fromSecretKey(mintSecret);
 
