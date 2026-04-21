@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import CountdownTimer from "@/components/CountdownTimer";
 import { formatSol, solToLamports } from "@/lib/constants";
 import { Wallet, Loader2, ExternalLink } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useWallet } from "@/hooks/useWallet";
 import { useToast } from "@/hooks/use-toast";
 import LaunchHeader from "@/components/launch/LaunchHeader";
@@ -18,6 +18,7 @@ const LaunchPage = () => {
   const { id } = useParams<{ id: string }>();
   const [solAmount, setSolAmount] = useState("");
   const [isContributing, setIsContributing] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const { connected, publicKey, wallet } = useWallet();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -50,6 +51,12 @@ const LaunchPage = () => {
     },
     enabled: !!id,
   });
+
+  useEffect(() => {
+    if (!launch?.launch_datetime) return;
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, [launch?.launch_datetime]);
 
   const totalEscrow = contributions?.reduce((sum, c) => sum + Number(c.amount_lamports), 0) || 0;
   const contributorCount = contributions?.length || 0;
@@ -134,10 +141,10 @@ const LaunchPage = () => {
   const maxContrib = launch.max_contribution_lamports ? Number(launch.max_contribution_lamports) : null;
   const progressPercent = maxContrib ? Math.min((totalEscrow / maxContrib) * 100, 100) : 0;
   const isScheduled = launch.status === "scheduled";
-  const isPastLaunchTime = new Date(launch.launch_datetime) <= new Date();
   const launchMs = new Date(launch.launch_datetime).getTime();
-  const windowClosed = Date.now() >= launchMs - 5 * 60 * 1000;
-  const closingSoon = !windowClosed && Date.now() >= launchMs - 10 * 60 * 1000;
+  const isPastLaunchTime = now >= launchMs;
+  const windowClosed = now >= launchMs - 5 * 60 * 1000;
+  const closingSoon = !windowClosed && now >= launchMs - 10 * 60 * 1000;
   const canContribute = isScheduled && !isPastLaunchTime && !windowClosed;
   const isPumpfun = launch.platform === "pumpfun";
   const tradeUrl = isPumpfun
