@@ -185,9 +185,29 @@ export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
 
   console.log(`Distributing to ${contributions.length} contributors`);
 
+  // Reconstruct the original distributable total to keep proportional shares
+  // stable across retry cycles. Using only the current escrow balance would
+  // inflate remaining contributors' shares after a partial-failure retry.
+  const { data: alreadyDistributed } = await supabase
+    .from("contributions")
+    .select("token_amount")
+    .eq("launch_id", launch.id)
+    .eq("tokens_distributed", true);
+
+  const previouslyDistributed = (alreadyDistributed || []).reduce(
+    (sum: bigint, c: any) => sum + BigInt(c.token_amount || "0"),
+    0n
+  );
+
+  const originalTotalBalance = tokenBalance + previouslyDistributed;
+
+  console.log(`Token balance in escrow: ${tokenBalance}`);
+  console.log(`Previously distributed: ${previouslyDistributed}`);
+  console.log(`Original total for share calc: ${originalTotalBalance}`);
+
   const shares = calculateSharesFromBalance(
     contributions,
-    tokenBalance,
+    originalTotalBalance,
     launch.created_by_wallet
   );
 

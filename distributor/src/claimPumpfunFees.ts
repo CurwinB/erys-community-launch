@@ -106,9 +106,9 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
   const distributableLamports = claimedLamports - TX_FEE_RESERVE;
   if (distributableLamports <= 0) {
     console.log(
-      `Claimed amount too small to distribute after tx fees for launch ${launch.id}`
+      `Claimed amount too small to distribute after tx fees for launch ${launch.id}. Fees will accumulate and be claimed next cycle.`
     );
-    await updatePumpfunFeesClaimed(launch.id, claimedLamports);
+    // Do NOT stamp timestamp — allow fees to accumulate and retry next cycle
     return;
   }
 
