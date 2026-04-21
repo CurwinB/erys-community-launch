@@ -166,6 +166,12 @@ const DashboardPage = () => {
 
   return (
     <main className="min-h-screen">
+      <Seo
+        title="Dashboard — Erys"
+        description="View your contributions, claim trading fees, and manage your scheduled launches."
+        path="/dashboard"
+        noindex
+      />
       <div className="container mx-auto px-4 py-12">
         <h1 className="text-2xl font-bold text-foreground md:text-3xl">My Erys Dashboard.</h1>
 
