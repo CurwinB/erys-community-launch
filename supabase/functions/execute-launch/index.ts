@@ -465,6 +465,18 @@ function hexToUint8Array(hex: string): Uint8Array {
   return bytes;
 }
 
+// Safely encode large Uint8Arrays as base64 without spreading the whole array
+// onto the JS call stack (which can blow up for big transactions).
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 1024;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
 // Sign a base58-encoded transaction (versioned or legacy) with the given keypair
 // and return the base58-encoded signed transaction.
 function signWithKeypair(txBase58: string, keypair: Keypair): string {
@@ -567,7 +579,7 @@ async function executePumpfunLaunch(
         action: "create",
         tokenMetadata: {
           name: launch.token_name,
-          symbol: launch.token_symbol,
+          symbol: launch.token_symbol.toUpperCase(),
           uri: launch.ipfs_metadata_url,
         },
         mint: launch.token_mint_address,
@@ -589,8 +601,6 @@ async function executePumpfunLaunch(
     const txBytes = new Uint8Array(txData);
 
     // Sign with both escrow + mint keypairs using @solana/web3.js
-    const { Keypair, VersionedTransaction } = await import("https://esm.sh/@solana/web3.js@1.91.1");
-
     const escrowKeypair = Keypair.fromSecretKey(escrowSecret);
     const mintKeypair = Keypair.fromSecretKey(mintSecret);
 
@@ -598,7 +608,7 @@ async function executePumpfunLaunch(
     tx.sign([mintKeypair, escrowKeypair]);
 
     const signedBytes = tx.serialize();
-    const txBase64 = btoa(String.fromCharCode(...signedBytes));
+    const txBase64 = uint8ArrayToBase64(signedBytes);
 
     // Submit via Alchemy RPC
     const rpcRes = await fetch(SOLANA_RPC_URL, {
@@ -619,6 +629,59 @@ async function executePumpfunLaunch(
     }
 
     const txSignature = rpcData.result;
+
+    console.log(`Pump.fun tx submitted: ${txSignature}`);
+    console.log(`Solscan: https://solscan.io/tx/${txSignature}`);
+
+    // Poll for on-chain confirmation before marking launched
+    let confirmed = false;
+    let attempts = 0;
+    const maxAttempts = 30; // 30 x 2s = 60s max
+
+    while (!confirmed && attempts < maxAttempts) {
+      await new Promise((r) => setTimeout(r, 2000));
+      attempts++;
+
+      const statusRes = await fetch(SOLANA_RPC_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getSignatureStatuses",
+          params: [[txSignature], { searchTransactionHistory: true }],
+        }),
+      });
+
+      const statusData = await statusRes.json();
+      const status = statusData.result?.value?.[0];
+
+      if (status?.err) {
+        await setFailed(
+          supabase,
+          launch.id,
+          `Transaction failed on-chain: ${JSON.stringify(status.err)}`
+        );
+        return errorResponse("Pump.fun transaction failed on-chain");
+      }
+
+      if (
+        status?.confirmationStatus === "confirmed" ||
+        status?.confirmationStatus === "finalized"
+      ) {
+        confirmed = true;
+        console.log(`Transaction confirmed after ${attempts} attempts`);
+      }
+    }
+
+    if (!confirmed) {
+      await setFailed(
+        supabase,
+        launch.id,
+        `Transaction not confirmed after 60 seconds: ${txSignature}`
+      );
+      return errorResponse("Transaction confirmation timeout");
+    }
 
     await supabase
       .from("launches")
