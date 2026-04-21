@@ -297,6 +297,9 @@ Deno.serve(async (req) => {
         await setFailed(supabase, launch.id, `fee-share tx ${i + 1}/${feeShareTransactions.length} failed: ${errText}`);
         return errorResponse(`fee-share transaction failed: ${errText}`);
       }
+      const sendData = await sendRes.json();
+      const feeShareSig = sendData.response ?? sendData.signature;
+      console.log(`fee-share tx ${i + 1}/${feeShareTransactions.length} confirmed: ${feeShareSig}`);
       await new Promise((r) => setTimeout(r, 500));
     }
 
@@ -374,7 +377,7 @@ Deno.serve(async (req) => {
       JSON.stringify({
         success: true,
         launchId: launch.id,
-        txSignature: sendTxData.signature || sendTxData.txSignature,
+        txSignature: sendTxData.response ?? sendTxData.signature ?? sendTxData.txSignature,
         configKey,
         claimerCount: claimersArray.length,
         excludedContributors: excludedCount,
