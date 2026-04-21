@@ -136,21 +136,10 @@ export async function updatePumpfunFeesClaimed(
   launchId: string,
   amountLamports: number
 ): Promise<void> {
-  const { data: current } = await supabase
-    .from("launches")
-    .select("pumpfun_fees_claimed_total")
-    .eq("id", launchId)
-    .single();
-
-  const currentTotal = current?.pumpfun_fees_claimed_total || 0;
-
-  const { error } = await supabase
-    .from("launches")
-    .update({
-      pumpfun_fees_last_claimed_at: new Date().toISOString(),
-      pumpfun_fees_claimed_total: currentTotal + amountLamports,
-    })
-    .eq("id", launchId);
+  const { error } = await supabase.rpc("increment_pumpfun_fees_claimed", {
+    launch_id: launchId,
+    amount: amountLamports,
+  });
 
   if (error) {
     console.error(`Error updating Pump.fun fee claim for launch ${launchId}:`, error.message);

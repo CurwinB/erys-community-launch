@@ -198,7 +198,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      increment_pumpfun_fees_claimed: {
+        Args: { amount: number; launch_id: string }
+        Returns: undefined
+      }
     }
     Enums: {
       launch_status:

@@ -5,11 +5,11 @@ import { Launch, getPumpfunLaunchesForFeeClaim, updatePumpfunFeesClaimed } from 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
 const ERYS_PLATFORM_WALLET = process.env.BAGS_PARTNER_WALLET!;
 
-// Minimum unclaimed fees before claiming (0.01 SOL in lamports)
-const MIN_CLAIM_THRESHOLD = 10_000_000;
-
 // Erys takes 50% of Pump.fun creator fees
 const PLATFORM_SHARE = 0.5;
+
+// Reserve for the two outgoing SystemProgram.transfer txs (~5000 lamports each)
+const TX_FEE_RESERVE = 10_000;
 
 export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
   console.log(`\nChecking Pump.fun fees for launch ${launch.id} (${launch.token_name})`);
@@ -26,24 +26,16 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     return;
   }
 
-  // Check current SOL balance of escrow wallet
-  // Creator fees from Pump.fun accumulate as SOL in the escrow wallet
-  let escrowBalance: number;
+  // Read pre-claim balance for delta math only. Do NOT gate on this — the
+  // escrow may hold dust SOL unrelated to unclaimed creator fees, and Pump.fun
+  // fees may exist even when escrow balance is low. Always attempt the claim
+  // and let the post-claim delta tell us whether anything was actually claimed.
+  let escrowBalanceBefore: number;
   try {
-    escrowBalance = await connection.getBalance(escrowKeypair.publicKey, "confirmed");
-    console.log(`Escrow wallet balance: ${escrowBalance / LAMPORTS_PER_SOL} SOL`);
+    escrowBalanceBefore = await connection.getBalance(escrowKeypair.publicKey, "confirmed");
+    console.log(`Escrow wallet balance (pre-claim): ${escrowBalanceBefore / LAMPORTS_PER_SOL} SOL`);
   } catch (err: any) {
     console.error(`Failed to get escrow balance for launch ${launch.id}:`, err.message);
-    return;
-  }
-
-  // Check if balance meets minimum threshold
-  if (escrowBalance < MIN_CLAIM_THRESHOLD) {
-    console.log(
-      `Escrow balance ${escrowBalance} lamports below threshold ${MIN_CLAIM_THRESHOLD}. Skipping.`
-    );
-    // Still update last claimed timestamp so we don't check every poll cycle
-    await updatePumpfunFeesClaimed(launch.id, 0);
     return;
   }
 
@@ -59,7 +51,7 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
       body: JSON.stringify({
         publicKey: escrowKeypair.publicKey.toBase58(),
         action: "collectCreatorFee",
-        priorityFee: 0.000001,
+        priorityFee: 0.00005,
         pool: "pump",
       }),
     });
@@ -94,11 +86,12 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
 
     // Get new balance after claim to calculate how much was claimed
     const newBalance = await connection.getBalance(escrowKeypair.publicKey, "confirmed");
-    claimedLamports = newBalance - escrowBalance;
+    claimedLamports = newBalance - escrowBalanceBefore;
 
     if (claimedLamports <= 0) {
+      // No real claim happened — do NOT stamp the timestamp, otherwise this
+      // launch is locked out of the next 24h of poll cycles for no reason.
       console.log(`No fees were actually claimed for launch ${launch.id}`);
-      await updatePumpfunFeesClaimed(launch.id, 0);
       return;
     }
 
@@ -108,9 +101,20 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     return;
   }
 
-  // Split fees: 50% to Erys platform, 50% to creator
-  const platformShareLamports = Math.floor(claimedLamports * PLATFORM_SHARE);
-  const creatorShareLamports = claimedLamports - platformShareLamports;
+  // Reserve ~5000 lamports per outgoing transfer so the second tx doesn't
+  // run out of funds after the first transfer's fee is deducted.
+  const distributableLamports = claimedLamports - TX_FEE_RESERVE;
+  if (distributableLamports <= 0) {
+    console.log(
+      `Claimed amount too small to distribute after tx fees for launch ${launch.id}`
+    );
+    await updatePumpfunFeesClaimed(launch.id, claimedLamports);
+    return;
+  }
+
+  // Split distributable amount: 50% to Erys platform, 50% to creator
+  const platformShareLamports = Math.floor(distributableLamports * PLATFORM_SHARE);
+  const creatorShareLamports = distributableLamports - platformShareLamports;
 
   console.log(`Platform share: ${platformShareLamports / LAMPORTS_PER_SOL} SOL`);
   console.log(`Creator share: ${creatorShareLamports / LAMPORTS_PER_SOL} SOL`);
