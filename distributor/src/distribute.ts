@@ -243,7 +243,17 @@ export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
   );
 
   const allAttempted = successCount + failCount === contributions.length;
-  if (allAttempted) {
+  if (allAttempted && failCount === 0) {
+    // All contributors successfully received tokens
     await markLaunchDistributionComplete(launch.id, Number(totalDistributed));
+  } else if (allAttempted && failCount > 0) {
+    // Some distributions failed — do NOT mark complete so Railway retries on next poll
+    console.error(
+      `Distribution incomplete for launch ${launch.id}. Success: ${successCount}, Failed: ${failCount}. Will retry on next poll.`
+    );
+  } else {
+    console.log(
+      `Distribution still in progress for launch ${launch.id}. Success: ${successCount}, Failed: ${failCount}`
+    );
   }
 }
