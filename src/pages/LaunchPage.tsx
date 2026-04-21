@@ -141,10 +141,10 @@ const LaunchPage = () => {
   const maxContrib = launch.max_contribution_lamports ? Number(launch.max_contribution_lamports) : null;
   const progressPercent = maxContrib ? Math.min((totalEscrow / maxContrib) * 100, 100) : 0;
   const isScheduled = launch.status === "scheduled";
-  const isPastLaunchTime = new Date(launch.launch_datetime) <= new Date();
   const launchMs = new Date(launch.launch_datetime).getTime();
-  const windowClosed = Date.now() >= launchMs - 5 * 60 * 1000;
-  const closingSoon = !windowClosed && Date.now() >= launchMs - 10 * 60 * 1000;
+  const isPastLaunchTime = now >= launchMs;
+  const windowClosed = now >= launchMs - 5 * 60 * 1000;
+  const closingSoon = !windowClosed && now >= launchMs - 10 * 60 * 1000;
   const canContribute = isScheduled && !isPastLaunchTime && !windowClosed;
   const isPumpfun = launch.platform === "pumpfun";
   const tradeUrl = isPumpfun
