@@ -13,6 +13,13 @@ import SchedulePage from "./pages/SchedulePage";
 import DashboardPage from "./pages/DashboardPage";
 import AdminPage from "./pages/AdminPage";
 import NotFound from "./pages/NotFound";
+import { useLocation } from "react-router-dom";
+
+const ConditionalNavbar = () => {
+  const location = useLocation();
+  if (location.pathname.startsWith("/admin")) return null;
+  return <Navbar />;
+};
 
 const queryClient = new QueryClient();
 
@@ -32,7 +39,7 @@ const App = () => (
         <Toaster />
         <Sonner />
         <BrowserRouter>
-          <Navbar />
+          <ConditionalNavbar />
           <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/launch/:id" element={<LaunchPage />} />
