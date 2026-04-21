@@ -20,6 +20,9 @@ export interface Launch {
   distribution_completed: boolean;
   created_by_wallet: string;
   created_at: string;
+  platform: string;
+  pumpfun_fees_last_claimed_at: string | null;
+  pumpfun_fees_claimed_total: number;
 }
 
 export interface Contribution {
