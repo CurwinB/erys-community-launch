@@ -16,18 +16,6 @@ const Navbar = () => {
           </span>
         </Link>
 
-        <span className="hidden text-xs text-muted-foreground md:block">
-          Powered by{" "}
-          <a
-            href="https://bags.fm"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-foreground hover:text-primary transition-colors"
-          >
-            Bags.fm
-          </a>
-        </span>
-
         <div className="flex items-center gap-3">
           <Link to="/schedule">
             <Button size="sm" className="hidden sm:inline-flex">
