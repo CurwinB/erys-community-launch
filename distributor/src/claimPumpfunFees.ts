@@ -146,14 +146,17 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
       })
     );
     platformTx.feePayer = escrowKeypair.publicKey;
-    const { blockhash } = await connection.getLatestBlockhash();
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
     platformTx.recentBlockhash = blockhash;
     platformTx.sign(escrowKeypair);
 
     const platformSig = await connection.sendRawTransaction(platformTx.serialize(), {
       preflightCommitment: "confirmed",
     });
-    await connection.confirmTransaction(platformSig, "confirmed");
+    await connection.confirmTransaction(
+      { signature: platformSig, blockhash, lastValidBlockHeight },
+      "confirmed"
+    );
     console.log(`Platform fee sent: https://solscan.io/tx/${platformSig}`);
     platformSent = true;
   } catch (err: any) {
