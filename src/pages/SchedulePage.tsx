@@ -60,6 +60,27 @@ const SchedulePage = () => {
     setIsSubmitting(true);
 
     try {
+      const launchDatetimeLocal = new Date(`${form.launchDate}T${form.launchTime}`);
+      const diffHours = (launchDatetimeLocal.getTime() - Date.now()) / 3_600_000;
+      if (diffHours < 1) {
+        toast({
+          title: "Launch time too soon",
+          description: "Launch must be scheduled at least 1 hour from now.",
+          variant: "destructive",
+        });
+        setIsSubmitting(false);
+        return;
+      }
+      if (diffHours > 72) {
+        toast({
+          title: "Launch time too far",
+          description: "Launch must be scheduled within 72 hours from now.",
+          variant: "destructive",
+        });
+        setIsSubmitting(false);
+        return;
+      }
+
       let imageUrl: string | null = null;
 
       if (imageFile) {
