@@ -465,6 +465,18 @@ function hexToUint8Array(hex: string): Uint8Array {
   return bytes;
 }
 
+// Safely encode large Uint8Arrays as base64 without spreading the whole array
+// onto the JS call stack (which can blow up for big transactions).
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 1024;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
 // Sign a base58-encoded transaction (versioned or legacy) with the given keypair
 // and return the base58-encoded signed transaction.
 function signWithKeypair(txBase58: string, keypair: Keypair): string {
