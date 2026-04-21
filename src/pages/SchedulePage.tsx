@@ -17,6 +17,7 @@ const SchedulePage = () => {
   const { toast } = useToast();
   const { connected, publicKey } = useWallet();
 
+  const [platform, setPlatform] = useState<"bags" | "pumpfun">("bags");
   const [form, setForm] = useState({
     tokenName: "",
     tokenSymbol: "",
@@ -74,7 +75,8 @@ const SchedulePage = () => {
 
       const launchDatetime = new Date(`${form.launchDate}T${form.launchTime}`).toISOString();
 
-      const { data, error } = await supabase.functions.invoke("create-launch", {
+      const fnName = platform === "pumpfun" ? "create-launch-pumpfun" : "create-launch";
+      const { data, error } = await supabase.functions.invoke(fnName, {
         body: {
           token_name: form.tokenName,
           token_symbol: form.tokenSymbol.toUpperCase(),
@@ -118,7 +120,9 @@ const SchedulePage = () => {
   };
 
   const tweetText = encodeURIComponent(
-    `I just scheduled a Bags token launch on Erys. Get in before it goes live and earn fees forever.\n\n${successData?.url || ""}\n\nBuilt on @BagsApp`
+    platform === "pumpfun"
+      ? `I just scheduled a Pump.fun token launch on Erys. Get in at the earliest entry price before it goes live.\n\n${successData?.url || ""}`
+      : `I just scheduled a Bags token launch on Erys. Get in before it goes live and earn fees forever.\n\n${successData?.url || ""}\n\nBuilt on @BagsApp`
   );
 
   if (successData) {
@@ -162,10 +166,42 @@ const SchedulePage = () => {
   return (
     <main className="min-h-screen">
       <div className="container mx-auto max-w-xl px-4 py-12">
-        <h1 className="text-2xl font-bold text-foreground md:text-3xl">Schedule a Bags Token Launch.</h1>
+        <h1 className="text-2xl font-bold text-foreground md:text-3xl">Schedule a Token Launch.</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Your token will be launched exclusively on Bags.fm with community fee sharing built in from day one.
+          Choose your launch platform and let your community contribute SOL before go-live.
         </p>
+
+        <div className="mt-6 space-y-3">
+          <div className="flex gap-2 rounded-sm border border-border bg-card p-1">
+            <button
+              type="button"
+              onClick={() => setPlatform("bags")}
+              className={`flex-1 rounded-sm py-2 text-sm font-medium transition-colors ${
+                platform === "bags"
+                  ? "bg-primary text-background"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Launch on Bags.fm
+            </button>
+            <button
+              type="button"
+              onClick={() => setPlatform("pumpfun")}
+              className={`flex-1 rounded-sm py-2 text-sm font-medium transition-colors ${
+                platform === "pumpfun"
+                  ? "bg-[#00FF88] text-background"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Launch on Pump.fun
+            </button>
+          </div>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {platform === "bags"
+              ? "Contributors earn permanent on-chain trading fee shares proportional to their contribution."
+              : "Contributors receive tokens at the earliest possible entry price. Higher liquidity and trading volume."}
+          </p>
+        </div>
 
         {!connected && (
           <div className="mt-6 border border-primary/30 bg-card p-6 text-center space-y-4">
@@ -260,7 +296,9 @@ const SchedulePage = () => {
 
           <div className="border-l-2 border-primary bg-muted p-4">
             <p className="text-xs leading-relaxed text-muted-foreground">
-              When you schedule a launch a unique escrow wallet is generated for this launch. All contributor SOL is held there until your token launches automatically at the scheduled time.
+              {platform === "pumpfun"
+                ? "A unique escrow wallet and token mint address are generated when you schedule. All contributor SOL is held in escrow until your token launches automatically on Pump.fun at the scheduled time."
+                : "A unique escrow wallet is generated for this launch. All contributor SOL is held there until your token launches automatically on Bags.fm at the scheduled time."}
             </p>
           </div>
 
