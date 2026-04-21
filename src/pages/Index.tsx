@@ -61,13 +61,13 @@ const Index = () => {
   const features = [
     {
       icon: Coins,
-      title: "Bags Tokens Only.",
-      body: "Every launch on Erys is a real Bags.fm token with perpetual fee sharing built in.",
+      title: "Two Platforms.",
+      body: "Choose Bags.fm for perpetual fee sharing or Pump.fun for early entry token positions.",
     },
     {
       icon: Clock,
       title: "Community First.",
-      body: "Contributors get in before the token goes live and earn fees from every trade forever.",
+      body: "Contributors get in before the token goes live and share in the upside from day one.",
     },
     {
       icon: Shield,
@@ -83,13 +83,13 @@ const Index = () => {
         <div className="container mx-auto px-4 py-20 md:py-32">
           <div className="mx-auto max-w-3xl text-center">
             <div className="mb-6 inline-flex items-center gap-2 rounded-sm border border-primary/30 bg-primary/5 px-3 py-1.5">
-              <span className="text-xs font-medium text-primary">Built exclusively on Bags.fm</span>
+              <span className="text-xs font-medium text-primary">Launch on Bags.fm or Pump.fun</span>
             </div>
             <h1 className="text-4xl font-bold tracking-tight text-foreground md:text-6xl">
-              The Community Launch Platform for Bags Tokens.
+              The Community Launch Platform for Solana Tokens.
             </h1>
             <p className="mt-6 text-lg text-muted-foreground md:text-xl">
-              Schedule your Bags token launch, build your community before go-live, and let every contributor earn trading fees forever. Powered by Bags.fm.
+              Schedule your token launch on Bags.fm or Pump.fun, build your community before go-live, and reward early contributors with permanent fee shares or early entry positions.
             </p>
             <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
               <Link to="/schedule">
@@ -152,6 +152,7 @@ const Index = () => {
                     contributorCount={stats?.count || 0}
                     minContributionLamports={Number(launch.min_contribution_lamports)}
                     status="scheduled"
+                    platform={(launch.platform as "bags" | "pumpfun") || "bags"}
                     animationDelay={i * 100}
                   />
                 );
@@ -194,6 +195,7 @@ const Index = () => {
                   contributorCount={0}
                   minContributionLamports={Number(launch.min_contribution_lamports)}
                   status="launched"
+                  platform={(launch.platform as "bags" | "pumpfun") || "bags"}
                   animationDelay={i * 100}
                 />
               ))}
@@ -210,12 +212,16 @@ const Index = () => {
       <footer className="border-t border-border py-8">
         <div className="container mx-auto flex flex-col items-center gap-2 px-4 text-center">
           <span className="text-sm text-muted-foreground">
-            erys<span className="text-primary">.</span> — Built exclusively on{" "}
+            erys<span className="text-primary">.</span> — Launch on{" "}
             <a href="https://bags.fm" target="_blank" rel="noopener noreferrer" className="text-foreground hover:text-primary transition-colors">
               Bags.fm
+            </a>{" "}
+            or{" "}
+            <a href="https://pump.fun" target="_blank" rel="noopener noreferrer" className="text-foreground hover:text-primary transition-colors">
+              Pump.fun
             </a>
           </span>
-          <span className="text-xs text-muted-foreground">Every token launched through Erys is a real Bags.fm token.</span>
+          <span className="text-xs text-muted-foreground">Every token launched through Erys is a real on-chain Solana token.</span>
         </div>
       </footer>
     </main>

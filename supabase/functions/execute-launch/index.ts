@@ -45,6 +45,11 @@ Deno.serve(async (req) => {
 
     const launch = launches[0];
 
+    // Platform routing — Pump.fun has its own execution flow
+    if (launch.platform === "pumpfun") {
+      return await executePumpfunLaunch(launch, supabase, ESCROW_ENCRYPTION_KEY);
+    }
+
     // Set status to executing
     await supabase
       .from("launches")
@@ -425,4 +430,157 @@ function hexToUint8Array(hex: string): Uint8Array {
     bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
   }
   return bytes;
+}
+
+// =========================================
+// Pump.fun Execution
+// =========================================
+
+async function executePumpfunLaunch(
+  launch: any,
+  supabase: any,
+  ESCROW_ENCRYPTION_KEY: string
+) {
+  const SOLANA_RPC_URL = Deno.env.get("SOLANA_RPC_URL")!;
+
+  try {
+    // Mark as executing
+    await supabase
+      .from("launches")
+      .update({ status: "executing", execution_attempts: launch.execution_attempts + 1 })
+      .eq("id", launch.id);
+
+    // Decrypt both keypairs (returns hex of 64-byte secret keys)
+    const escrowSecretHex = await decryptEscrowKey(
+      launch.escrow_wallet_encrypted_private_key,
+      ESCROW_ENCRYPTION_KEY
+    );
+    const mintSecretHex = await decryptEscrowKey(
+      launch.pumpfun_mint_keypair_encrypted,
+      ESCROW_ENCRYPTION_KEY
+    );
+    const escrowSecret = hexToUint8Array(escrowSecretHex);
+    const mintSecret = hexToUint8Array(mintSecretHex);
+
+    // Fetch contributions
+    const { data: contributions, error: contribErr } = await supabase
+      .from("contributions")
+      .select("*")
+      .eq("launch_id", launch.id)
+      .order("amount_lamports", { ascending: false });
+
+    if (contribErr) throw contribErr;
+    if (!contributions || contributions.length === 0) {
+      await setFailed(supabase, launch.id, "No contributions found for launch");
+      return errorResponse("No contributions found");
+    }
+
+    // Sum total lamports — no ATA reserve since Pump.fun founders get tokens, not fee shares
+    const totalLamports = contributions.reduce(
+      (sum: bigint, c: any) => sum + BigInt(c.amount_lamports),
+      0n
+    );
+
+    // Pre-calculate proportional token amounts (basis points) for Railway distributor
+    for (const c of contributions) {
+      const proportionalBps = Math.floor(
+        (Number(BigInt(c.amount_lamports)) / Number(totalLamports)) * 10000
+      );
+      await supabase
+        .from("contributions")
+        .update({ token_amount: proportionalBps })
+        .eq("id", c.id);
+    }
+
+    // Subtract priority fee + minimal headroom for transaction signing
+    const PRIORITY_FEE_LAMPORTS = 50_000n; // 0.00005 SOL
+    const TX_FEE_LAMPORTS = 5_000n;
+    const initialBuyLamports = totalLamports - PRIORITY_FEE_LAMPORTS - TX_FEE_LAMPORTS;
+
+    if (initialBuyLamports < 10_000_000n) {
+      await setFailed(supabase, launch.id, "Insufficient SOL for Pump.fun launch");
+      return errorResponse("Insufficient SOL");
+    }
+
+    // Call PumpPortal local API to create token transaction
+    const response = await fetch("https://pumpportal.fun/api/trade-local", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        publicKey: launch.escrow_wallet_public_key,
+        action: "create",
+        tokenMetadata: {
+          name: launch.token_name,
+          symbol: launch.token_symbol,
+          uri: launch.ipfs_metadata_url,
+        },
+        mint: launch.token_mint_address,
+        denominatedInSol: "true",
+        amount: Number(initialBuyLamports) / 1e9,
+        slippage: 15,
+        priorityFee: 0.00005,
+        pool: "pump",
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      await setFailed(supabase, launch.id, `PumpPortal create failed: ${errText}`);
+      return errorResponse(`PumpPortal create failed: ${errText}`);
+    }
+
+    const txData = await response.arrayBuffer();
+    const txBytes = new Uint8Array(txData);
+
+    // Sign with both escrow + mint keypairs using @solana/web3.js
+    const { Keypair, VersionedTransaction } = await import("https://esm.sh/@solana/web3.js@1.91.1");
+
+    const escrowKeypair = Keypair.fromSecretKey(escrowSecret);
+    const mintKeypair = Keypair.fromSecretKey(mintSecret);
+
+    const tx = VersionedTransaction.deserialize(txBytes);
+    tx.sign([escrowKeypair, mintKeypair]);
+
+    const signedBytes = tx.serialize();
+    const txBase64 = btoa(String.fromCharCode(...signedBytes));
+
+    // Submit via Alchemy RPC
+    const rpcRes = await fetch(SOLANA_RPC_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "sendTransaction",
+        params: [txBase64, { encoding: "base64", preflightCommitment: "confirmed" }],
+      }),
+    });
+
+    const rpcData = await rpcRes.json();
+    if (rpcData.error) {
+      await setFailed(supabase, launch.id, `Send failed: ${JSON.stringify(rpcData.error)}`);
+      return errorResponse("Transaction submission failed");
+    }
+
+    const txSignature = rpcData.result;
+
+    await supabase
+      .from("launches")
+      .update({ status: "launched" })
+      .eq("id", launch.id);
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        launchId: launch.id,
+        txSignature,
+        platform: "pumpfun",
+      }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  } catch (error: any) {
+    console.error("executePumpfunLaunch error:", error);
+    await setFailed(supabase, launch.id, error.message || "Pump.fun execution error");
+    return errorResponse(error.message || "Pump.fun execution failed");
+  }
 }

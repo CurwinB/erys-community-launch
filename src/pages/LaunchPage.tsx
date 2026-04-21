@@ -136,6 +136,12 @@ const LaunchPage = () => {
   const isScheduled = launch.status === "scheduled";
   const isPastLaunchTime = new Date(launch.launch_datetime) <= new Date();
   const canContribute = isScheduled && !isPastLaunchTime;
+  const isPumpfun = launch.platform === "pumpfun";
+  const tradeUrl = isPumpfun
+    ? `https://pump.fun/${launch.token_mint_address}`
+    : `https://bags.fm/token/${launch.token_mint_address}`;
+  const platformName = isPumpfun ? "Pump.fun" : "Bags.fm";
+  const platformHref = isPumpfun ? "https://pump.fun" : "https://bags.fm";
 
   return (
     <main className="min-h-screen">
@@ -215,19 +221,21 @@ const LaunchPage = () => {
               </Button>
 
               <p className="text-[10px] leading-relaxed text-muted-foreground">
-                Your SOL is held in escrow until launch. You will be registered as a permanent Bags fee share recipient proportional to your contribution. If this launch is cancelled your SOL is refunded automatically.
+                {isPumpfun
+                  ? "Your SOL is held in escrow until launch. You will receive tokens at the earliest possible entry price proportional to your contribution. If this launch is cancelled your SOL is refunded automatically."
+                  : "Your SOL is held in escrow until launch. You will be registered as a permanent Bags fee share recipient proportional to your contribution. If this launch is cancelled your SOL is refunded automatically."}
               </p>
             </div>
 
             {launch.status === "launched" && launch.token_mint_address && (
               <a
-                href={`https://bags.fm/token/${launch.token_mint_address}`}
+                href={tradeUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="block"
               >
                 <div className="flex items-center justify-center gap-2 border border-primary/30 bg-card p-3">
-                  <span className="text-sm font-semibold text-primary">Trade on Bags.fm</span>
+                  <span className="text-sm font-semibold text-primary">Trade on {platformName}</span>
                   <ExternalLink className="h-3.5 w-3.5 text-primary" />
                 </div>
               </a>
@@ -235,8 +243,8 @@ const LaunchPage = () => {
 
             <div className="flex items-center justify-center gap-2 border border-border bg-card p-3">
               <span className="text-[10px] text-muted-foreground">This token will be launched on</span>
-              <a href="https://bags.fm" target="_blank" rel="noopener noreferrer" className="text-[10px] font-semibold text-foreground hover:text-primary transition-colors">
-                Bags.fm
+              <a href={platformHref} target="_blank" rel="noopener noreferrer" className="text-[10px] font-semibold text-foreground hover:text-primary transition-colors">
+                {platformName}
               </a>
             </div>
           </div>

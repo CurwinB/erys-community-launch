@@ -12,6 +12,7 @@ interface LaunchHeaderProps {
     twitter_url: string | null;
     telegram_url: string | null;
     website_url: string | null;
+    platform?: string | null;
   };
 }
 
@@ -28,10 +29,19 @@ const LaunchHeader = ({ launch }: LaunchHeaderProps) => (
         )}
       </div>
       <div className="flex-1">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-bold text-foreground md:text-3xl">{launch.token_name}</h1>
           <span className="font-mono text-sm text-muted-foreground">${launch.token_symbol}</span>
           <StatusBadge status={launch.status as any} />
+          {launch.platform === "pumpfun" ? (
+            <span className="rounded-sm border border-[#00FF88]/30 bg-[#00FF88]/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#00FF88]">
+              Pump.fun
+            </span>
+          ) : (
+            <span className="rounded-sm border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-primary">
+              Bags.fm
+            </span>
+          )}
         </div>
         {launch.description && (
           <p className="mt-2 text-sm text-muted-foreground">{launch.description}</p>
