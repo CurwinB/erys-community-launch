@@ -272,15 +272,16 @@ Deno.serve(async (req) => {
     const feeShareTransactions = feeShareData.response?.transactions || [];
     console.log(`fee-share/config returned ${feeShareTransactions.length} transactions`);
 
+    // Reconstruct escrow keypair once for signing all txs (escrowPrivateKey is hex of 64-byte secret)
+    const escrowKeypair = Keypair.fromSecretKey(hexToUint8Array(escrowPrivateKey));
+
     for (let i = 0; i < feeShareTransactions.length; i++) {
       const txObj = feeShareTransactions[i];
+      const signedTxBase58 = signWithKeypair(txObj.transaction, escrowKeypair);
       const sendRes = await fetch(`${BAGS_API_BASE}/solana/send-transaction`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-key": BAGS_API_KEY },
-        body: JSON.stringify({
-          transaction: txObj.transaction,
-          signerPrivateKey: escrowPrivateKey,
-        }),
+        body: JSON.stringify({ transaction: signedTxBase58 }),
       });
       if (!sendRes.ok) {
         const errText = await sendRes.text();
