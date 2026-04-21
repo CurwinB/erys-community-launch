@@ -51,7 +51,7 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
       body: JSON.stringify({
         publicKey: escrowKeypair.publicKey.toBase58(),
         action: "collectCreatorFee",
-        priorityFee: 0.000001,
+        priorityFee: 0.00005,
         pool: "pump",
       }),
     });
