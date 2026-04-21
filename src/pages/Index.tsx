@@ -88,36 +88,24 @@ const Index = () => {
             <h1 className="text-4xl font-bold tracking-tight text-foreground md:text-6xl">
               The Community Launch Platform for Solana Tokens.
             </h1>
-            <p className="mt-6 text-lg text-muted-foreground md:text-xl">
-              Schedule your token launch on Bags.fm or Pump.fun, build your community before go-live, and reward early contributors with permanent fee shares or early entry positions.
-            </p>
             <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
               <Link to="/schedule">
                 <Button size="lg" className="w-full sm:w-auto">
-                  <Rocket className="mr-2 h-4 w-4" />
                   Schedule a Launch
                 </Button>
               </Link>
-              <a href="#launches">
-                <Button variant="outline" size="lg" className="w-full sm:w-auto">
-                  View Launches
-                </Button>
-              </a>
-            </div>
-          </div>
-
-          {/* Feature cards */}
-          <div className="mt-16 grid gap-4 md:grid-cols-3">
-            {features.map((f) => (
-              <div
-                key={f.title}
-                className="border border-border border-t-primary bg-card p-6"
+              <Button
+                variant="outline"
+                size="lg"
+                className="w-full sm:w-auto"
+                onClick={() =>
+                  document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })
+                }
               >
-                <f.icon className="mb-3 h-5 w-5 text-primary" />
-                <h3 className="mb-2 font-semibold text-foreground">{f.title}</h3>
-                <p className="text-sm text-muted-foreground">{f.body}</p>
-              </div>
-            ))}
+                How it works
+                <ArrowDown className="ml-2 h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </div>
       </section>
@@ -125,11 +113,6 @@ const Index = () => {
       {/* Live Launches */}
       <section id="launches" className="border-b border-border">
         <div className="container mx-auto px-4 py-16">
-          <div className="mb-8 flex items-center gap-3">
-            <span className="h-2.5 w-2.5 rounded-full bg-success animate-pulse-glow" />
-            <h2 className="text-2xl font-bold text-foreground">Live Launches</h2>
-          </div>
-
           {liveLaunchesLoading ? (
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {[1, 2, 3].map((i) => (
@@ -159,11 +142,10 @@ const Index = () => {
               })}
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center rounded-sm border border-dashed border-border py-16">
-              <Rocket className="mb-4 h-8 w-8 text-muted-foreground" />
-              <p className="mb-4 text-muted-foreground">No launches scheduled yet. Be the first.</p>
+            <div className="mx-auto flex max-w-md flex-col items-center justify-center border border-border bg-card px-6 py-12 text-center">
+              <p className="mb-6 text-muted-foreground">No launches scheduled yet.</p>
               <Link to="/schedule">
-                <Button size="sm">Schedule a Launch</Button>
+                <Button>Schedule the First Launch</Button>
               </Link>
             </div>
           )}
