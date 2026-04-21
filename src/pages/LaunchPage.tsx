@@ -18,6 +18,7 @@ const LaunchPage = () => {
   const { id } = useParams<{ id: string }>();
   const [solAmount, setSolAmount] = useState("");
   const [isContributing, setIsContributing] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const { connected, publicKey, wallet } = useWallet();
   const { toast } = useToast();
   const queryClient = useQueryClient();
