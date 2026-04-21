@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/StatusBadge";
+import Seo from "@/components/Seo";
 import { formatSol } from "@/lib/constants";
 import { Wallet, Coins, Rocket, ExternalLink, Loader2, AlertTriangle, XCircle } from "lucide-react";
 import { useState } from "react";
