@@ -20,6 +20,9 @@ export interface Launch {
   distribution_completed: boolean;
   created_by_wallet: string;
   created_at: string;
+  platform: string;
+  pumpfun_fees_last_claimed_at: string | null;
+  pumpfun_fees_claimed_total: number;
 }
 
 export interface Contribution {
@@ -103,4 +106,53 @@ export async function markLaunchDistributionComplete(
     })
     .eq("id", launchId);
   if (error) console.error(`Error marking launch ${launchId} distribution complete:`, error.message);
+}
+
+// Find Pump.fun launches ready for fee claiming
+// Claim when: 24 hours have passed since last claim OR never been claimed
+export async function getPumpfunLaunchesForFeeClaim(): Promise<Launch[]> {
+  const cutoff24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from("launches")
+    .select("*")
+    .eq("status", "launched")
+    .eq("platform", "pumpfun")
+    .or(
+      `pumpfun_fees_last_claimed_at.is.null,pumpfun_fees_last_claimed_at.lte.${cutoff24h}`
+    )
+    .order("created_at", { ascending: true })
+    .limit(10);
+
+  if (error) {
+    console.error("Error fetching Pump.fun launches for fee claim:", error.message);
+    return [];
+  }
+  return (data as Launch[]) || [];
+}
+
+// Update fee claim tracking after successful claim
+export async function updatePumpfunFeesClaimed(
+  launchId: string,
+  amountLamports: number
+): Promise<void> {
+  const { data: current } = await supabase
+    .from("launches")
+    .select("pumpfun_fees_claimed_total")
+    .eq("id", launchId)
+    .single();
+
+  const currentTotal = current?.pumpfun_fees_claimed_total || 0;
+
+  const { error } = await supabase
+    .from("launches")
+    .update({
+      pumpfun_fees_last_claimed_at: new Date().toISOString(),
+      pumpfun_fees_claimed_total: currentTotal + amountLamports,
+    })
+    .eq("id", launchId);
+
+  if (error) {
+    console.error(`Error updating Pump.fun fee claim for launch ${launchId}:`, error.message);
+  }
 }
