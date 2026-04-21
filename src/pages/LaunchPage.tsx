@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import CountdownTimer from "@/components/CountdownTimer";
+import Seo from "@/components/Seo";
 import { formatSol, solToLamports } from "@/lib/constants";
 import { Wallet, Loader2, ExternalLink } from "lucide-react";
 import { useState, useEffect } from "react";
