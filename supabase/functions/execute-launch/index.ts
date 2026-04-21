@@ -604,6 +604,21 @@ async function executePumpfunLaunch(
     const escrowKeypair = Keypair.fromSecretKey(escrowSecret);
     const mintKeypair = Keypair.fromSecretKey(mintSecret);
 
+    // Verify the decrypted mint keypair matches the stored mint address.
+    // Fail-closed if mismatch — otherwise we'd launch a token at a different
+    // mint than the one stored, and the Railway distributor (which uses
+    // launch.token_mint_address) would look at the wrong escrow ATA.
+    const derivedMintAddress = mintKeypair.publicKey.toBase58();
+    if (derivedMintAddress !== launch.token_mint_address) {
+      await setFailed(
+        supabase,
+        launch.id,
+        `Mint keypair mismatch. Stored: ${launch.token_mint_address}, Derived: ${derivedMintAddress}`
+      );
+      return errorResponse("Mint keypair does not match stored token mint address");
+    }
+    console.log(`Mint keypair verified: ${derivedMintAddress}`);
+
     const tx = VersionedTransaction.deserialize(txBytes);
     tx.sign([mintKeypair, escrowKeypair]);
 
