@@ -135,7 +135,10 @@ const LaunchPage = () => {
   const progressPercent = maxContrib ? Math.min((totalEscrow / maxContrib) * 100, 100) : 0;
   const isScheduled = launch.status === "scheduled";
   const isPastLaunchTime = new Date(launch.launch_datetime) <= new Date();
-  const canContribute = isScheduled && !isPastLaunchTime;
+  const launchMs = new Date(launch.launch_datetime).getTime();
+  const windowClosed = Date.now() >= launchMs - 5 * 60 * 1000;
+  const closingSoon = !windowClosed && Date.now() >= launchMs - 10 * 60 * 1000;
+  const canContribute = isScheduled && !isPastLaunchTime && !windowClosed;
   const isPumpfun = launch.platform === "pumpfun";
   const tradeUrl = isPumpfun
     ? `https://pump.fun/${launch.token_mint_address}`
@@ -180,6 +183,20 @@ const LaunchPage = () => {
         {/* Right column - Contribution card */}
         <div className="lg:col-span-2">
           <div className="sticky top-20 space-y-4">
+            {isScheduled && closingSoon && (
+              <div className="border border-yellow-500/40 bg-yellow-500/5 p-3">
+                <p className="text-xs text-yellow-500">
+                  Contribution window closes in less than 10 minutes.
+                </p>
+              </div>
+            )}
+            {isScheduled && windowClosed && (
+              <div className="border border-border bg-muted p-3">
+                <p className="text-xs text-muted-foreground">
+                  Contribution window closed. Launch executes shortly.
+                </p>
+              </div>
+            )}
             <div className="border border-primary/30 bg-card p-6 space-y-5">
               <h3 className="font-semibold text-foreground">Contribute</h3>
 

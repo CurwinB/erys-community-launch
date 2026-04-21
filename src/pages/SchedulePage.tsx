@@ -140,10 +140,9 @@ const SchedulePage = () => {
     }
   };
 
+  const platformLabel = platform === "pumpfun" ? "Pump.fun" : "Bags.fm";
   const tweetText = encodeURIComponent(
-    platform === "pumpfun"
-      ? `I just scheduled a Pump.fun token launch on Erys. Get in at the earliest entry price before it goes live.\n\n${successData?.url || ""}`
-      : `I just scheduled a Bags token launch on Erys. Get in before it goes live and earn fees forever.\n\n${successData?.url || ""}\n\nBuilt on @BagsApp`
+    `I just scheduled a community token launch on @eryslive via ${platformLabel}.\n\nGet in before it goes live and secure your early position.\n\n${successData?.url || ""}`
   );
 
   if (successData) {
@@ -155,6 +154,9 @@ const SchedulePage = () => {
               <Check className="h-8 w-8 text-success" />
             </div>
             <h2 className="text-2xl font-bold text-foreground">Launch Scheduled!</h2>
+            <p className="text-xs uppercase tracking-widest text-primary">
+              Launching on {platformLabel}
+            </p>
             <p className="text-sm text-muted-foreground">Share this link with your community.</p>
 
             <div className="flex items-center gap-2 rounded-sm border border-border bg-background p-3">
@@ -293,7 +295,7 @@ const SchedulePage = () => {
               </div>
             </div>
             <p className="text-[10px] text-muted-foreground">
-              Times are in your local timezone ({Intl.DateTimeFormat().resolvedOptions().timeZone}).
+              Launch must be between 1 and 72 hours from now. Your timezone: {Intl.DateTimeFormat().resolvedOptions().timeZone}
             </p>
           </div>
 
