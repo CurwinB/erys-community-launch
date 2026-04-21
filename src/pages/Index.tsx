@@ -191,6 +191,25 @@ const Index = () => {
       </section>
 
       {/* Footer */}
+      {/* How it works */}
+      <section id="how-it-works" className="border-t border-border">
+        <div className="container mx-auto px-4 py-16">
+          <h2 className="mb-8 text-2xl font-bold text-foreground">How it works</h2>
+          <div className="grid gap-4 md:grid-cols-3">
+            {features.map((f) => (
+              <div
+                key={f.title}
+                className="border border-border border-t-primary bg-card p-6"
+              >
+                <f.icon className="mb-3 h-5 w-5 text-primary" />
+                <h3 className="mb-2 font-semibold text-foreground">{f.title}</h3>
+                <p className="text-sm text-muted-foreground">{f.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <footer className="border-t border-border py-8">
         <div className="container mx-auto flex flex-col items-center gap-2 px-4 text-center">
           <span className="text-sm text-muted-foreground">
