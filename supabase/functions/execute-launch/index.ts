@@ -329,27 +329,22 @@ Deno.serve(async (req) => {
     }
 
     const createTxData = await createTxRes.json();
-    const transaction = createTxData.transaction;
-    const mintAddress = createTxData.mint;
+    const transaction = createTxData.response;
 
-    if (mintAddress) {
-      await supabase
-        .from("launches")
-        .update({ token_mint_address: mintAddress })
-        .eq("id", launch.id);
+    if (!transaction || typeof transaction !== "string") {
+      await setFailed(supabase, launch.id, "create-launch-transaction returned no transaction string");
+      return errorResponse("create-launch-transaction returned no transaction");
     }
 
     // STEP 3: send-transaction
+    const signedLaunchTx = signWithKeypair(transaction, escrowKeypair);
     const sendTxRes = await fetch(`${BAGS_API_BASE}/solana/send-transaction`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "x-api-key": BAGS_API_KEY,
       },
-      body: JSON.stringify({
-        transaction,
-        signerPrivateKey: escrowPrivateKey,
-      }),
+      body: JSON.stringify({ transaction: signedLaunchTx }),
     });
 
     if (!sendTxRes.ok) {
