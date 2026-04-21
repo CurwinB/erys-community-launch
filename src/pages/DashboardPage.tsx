@@ -199,6 +199,11 @@ const DashboardPage = () => {
                   const isExcluded = c.is_fee_claimer === false;
                   const isClaiming = claimingMint === c.launches?.token_mint_address;
                   const isLaunched = c.launches?.status === "launched";
+                  const isPumpfun = c.launches?.platform === "pumpfun";
+                  const tradeUrl = isPumpfun
+                    ? `https://pump.fun/${c.launches?.token_mint_address}`
+                    : `https://bags.fm/token/${c.launches?.token_mint_address}`;
+                  const platformLabel = isPumpfun ? "Pump.fun" : "Bags";
 
                   return (
                     <div key={c.id} className="border border-border bg-card p-4">
@@ -225,16 +230,21 @@ const DashboardPage = () => {
                           <div className="flex flex-col gap-1">
                             {isLaunched && c.launches?.token_mint_address && (
                               <a
-                                href={`https://bags.fm/token/${c.launches.token_mint_address}`}
+                                href={tradeUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
                               >
                                 <Button size="sm" variant="ghost" className="gap-1 text-xs">
-                                  View on Bags <ExternalLink className="h-3 w-3" />
+                                  View on {platformLabel} <ExternalLink className="h-3 w-3" />
                                 </Button>
                               </a>
                             )}
-                            {isLaunched && !isExcluded && (
+                            {isLaunched && isPumpfun && (
+                              <span className="text-[10px] text-muted-foreground max-w-[160px] text-right">
+                                Early entry position. Fees distributed to creator.
+                              </span>
+                            )}
+                            {isLaunched && !isPumpfun && !isExcluded && (
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -246,7 +256,7 @@ const DashboardPage = () => {
                                 {claimable > 0 ? `Claim ${formatSol(claimable)} SOL` : "No Fees"}
                               </Button>
                             )}
-                            {!isLaunched && !isExcluded && (
+                            {!isLaunched && !isPumpfun && !isExcluded && (
                               <Button size="sm" variant="outline" disabled>
                                 Claim Fees
                               </Button>
@@ -304,7 +314,9 @@ const DashboardPage = () => {
                         <StatusBadge status={l.status} />
                         {l.status === "launched" && l.token_mint_address && (
                           <a
-                            href={`https://bags.fm/token/${l.token_mint_address}`}
+                            href={l.platform === "pumpfun"
+                              ? `https://pump.fun/${l.token_mint_address}`
+                              : `https://bags.fm/token/${l.token_mint_address}`}
                             target="_blank"
                             rel="noopener noreferrer"
                           >
