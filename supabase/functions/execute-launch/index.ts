@@ -633,59 +633,22 @@ async function executePumpfunLaunch(
     console.log(`Pump.fun tx submitted: ${txSignature}`);
     console.log(`Solscan: https://solscan.io/tx/${txSignature}`);
 
-    // Poll for on-chain confirmation before marking launched
-    let confirmed = false;
-    let attempts = 0;
-    const maxAttempts = 30; // 30 x 2s = 60s max
-
-    while (!confirmed && attempts < maxAttempts) {
-      await new Promise((r) => setTimeout(r, 2000));
-      attempts++;
-
-      const statusRes = await fetch(SOLANA_RPC_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "getSignatureStatuses",
-          params: [[txSignature], { searchTransactionHistory: true }],
-        }),
-      });
-
-      const statusData = await statusRes.json();
-      const status = statusData.result?.value?.[0];
-
-      if (status?.err) {
-        await setFailed(
-          supabase,
-          launch.id,
-          `Transaction failed on-chain: ${JSON.stringify(status.err)}`
-        );
-        return errorResponse("Pump.fun transaction failed on-chain");
-      }
-
-      if (
-        status?.confirmationStatus === "confirmed" ||
-        status?.confirmationStatus === "finalized"
-      ) {
-        confirmed = true;
-        console.log(`Transaction confirmed after ${attempts} attempts`);
-      }
+    if (!txSignature) {
+      await setFailed(supabase, launch.id, "RPC did not return a transaction signature");
+      return errorResponse("No transaction signature returned");
     }
 
-    if (!confirmed) {
-      await setFailed(
-        supabase,
-        launch.id,
-        `Transaction not confirmed after 60 seconds: ${txSignature}`
-      );
-      return errorResponse("Transaction confirmation timeout");
-    }
-
+    // Store the signature and mark as launched immediately after successful submission.
+    // The Railway distributor verifies the escrow token balance (with retries) before
+    // distributing. If the tx ultimately fails on-chain there will be no tokens in
+    // escrow and Railway will skip distribution — an already-handled state.
+    // Polling here exhausts the edge function CPU budget (see prod logs).
     await supabase
       .from("launches")
-      .update({ status: "launched" })
+      .update({
+        status: "launched",
+        pumpfun_launch_signature: txSignature,
+      })
       .eq("id", launch.id);
 
     return new Response(
