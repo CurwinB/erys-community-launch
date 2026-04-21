@@ -216,25 +216,34 @@ Deno.serve(async (req) => {
       ESCROW_ENCRYPTION_KEY
     );
 
-    // Reserve enough SOL to send tokens to every contributor:
-    // - 0.00203928 SOL per contributor for ATA creation
-    // - 0.000005 SOL per contributor for transaction fees
-    // Everything else goes into the initial buy
-    const totalReserve = BigInt(filtered.length) * (ATA_COST_PER_CONTRIBUTOR + TX_FEE_PER_TRANSFER);
+    // Reserve enough SOL for:
+    // - ATA creation + tx fee per contributor
+    // - Lookup table rent when >15 claimers
+    // - Base tx fees (fee-share config + launch)
+    const ATA_COST_PER_CONTRIBUTOR = 2_039_280n;
+    const TX_FEE_PER_CONTRIBUTOR = 5_000n;
+    const BASE_TX_FEES = 20_000n; // fee-share config tx + launch tx
+    const LOOKUP_TABLE_RENT = 2_550_000n; // rent for lookup table when >15 claimers
+
     const allContribTotal = contributions.reduce(
       (sum: bigint, c: any) => sum + BigInt(c.amount_lamports),
       0n
     );
-    const netBuyLamports = allContribTotal - totalReserve;
+    const contributorCount = BigInt(contributions.length);
+    const ataReserve = contributorCount * (ATA_COST_PER_CONTRIBUTOR + TX_FEE_PER_CONTRIBUTOR);
+    const needsLookupTable = contributorCount > 15n;
+    const lookupTableReserve = needsLookupTable ? LOOKUP_TABLE_RENT : 0n;
+    const netBuyLamports = allContribTotal - ataReserve - lookupTableReserve - BASE_TX_FEES;
 
     if (netBuyLamports < 10_000_000n) {
       await setFailed(
         supabase,
         launch.id,
-        `Insufficient SOL after token distribution reserve. Total: ${allContribTotal}, Reserve: ${totalReserve}, Net: ${netBuyLamports}`
+        `Insufficient SOL after gas reserve. Total: ${allContribTotal}, ATA reserve: ${ataReserve}, Lookup table: ${lookupTableReserve}, Net: ${netBuyLamports}`
       );
-      return errorResponse("Not enough SOL raised to cover token distribution costs and initial buy");
+      return errorResponse("Not enough SOL to cover gas costs and initial buy");
     }
+    console.log(`Gas reserve: ATA ${ataReserve}, LUT ${lookupTableReserve}, Base fees ${BASE_TX_FEES}. Net buy: ${netBuyLamports}`);
 
     // STEP 1: fee-share/config — MUST be first
     const feeShareRes = await fetch(`${BAGS_API_BASE}/fee-share/config`, {
