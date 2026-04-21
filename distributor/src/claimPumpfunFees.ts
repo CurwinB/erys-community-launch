@@ -75,11 +75,25 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     const tx = VersionedTransaction.deserialize(claimTxBytes);
     tx.sign([escrowKeypair]);
 
+    const claimBlockhash = tx.message.recentBlockhash;
+    const currentBlockHeight = await connection.getBlockHeight("confirmed");
+    // PumpPortal blockhashes have ~150 block validity (~60s). Use a conservative
+    // 150-block window from current height as the expiry cutoff so confirmation
+    // can't hang indefinitely if the blockhash was already partially aged.
+    const claimLastValidBlockHeight = currentBlockHeight + 150;
+
     const serialized = tx.serialize();
     const signature = await connection.sendRawTransaction(serialized, {
       preflightCommitment: "confirmed",
     });
-    await connection.confirmTransaction(signature, "confirmed");
+    await connection.confirmTransaction(
+      {
+        signature,
+        blockhash: claimBlockhash,
+        lastValidBlockHeight: claimLastValidBlockHeight,
+      },
+      "confirmed"
+    );
 
     console.log(`Creator fee claim confirmed: ${signature}`);
     console.log(`Solscan: https://solscan.io/tx/${signature}`);
@@ -132,14 +146,17 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
       })
     );
     platformTx.feePayer = escrowKeypair.publicKey;
-    const { blockhash } = await connection.getLatestBlockhash();
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
     platformTx.recentBlockhash = blockhash;
     platformTx.sign(escrowKeypair);
 
     const platformSig = await connection.sendRawTransaction(platformTx.serialize(), {
       preflightCommitment: "confirmed",
     });
-    await connection.confirmTransaction(platformSig, "confirmed");
+    await connection.confirmTransaction(
+      { signature: platformSig, blockhash, lastValidBlockHeight },
+      "confirmed"
+    );
     console.log(`Platform fee sent: https://solscan.io/tx/${platformSig}`);
     platformSent = true;
   } catch (err: any) {
@@ -157,14 +174,17 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
       })
     );
     creatorTx.feePayer = escrowKeypair.publicKey;
-    const { blockhash } = await connection.getLatestBlockhash();
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
     creatorTx.recentBlockhash = blockhash;
     creatorTx.sign(escrowKeypair);
 
     const creatorSig = await connection.sendRawTransaction(creatorTx.serialize(), {
       preflightCommitment: "confirmed",
     });
-    await connection.confirmTransaction(creatorSig, "confirmed");
+    await connection.confirmTransaction(
+      { signature: creatorSig, blockhash, lastValidBlockHeight },
+      "confirmed"
+    );
     console.log(`Creator fee sent: https://solscan.io/tx/${creatorSig}`);
     creatorSent = true;
   } catch (err: any) {

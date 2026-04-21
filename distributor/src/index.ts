@@ -4,6 +4,7 @@ dotenv.config();
 import { getPendingDistributions } from "./db";
 import { distributeTokensForLaunch } from "./distribute";
 import { claimAllPumpfunFees } from "./claimPumpfunFees";
+import { resetStaleExecutingLaunches } from "./db";
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "30000");
 
@@ -22,9 +23,24 @@ function validateEnv(): void {
 }
 
 const processing = new Set<string>();
+let claimRunning = false;
+
+async function runClaimIfIdle(): Promise<void> {
+  if (claimRunning) {
+    console.log("Fee claim cycle already running, skipping this interval");
+    return;
+  }
+  claimRunning = true;
+  try {
+    await claimAllPumpfunFees();
+  } finally {
+    claimRunning = false;
+  }
+}
 
 async function pollAndDistribute(): Promise<void> {
   try {
+    await resetStaleExecutingLaunches();
     const launches = await getPendingDistributions();
     if (launches.length === 0) return;
 
@@ -69,8 +85,8 @@ async function main(): Promise<void> {
   console.log("Pump.fun fee claiming enabled. Checking every 6 hours.");
 
   // Run immediately on startup then on interval
-  await claimAllPumpfunFees();
-  setInterval(claimAllPumpfunFees, PUMPFUN_CLAIM_INTERVAL_MS);
+  await runClaimIfIdle();
+  setInterval(runClaimIfIdle, PUMPFUN_CLAIM_INTERVAL_MS);
 
   process.on("SIGTERM", () => {
     console.log("SIGTERM received. Shutting down gracefully...");
