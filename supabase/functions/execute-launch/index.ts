@@ -45,6 +45,11 @@ Deno.serve(async (req) => {
 
     const launch = launches[0];
 
+    // Platform routing — Pump.fun has its own execution flow
+    if (launch.platform === "pumpfun") {
+      return await executePumpfunLaunch(launch, supabase, ESCROW_ENCRYPTION_KEY);
+    }
+
     // Set status to executing
     await supabase
       .from("launches")
