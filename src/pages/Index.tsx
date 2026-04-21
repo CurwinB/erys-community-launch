@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import LaunchCard from "@/components/LaunchCard";
+import Seo from "@/components/Seo";
 import { supabase } from "@/integrations/supabase/client";
 import { Coins, Clock, Shield, ArrowDown } from "lucide-react";
 
@@ -78,6 +79,19 @@ const Index = () => {
 
   return (
     <main className="min-h-screen">
+      <Seo
+        title="Erys — Community Launch Platform for Solana Tokens"
+        description="Schedule your Solana token launch on Bags.fm or Pump.fun, build your community before going live, and let every contributor earn from day one."
+        path="/"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "WebSite",
+          name: "Erys",
+          url: "https://erys.live",
+          description:
+            "Community launch platform for Solana tokens on Bags.fm and Pump.fun.",
+        }}
+      />
       {/* Hero */}
       <section className="border-b border-border">
         <div className="container mx-auto px-4 py-20 md:py-32">

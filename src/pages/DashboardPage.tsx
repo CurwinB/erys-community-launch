@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/StatusBadge";
+import Seo from "@/components/Seo";
 import { formatSol } from "@/lib/constants";
 import { Wallet, Coins, Rocket, ExternalLink, Loader2, AlertTriangle, XCircle } from "lucide-react";
 import { useState } from "react";
@@ -147,6 +148,12 @@ const DashboardPage = () => {
   if (!connected) {
     return (
       <main className="min-h-screen">
+        <Seo
+          title="Dashboard — Erys"
+          description="View your contributions, claim trading fees, and manage your scheduled launches."
+          path="/dashboard"
+          noindex
+        />
         <div className="container mx-auto flex min-h-[60vh] flex-col items-center justify-center px-4">
           <Wallet className="mb-4 h-12 w-12 text-muted-foreground" />
           <h2 className="mb-2 text-xl font-bold text-foreground">Connect Your Wallet</h2>
@@ -159,6 +166,12 @@ const DashboardPage = () => {
 
   return (
     <main className="min-h-screen">
+      <Seo
+        title="Dashboard — Erys"
+        description="View your contributions, claim trading fees, and manage your scheduled launches."
+        path="/dashboard"
+        noindex
+      />
       <div className="container mx-auto px-4 py-12">
         <h1 className="text-2xl font-bold text-foreground md:text-3xl">My Erys Dashboard.</h1>
 
