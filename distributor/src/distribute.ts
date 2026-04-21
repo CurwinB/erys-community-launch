@@ -3,6 +3,7 @@ import {
   PublicKey,
   Transaction,
   Keypair,
+  ComputeBudgetProgram,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
@@ -105,6 +106,11 @@ async function sendTokensToContributor(
   const contributorPubkey = new PublicKey(contributorWallet);
   const contributorAta = await getAssociatedTokenAddress(mintPubkey, contributorPubkey);
   const tx = new Transaction();
+
+  // Priority fee to ensure timely landing during network congestion
+  tx.add(
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 })
+  );
 
   const ataInfo = await connection.getAccountInfo(contributorAta);
   if (!ataInfo) {

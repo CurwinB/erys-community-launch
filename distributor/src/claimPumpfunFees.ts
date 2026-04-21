@@ -119,6 +119,9 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
   console.log(`Platform share: ${platformShareLamports / LAMPORTS_PER_SOL} SOL`);
   console.log(`Creator share: ${creatorShareLamports / LAMPORTS_PER_SOL} SOL`);
 
+  let platformSent = false;
+  let creatorSent = false;
+
   // Send platform share to Erys platform wallet
   try {
     const platformTx = new Transaction().add(
@@ -138,6 +141,7 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     });
     await connection.confirmTransaction(platformSig, "confirmed");
     console.log(`Platform fee sent: https://solscan.io/tx/${platformSig}`);
+    platformSent = true;
   } catch (err: any) {
     console.error(`Failed to send platform share for launch ${launch.id}:`, err.message);
     // Continue to try sending creator share even if platform send fails
@@ -162,13 +166,20 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     });
     await connection.confirmTransaction(creatorSig, "confirmed");
     console.log(`Creator fee sent: https://solscan.io/tx/${creatorSig}`);
+    creatorSent = true;
   } catch (err: any) {
     console.error(`Failed to send creator share for launch ${launch.id}:`, err.message);
   }
 
-  // Update database with claimed amount
-  await updatePumpfunFeesClaimed(launch.id, claimedLamports);
-  console.log(`Fee claim complete for launch ${launch.id}`);
+  // Only stamp timestamp if both transfers succeeded — otherwise next 6h cycle retries
+  if (platformSent && creatorSent) {
+    await updatePumpfunFeesClaimed(launch.id, claimedLamports);
+    console.log(`Fee claim complete for launch ${launch.id}`);
+  } else {
+    console.error(
+      `Fee claim incomplete for launch ${launch.id}. Platform sent: ${platformSent}, Creator sent: ${creatorSent}. Will retry next cycle.`
+    );
+  }
 }
 
 export async function claimAllPumpfunFees(): Promise<void> {
