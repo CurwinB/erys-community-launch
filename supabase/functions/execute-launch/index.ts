@@ -453,6 +453,21 @@ function hexToUint8Array(hex: string): Uint8Array {
   return bytes;
 }
 
+// Sign a base58-encoded transaction (versioned or legacy) with the given keypair
+// and return the base58-encoded signed transaction.
+function signWithKeypair(txBase58: string, keypair: Keypair): string {
+  const txBytes = bs58.decode(txBase58);
+  try {
+    const tx = VersionedTransaction.deserialize(txBytes);
+    tx.sign([keypair]);
+    return bs58.encode(tx.serialize());
+  } catch {
+    const tx = Transaction.from(txBytes);
+    tx.partialSign(keypair);
+    return bs58.encode(tx.serialize());
+  }
+}
+
 // =========================================
 // Pump.fun Execution
 // =========================================
