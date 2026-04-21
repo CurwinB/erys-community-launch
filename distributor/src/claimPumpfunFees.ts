@@ -26,24 +26,16 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     return;
   }
 
-  // Check current SOL balance of escrow wallet
-  // Creator fees from Pump.fun accumulate as SOL in the escrow wallet
-  let escrowBalance: number;
+  // Read pre-claim balance for delta math only. Do NOT gate on this — the
+  // escrow may hold dust SOL unrelated to unclaimed creator fees, and Pump.fun
+  // fees may exist even when escrow balance is low. Always attempt the claim
+  // and let the post-claim delta tell us whether anything was actually claimed.
+  let escrowBalanceBefore: number;
   try {
-    escrowBalance = await connection.getBalance(escrowKeypair.publicKey, "confirmed");
-    console.log(`Escrow wallet balance: ${escrowBalance / LAMPORTS_PER_SOL} SOL`);
+    escrowBalanceBefore = await connection.getBalance(escrowKeypair.publicKey, "confirmed");
+    console.log(`Escrow wallet balance (pre-claim): ${escrowBalanceBefore / LAMPORTS_PER_SOL} SOL`);
   } catch (err: any) {
     console.error(`Failed to get escrow balance for launch ${launch.id}:`, err.message);
-    return;
-  }
-
-  // Check if balance meets minimum threshold
-  if (escrowBalance < MIN_CLAIM_THRESHOLD) {
-    console.log(
-      `Escrow balance ${escrowBalance} lamports below threshold ${MIN_CLAIM_THRESHOLD}. Skipping.`
-    );
-    // Still update last claimed timestamp so we don't check every poll cycle
-    await updatePumpfunFeesClaimed(launch.id, 0);
     return;
   }
 
