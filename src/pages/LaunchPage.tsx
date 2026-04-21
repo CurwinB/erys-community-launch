@@ -184,8 +184,8 @@ const LaunchPage = () => {
         <div className="lg:col-span-2">
           <div className="sticky top-20 space-y-4">
             {isScheduled && closingSoon && (
-              <div className="border border-yellow-500/40 bg-yellow-500/5 p-3">
-                <p className="text-xs text-yellow-500">
+              <div className="border border-primary/40 bg-primary/5 p-3">
+                <p className="text-xs text-primary">
                   Contribution window closes in less than 10 minutes.
                 </p>
               </div>
