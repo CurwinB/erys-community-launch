@@ -14,6 +14,7 @@ interface LaunchCardProps {
   contributorCount: number;
   minContributionLamports: number;
   status: "scheduled" | "launched";
+  platform?: "bags" | "pumpfun";
   animationDelay?: number;
 }
 
@@ -27,6 +28,7 @@ const LaunchCard = ({
   contributorCount,
   minContributionLamports,
   status,
+  platform = "bags",
   animationDelay = 0,
 }: LaunchCardProps) => {
   const isLive = status === "scheduled";
@@ -53,8 +55,19 @@ const LaunchCard = ({
             </div>
           )}
         </div>
-        <div>
-          <h3 className="font-semibold text-foreground">{tokenName}</h3>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="truncate font-semibold text-foreground">{tokenName}</h3>
+            {platform === "pumpfun" ? (
+              <span className="rounded-sm border border-[#00FF88]/30 bg-[#00FF88]/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-[#00FF88]">
+                Pump
+              </span>
+            ) : (
+              <span className="rounded-sm border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-primary">
+                Bags
+              </span>
+            )}
+          </div>
           <span className="font-mono text-xs text-muted-foreground">${tokenSymbol}</span>
         </div>
       </div>
