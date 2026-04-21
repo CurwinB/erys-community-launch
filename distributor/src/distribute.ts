@@ -129,14 +129,14 @@ async function sendTokensToContributor(
       escrowAta,
       contributorAta,
       escrowKeypair.publicKey,
-      Number(tokenAmount),
+      tokenAmount,
       [],
       TOKEN_PROGRAM_ID
     )
   );
 
   tx.feePayer = escrowKeypair.publicKey;
-  const { blockhash } = await connection.getLatestBlockhash();
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;
   tx.sign(escrowKeypair);
 
@@ -144,7 +144,10 @@ async function sendTokensToContributor(
   const signature = await connection.sendRawTransaction(serialized, {
     preflightCommitment: "confirmed",
   });
-  await connection.confirmTransaction(signature, "confirmed");
+  await connection.confirmTransaction(
+    { signature, blockhash, lastValidBlockHeight },
+    "confirmed"
+  );
   return signature;
 }
 
