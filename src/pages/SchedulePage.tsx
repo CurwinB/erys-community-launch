@@ -189,6 +189,11 @@ const SchedulePage = () => {
 
   return (
     <main className="min-h-screen">
+      <Seo
+        title="Schedule a Launch — Erys"
+        description="Configure your Solana token launch on Bags.fm or Pump.fun. Set the date, contribution limits, and let your community fund it before going live."
+        path="/schedule"
+      />
       <div className="container mx-auto max-w-xl px-4 py-12">
         <h1 className="text-2xl font-bold text-foreground md:text-3xl">Schedule a Token Launch.</h1>
         <p className="mt-2 text-sm text-muted-foreground">

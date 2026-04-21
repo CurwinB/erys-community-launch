@@ -156,6 +156,15 @@ const LaunchPage = () => {
 
   return (
     <main className="min-h-screen">
+      <Seo
+        title={`${launch.token_name} ($${launch.token_symbol}) — Erys Launch`}
+        description={
+          launch.description?.slice(0, 155) ||
+          `Contribute to the ${launch.token_name} ($${launch.token_symbol}) community launch on ${isPumpfun ? "Pump.fun" : "Bags.fm"}, powered by Erys.`
+        }
+        path={`/launch/${launch.id}`}
+        image={launch.image_url || undefined}
+      />
       <LaunchHeader launch={launch} />
 
       <div className="container mx-auto grid gap-6 px-4 py-8 lg:grid-cols-5">
