@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import LaunchCard from "@/components/LaunchCard";
 import Seo from "@/components/Seo";
 import { supabase } from "@/integrations/supabase/client";
+import { LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
 import { Coins, Clock, Shield, ArrowDown } from "lucide-react";
 
 const Index = () => {
@@ -12,7 +13,7 @@ const Index = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("launches")
-        .select("*")
+        .select(LAUNCH_PUBLIC_COLUMNS)
         .eq("status", "scheduled")
         .gte("launch_datetime", new Date().toISOString())
         .order("launch_datetime", { ascending: true });
@@ -26,7 +27,7 @@ const Index = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("launches")
-        .select("*")
+        .select(LAUNCH_PUBLIC_COLUMNS)
         .eq("status", "launched")
         .order("launch_datetime", { ascending: false })
         .limit(6);
