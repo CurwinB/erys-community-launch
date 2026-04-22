@@ -122,6 +122,8 @@ export type Database = {
           total_tokens_distributed: number | null
           twitter_url: string | null
           website_url: string | null
+          worker_id: string | null
+          worker_locked_at: string | null
         }
         Insert: {
           claimer_count?: number | null
@@ -156,6 +158,8 @@ export type Database = {
           total_tokens_distributed?: number | null
           twitter_url?: string | null
           website_url?: string | null
+          worker_id?: string | null
+          worker_locked_at?: string | null
         }
         Update: {
           claimer_count?: number | null
@@ -190,6 +194,8 @@ export type Database = {
           total_tokens_distributed?: number | null
           twitter_url?: string | null
           website_url?: string | null
+          worker_id?: string | null
+          worker_locked_at?: string | null
         }
         Relationships: []
       }
@@ -219,6 +225,145 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      claim_executing_launch_for_worker: {
+        Args: { p_lock_expiry_seconds?: number; p_worker_id: string }
+        Returns: {
+          claimer_count: number | null
+          created_at: string
+          created_by_wallet: string
+          description: string | null
+          distribution_completed: boolean | null
+          distribution_completed_at: string | null
+          escrow_wallet_encrypted_private_key: string
+          escrow_wallet_public_key: string
+          excluded_contributors: number | null
+          execution_attempts: number
+          execution_error: string | null
+          fee_share_config_key: string | null
+          id: string
+          image_url: string | null
+          ipfs_metadata_url: string | null
+          launch_datetime: string
+          max_contribution_lamports: number | null
+          min_contribution_lamports: number
+          platform: string
+          pumpfun_creator_fees_distributed: number | null
+          pumpfun_fees_claimed_total: number | null
+          pumpfun_fees_last_claimed_at: string | null
+          pumpfun_launch_signature: string | null
+          pumpfun_mint_keypair_encrypted: string | null
+          status: Database["public"]["Enums"]["launch_status"]
+          telegram_url: string | null
+          token_mint_address: string | null
+          token_name: string
+          token_symbol: string
+          total_tokens_distributed: number | null
+          twitter_url: string | null
+          website_url: string | null
+          worker_id: string | null
+          worker_locked_at: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "launches"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      claim_launch_for_worker: {
+        Args: {
+          p_lock_expiry_seconds?: number
+          p_status: string
+          p_worker_id: string
+        }
+        Returns: {
+          claimer_count: number | null
+          created_at: string
+          created_by_wallet: string
+          description: string | null
+          distribution_completed: boolean | null
+          distribution_completed_at: string | null
+          escrow_wallet_encrypted_private_key: string
+          escrow_wallet_public_key: string
+          excluded_contributors: number | null
+          execution_attempts: number
+          execution_error: string | null
+          fee_share_config_key: string | null
+          id: string
+          image_url: string | null
+          ipfs_metadata_url: string | null
+          launch_datetime: string
+          max_contribution_lamports: number | null
+          min_contribution_lamports: number
+          platform: string
+          pumpfun_creator_fees_distributed: number | null
+          pumpfun_fees_claimed_total: number | null
+          pumpfun_fees_last_claimed_at: string | null
+          pumpfun_launch_signature: string | null
+          pumpfun_mint_keypair_encrypted: string | null
+          status: Database["public"]["Enums"]["launch_status"]
+          telegram_url: string | null
+          token_mint_address: string | null
+          token_name: string
+          token_symbol: string
+          total_tokens_distributed: number | null
+          twitter_url: string | null
+          website_url: string | null
+          worker_id: string | null
+          worker_locked_at: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "launches"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      claim_pumpfun_launch_for_worker: {
+        Args: { p_lock_expiry_seconds?: number; p_worker_id: string }
+        Returns: {
+          claimer_count: number | null
+          created_at: string
+          created_by_wallet: string
+          description: string | null
+          distribution_completed: boolean | null
+          distribution_completed_at: string | null
+          escrow_wallet_encrypted_private_key: string
+          escrow_wallet_public_key: string
+          excluded_contributors: number | null
+          execution_attempts: number
+          execution_error: string | null
+          fee_share_config_key: string | null
+          id: string
+          image_url: string | null
+          ipfs_metadata_url: string | null
+          launch_datetime: string
+          max_contribution_lamports: number | null
+          min_contribution_lamports: number
+          platform: string
+          pumpfun_creator_fees_distributed: number | null
+          pumpfun_fees_claimed_total: number | null
+          pumpfun_fees_last_claimed_at: string | null
+          pumpfun_launch_signature: string | null
+          pumpfun_mint_keypair_encrypted: string | null
+          status: Database["public"]["Enums"]["launch_status"]
+          telegram_url: string | null
+          token_mint_address: string | null
+          token_name: string
+          token_symbol: string
+          total_tokens_distributed: number | null
+          twitter_url: string | null
+          website_url: string | null
+          worker_id: string | null
+          worker_locked_at: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "launches"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       increment_pumpfun_fees_claimed: {
         Args: { amount: number; launch_id: string }
         Returns: undefined
