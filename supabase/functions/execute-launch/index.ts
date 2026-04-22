@@ -267,140 +267,44 @@ Deno.serve(async (req) => {
     }
     console.log(`Gas reserve: ATA ${ataReserve}, LUT ${lookupTableReserve}, Base fees ${BASE_TX_FEES}. Net buy: ${netBuyLamports}`);
 
-    // STEP 1: fee-share/config — MUST be first
-    const feeShareRes = await fetch(`${BAGS_API_BASE}/fee-share/config`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": BAGS_API_KEY,
-      },
-      body: JSON.stringify({
-        payer: launch.escrow_wallet_public_key,
-        baseMint: launch.token_mint_address,
-        claimersArray,
-        basisPointsArray,
-        partner: BAGS_PARTNER_WALLET,
-        partnerConfig: BAGS_PARTNER_CONFIG,
-      }),
-    });
-
-    if (!feeShareRes.ok) {
-      const errText = await feeShareRes.text();
-      await setFailed(supabase, launch.id, `fee-share/config failed: ${errText}`);
-      return errorResponse(`fee-share/config failed: ${errText}`);
-    }
-
-    const feeShareData = await feeShareRes.json();
-    const configKey = feeShareData.response?.meteoraConfigKey;
-
-    if (!configKey) {
-      await setFailed(supabase, launch.id, "fee-share/config returned no configKey");
-      return errorResponse("No configKey returned");
-    }
-
-    // Submit all fee-share transactions returned by Bags before launch tx.
-    // With >15 claimers, Bags returns multiple txs (lookup tables, etc.)
-    const feeShareTransactions = feeShareData.response?.transactions || [];
-    console.log(`fee-share/config returned ${feeShareTransactions.length} transactions`);
-
-    // Reconstruct escrow keypair once for signing all txs (escrowPrivateKey is hex of 64-byte secret)
+    // Reconstruct escrow keypair once for signing all txs (escrowPrivateKey
+    // is hex of 64-byte secret).
     const escrowKeypair = Keypair.fromSecretKey(hexToUint8Array(escrowPrivateKey));
 
-    for (let i = 0; i < feeShareTransactions.length; i++) {
-      const txObj = feeShareTransactions[i];
-      const signedTxBase58 = signWithKeypair(txObj.transaction, escrowKeypair);
-      const sendRes = await fetch(`${BAGS_API_BASE}/solana/send-transaction`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": BAGS_API_KEY },
-        body: JSON.stringify({ transaction: signedTxBase58 }),
-      });
-      if (!sendRes.ok) {
-        const errText = await sendRes.text();
-        await setFailed(supabase, launch.id, `fee-share tx ${i + 1}/${feeShareTransactions.length} failed: ${errText}`);
-        return errorResponse(`fee-share transaction failed: ${errText}`);
-      }
-      const sendData = await sendRes.json();
-      const feeShareSig = sendData.response ?? sendData.signature;
-      console.log(`fee-share tx ${i + 1}/${feeShareTransactions.length} confirmed: ${feeShareSig}`);
-      await new Promise((r) => setTimeout(r, 500));
-    }
-
-    // Store configKey
-    await supabase
-      .from("launches")
-      .update({
-        fee_share_config_key: configKey,
-        claimer_count: claimersArray.length,
-        excluded_contributors: excludedCount,
-      })
-      .eq("id", launch.id);
-
-    // STEP 2: create-launch-transaction (using netBuyLamports, not allContribTotal)
-    if (!launch.ipfs_metadata_url || !launch.token_mint_address) {
-      await setFailed(supabase, launch.id, "Missing ipfs_metadata_url or token_mint_address — cannot build launch transaction");
-      return errorResponse("Launch is missing IPFS URI or token mint");
-    }
-
-    const createTxRes = await fetch(`${BAGS_API_BASE}/token-launch/create-launch-transaction`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": BAGS_API_KEY,
-      },
-      body: JSON.stringify({
-        ipfs: launch.ipfs_metadata_url,
-        tokenMint: launch.token_mint_address,
-        wallet: launch.escrow_wallet_public_key,
-        initialBuyLamports: Number(netBuyLamports),
-        configKey,
-      }),
+    // ALL Bags API + signing + send work runs in a background task so this
+    // handler returns within the edge function CPU budget. Production logs
+    // showed status 546 "CPU Time exceeded" at 4–6s when this ran inline.
+    // The launch row stays at status='executing' until the background task
+    // flips it to 'launched' or 'execution_failed'. The stale-recovery cron
+    // resets stuck rows after 10 minutes.
+    const bagsWork = runBagsLaunchInBackground({
+      launch,
+      supabase,
+      BAGS_API_KEY,
+      BAGS_PARTNER_WALLET,
+      BAGS_PARTNER_CONFIG,
+      claimersArray,
+      basisPointsArray,
+      excludedCount,
+      netBuyLamports,
+      escrowKeypair,
     });
 
-    if (!createTxRes.ok) {
-      const errText = await createTxRes.text();
-      await setFailed(supabase, launch.id, `create-launch-transaction failed: ${errText}`);
-      return errorResponse(`create-launch-transaction failed: ${errText}`);
+    // Fire-and-forget: keep the worker alive until the promise resolves but
+    // do not await it before responding.
+    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
+      EdgeRuntime.waitUntil(bagsWork);
+    } else {
+      // Local/dev fallback: still detach so the response isn't blocked.
+      bagsWork.catch((e) => console.error("Background bagsWork rejected:", e));
     }
-
-    const createTxData = await createTxRes.json();
-    const transaction = createTxData.response;
-
-    if (!transaction || typeof transaction !== "string") {
-      await setFailed(supabase, launch.id, "create-launch-transaction returned no transaction string");
-      return errorResponse("create-launch-transaction returned no transaction");
-    }
-
-    // STEP 3: send-transaction
-    const signedLaunchTx = signWithKeypair(transaction, escrowKeypair);
-    const sendTxRes = await fetch(`${BAGS_API_BASE}/solana/send-transaction`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": BAGS_API_KEY,
-      },
-      body: JSON.stringify({ transaction: signedLaunchTx }),
-    });
-
-    if (!sendTxRes.ok) {
-      const errText = await sendTxRes.text();
-      await setFailed(supabase, launch.id, `send-transaction failed: ${errText}`);
-      return errorResponse(`send-transaction failed: ${errText}`);
-    }
-
-    const sendTxData = await sendTxRes.json();
-
-    await supabase
-      .from("launches")
-      .update({ status: "launched" })
-      .eq("id", launch.id);
-
 
     return new Response(
       JSON.stringify({
         success: true,
         launchId: launch.id,
-        txSignature: sendTxData.response ?? sendTxData.signature ?? sendTxData.txSignature,
-        configKey,
+        status: "executing",
+        message: "Launch execution started in background",
         claimerCount: claimersArray.length,
         excludedContributors: excludedCount,
       }),
