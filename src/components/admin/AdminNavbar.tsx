@@ -1,12 +1,15 @@
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
+import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 
 const AdminNavbar = () => {
   const navigate = useNavigate();
+  const { handleLogOut } = useDynamicContext();
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     sessionStorage.removeItem("admin_authenticated");
+    try { await handleLogOut(); } catch { /* ignore */ }
     navigate("/");
   };
 
