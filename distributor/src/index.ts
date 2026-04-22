@@ -78,11 +78,11 @@ async function main(): Promise<void> {
   await pollAndDistribute();
   setInterval(pollAndDistribute, POLL_INTERVAL_MS);
 
-  // Pump.fun creator fee claiming runs every 6 hours
-  // But individual launches are only claimed if 24 hours have passed since last claim
-  const PUMPFUN_CLAIM_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+  // Pump.fun creator fee claiming runs every 10 minutes
+  // Individual launches are only claimed if 10 minutes have passed since last claim
+  const PUMPFUN_CLAIM_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 
-  console.log("Pump.fun fee claiming enabled. Checking every 6 hours.");
+  console.log("Pump.fun fee claiming enabled. Checking every 10 minutes.");
 
   // Run immediately on startup then on interval
   await runClaimIfIdle();
