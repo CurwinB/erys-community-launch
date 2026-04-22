@@ -105,6 +105,7 @@ export type Database = {
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
+          is_sponsored: boolean | null
           launch_datetime: string
           max_contribution_lamports: number | null
           min_contribution_lamports: number
@@ -114,6 +115,12 @@ export type Database = {
           pumpfun_fees_last_claimed_at: string | null
           pumpfun_launch_signature: string | null
           pumpfun_mint_keypair_encrypted: string | null
+          sponsor_link_claimed_at: string | null
+          sponsor_link_expires_at: string | null
+          sponsor_link_token: string | null
+          sponsored_amount_lamports: number | null
+          sponsored_by: string | null
+          sponsored_tx_signature: string | null
           status: Database["public"]["Enums"]["launch_status"]
           telegram_url: string | null
           token_mint_address: string | null
@@ -141,6 +148,7 @@ export type Database = {
           id?: string
           image_url?: string | null
           ipfs_metadata_url?: string | null
+          is_sponsored?: boolean | null
           launch_datetime: string
           max_contribution_lamports?: number | null
           min_contribution_lamports: number
@@ -150,6 +158,12 @@ export type Database = {
           pumpfun_fees_last_claimed_at?: string | null
           pumpfun_launch_signature?: string | null
           pumpfun_mint_keypair_encrypted?: string | null
+          sponsor_link_claimed_at?: string | null
+          sponsor_link_expires_at?: string | null
+          sponsor_link_token?: string | null
+          sponsored_amount_lamports?: number | null
+          sponsored_by?: string | null
+          sponsored_tx_signature?: string | null
           status?: Database["public"]["Enums"]["launch_status"]
           telegram_url?: string | null
           token_mint_address?: string | null
@@ -177,6 +191,7 @@ export type Database = {
           id?: string
           image_url?: string | null
           ipfs_metadata_url?: string | null
+          is_sponsored?: boolean | null
           launch_datetime?: string
           max_contribution_lamports?: number | null
           min_contribution_lamports?: number
@@ -186,6 +201,12 @@ export type Database = {
           pumpfun_fees_last_claimed_at?: string | null
           pumpfun_launch_signature?: string | null
           pumpfun_mint_keypair_encrypted?: string | null
+          sponsor_link_claimed_at?: string | null
+          sponsor_link_expires_at?: string | null
+          sponsor_link_token?: string | null
+          sponsored_amount_lamports?: number | null
+          sponsored_by?: string | null
+          sponsored_tx_signature?: string | null
           status?: Database["public"]["Enums"]["launch_status"]
           telegram_url?: string | null
           token_mint_address?: string | null
@@ -243,6 +264,7 @@ export type Database = {
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
+          is_sponsored: boolean | null
           launch_datetime: string
           max_contribution_lamports: number | null
           min_contribution_lamports: number
@@ -252,6 +274,12 @@ export type Database = {
           pumpfun_fees_last_claimed_at: string | null
           pumpfun_launch_signature: string | null
           pumpfun_mint_keypair_encrypted: string | null
+          sponsor_link_claimed_at: string | null
+          sponsor_link_expires_at: string | null
+          sponsor_link_token: string | null
+          sponsored_amount_lamports: number | null
+          sponsored_by: string | null
+          sponsored_tx_signature: string | null
           status: Database["public"]["Enums"]["launch_status"]
           telegram_url: string | null
           token_mint_address: string | null
@@ -292,6 +320,7 @@ export type Database = {
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
+          is_sponsored: boolean | null
           launch_datetime: string
           max_contribution_lamports: number | null
           min_contribution_lamports: number
@@ -301,6 +330,12 @@ export type Database = {
           pumpfun_fees_last_claimed_at: string | null
           pumpfun_launch_signature: string | null
           pumpfun_mint_keypair_encrypted: string | null
+          sponsor_link_claimed_at: string | null
+          sponsor_link_expires_at: string | null
+          sponsor_link_token: string | null
+          sponsored_amount_lamports: number | null
+          sponsored_by: string | null
+          sponsored_tx_signature: string | null
           status: Database["public"]["Enums"]["launch_status"]
           telegram_url: string | null
           token_mint_address: string | null
@@ -337,6 +372,7 @@ export type Database = {
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
+          is_sponsored: boolean | null
           launch_datetime: string
           max_contribution_lamports: number | null
           min_contribution_lamports: number
@@ -346,6 +382,12 @@ export type Database = {
           pumpfun_fees_last_claimed_at: string | null
           pumpfun_launch_signature: string | null
           pumpfun_mint_keypair_encrypted: string | null
+          sponsor_link_claimed_at: string | null
+          sponsor_link_expires_at: string | null
+          sponsor_link_token: string | null
+          sponsored_amount_lamports: number | null
+          sponsored_by: string | null
+          sponsored_tx_signature: string | null
           status: Database["public"]["Enums"]["launch_status"]
           telegram_url: string | null
           token_mint_address: string | null
@@ -364,6 +406,18 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      get_sponsor_slot_by_token: {
+        Args: { p_token: string }
+        Returns: {
+          id: string
+          launch_datetime: string
+          sponsor_link_expires_at: string
+          sponsored_amount_lamports: number
+          status: string
+          token_name: string
+          token_symbol: string
+        }[]
+      }
       increment_pumpfun_fees_claimed: {
         Args: { amount: number; launch_id: string }
         Returns: undefined
@@ -377,6 +431,7 @@ export type Database = {
         | "launched"
         | "execution_failed"
         | "cancelled"
+        | "sponsor_pending"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -510,6 +565,7 @@ export const Constants = {
         "launched",
         "execution_failed",
         "cancelled",
+        "sponsor_pending",
       ],
     },
   },
