@@ -1,0 +1,1 @@
+ALTER TYPE public.launch_status ADD VALUE IF NOT EXISTS 'sponsor_pending';
