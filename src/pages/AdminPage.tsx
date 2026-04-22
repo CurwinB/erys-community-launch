@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -11,19 +10,16 @@ import ContributorsTab from "@/components/admin/ContributorsTab";
 import PlatformRevenueTab from "@/components/admin/PlatformRevenueTab";
 import RefundsTab from "@/components/admin/RefundsTab";
 import { lamportsToSol } from "@/lib/adminFormat";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
 
 const ACTIVE_STATUSES = new Set(["scheduled", "executing"]);
 
 const AdminPage = () => {
-  const [authed, setAuthed] = useState(false);
-
-  useEffect(() => {
-    setAuthed(sessionStorage.getItem("admin_authenticated") === "true");
-  }, []);
+  const { isAdmin } = useIsAdmin();
 
   const { data, isLoading } = useQuery({
     queryKey: ["admin-dashboard"],
-    enabled: authed,
+    enabled: isAdmin,
     queryFn: async () => {
       const [launchesRes, contributionsRes, claimsRes] = await Promise.all([
         supabase
@@ -55,11 +51,11 @@ const AdminPage = () => {
     },
   });
 
-  if (!authed) {
+  if (!isAdmin) {
     return (
       <>
         <Seo title="Admin · erys" description="Admin dashboard" />
-        <AdminGate onAuthenticated={() => setAuthed(true)} />
+        <AdminGate onAuthenticated={() => { /* hook re-renders automatically */ }} />
       </>
     );
   }
