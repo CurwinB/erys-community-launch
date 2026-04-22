@@ -14,6 +14,24 @@ export type Database = {
   }
   public: {
     Tables: {
+      admin_wallets: {
+        Row: {
+          added_at: string
+          email: string | null
+          wallet_address: string
+        }
+        Insert: {
+          added_at?: string
+          email?: string | null
+          wallet_address: string
+        }
+        Update: {
+          added_at?: string
+          email?: string | null
+          wallet_address?: string
+        }
+        Relationships: []
+      }
       contributions: {
         Row: {
           amount_lamports: number
