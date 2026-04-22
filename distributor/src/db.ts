@@ -109,7 +109,7 @@ export async function markLaunchDistributionComplete(
 // Find Pump.fun launches ready for fee claiming
 // Claim when: 24 hours have passed since last claim OR never been claimed
 export async function getPumpfunLaunchesForFeeClaim(): Promise<Launch[]> {
-  const cutoff24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const cutoff10min = new Date(Date.now() - 10 * 60 * 1000).toISOString();
 
   const { data, error } = await supabase
     .from("launches")
@@ -117,7 +117,7 @@ export async function getPumpfunLaunchesForFeeClaim(): Promise<Launch[]> {
     .eq("status", "launched")
     .eq("platform", "pumpfun")
     .or(
-      `pumpfun_fees_last_claimed_at.is.null,pumpfun_fees_last_claimed_at.lte.${cutoff24h}`
+      `pumpfun_fees_last_claimed_at.is.null,pumpfun_fees_last_claimed_at.lte.${cutoff10min}`
     )
     .order("created_at", { ascending: true })
     .limit(10);
