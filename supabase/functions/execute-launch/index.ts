@@ -85,12 +85,11 @@ Deno.serve(async (req) => {
       const excludedIds = contributions.slice(100).map((c: any) => c.id);
       excludedCount = excludedIds.length;
 
-      for (const id of excludedIds) {
-        await supabase
-          .from("contributions")
-          .update({ is_fee_claimer: false })
-          .eq("id", id);
-      }
+      // Bulk update: single round-trip instead of N queries
+      await supabase
+        .from("contributions")
+        .update({ is_fee_claimer: false })
+        .in("id", excludedIds);
     }
 
     // Calculate basis points with creator minimum guarantee
