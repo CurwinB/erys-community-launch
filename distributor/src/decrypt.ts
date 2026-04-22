@@ -17,5 +17,11 @@ export function decryptEscrowKey(encryptedData: string): Buffer {
 
   const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAuthTag(authTag);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  // The plaintext is the hex-encoded representation of the 64-byte Solana
+  // secret key (see create-launch / create-launch-pumpfun edge functions which
+  // call uint8ArrayToHex(secretKey) before encrypting). Decode that hex string
+  // back into the raw 64 bytes that Keypair.fromSecretKey expects.
+  const decryptedBuf = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  const hexString = decryptedBuf.toString("utf8");
+  return Buffer.from(hexString, "hex");
 }
