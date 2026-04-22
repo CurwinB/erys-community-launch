@@ -62,17 +62,19 @@ const SchedulePage = () => {
 
     try {
       const launchDatetimeLocal = new Date(`${form.launchDate}T${form.launchTime}`);
-      const diffHours = (launchDatetimeLocal.getTime() - Date.now()) / 3_600_000;
-      if (diffHours < 1) {
+      const diffMinutes = (launchDatetimeLocal.getTime() - Date.now()) / 60_000;
+      // Minimum 10 minutes so the contribution window (which closes 5 min
+      // before launch) leaves at least 5 minutes for a contribution.
+      if (diffMinutes < 10) {
         toast({
           title: "Launch time too soon",
-          description: "Launch must be scheduled at least 1 hour from now.",
+          description: "Launch must be scheduled at least 10 minutes from now (contributions close 5 min before launch).",
           variant: "destructive",
         });
         setIsSubmitting(false);
         return;
       }
-      if (diffHours > 72) {
+      if (diffMinutes > 72 * 60) {
         toast({
           title: "Launch time too far",
           description: "Launch must be scheduled within 72 hours from now.",
