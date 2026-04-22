@@ -1,43 +1,29 @@
-import { useState, FormEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Lock } from "lucide-react";
+import { Lock, Loader2 } from "lucide-react";
+import { DynamicWidget, useDynamicContext } from "@dynamic-labs/sdk-react-core";
+import { useWallet } from "@/hooks/useWallet";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
+import { useEffect } from "react";
 
-// NOTE: VITE_* env vars are bundled into the client JS. Anyone who downloads
-// the JS can extract this password. This is intentional for an internal-only
-// gate — do NOT treat as real authentication.
 interface Props {
   onAuthenticated: () => void;
 }
 
 const AdminGate = ({ onAuthenticated }: Props) => {
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const { ready, connected, publicKey } = useWallet();
+  const { isAdmin, isLoading } = useIsAdmin();
+  const { handleLogOut } = useDynamicContext();
 
-  const expected = import.meta.env.VITE_ADMIN_PASSWORD as string | undefined;
-
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    if (!expected) {
-      setError("Admin password not configured (VITE_ADMIN_PASSWORD missing)");
-      return;
-    }
-    if (password === expected) {
+  useEffect(() => {
+    if (isAdmin) {
       sessionStorage.setItem("admin_authenticated", "true");
-      setError("");
       onAuthenticated();
-    } else {
-      setError("Incorrect password");
-      setPassword("");
     }
-  };
+  }, [isAdmin, onAuthenticated]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
-      <form
-        onSubmit={handleSubmit}
-        className="w-full max-w-sm bg-card border border-border p-8 rounded-none"
-      >
+      <div className="w-full max-w-sm bg-card border border-border p-8 rounded-none">
         <div className="flex items-center gap-3 mb-6">
           <div className="h-10 w-10 flex items-center justify-center bg-destructive/10 border border-destructive/30 rounded-none">
             <Lock className="h-5 w-5 text-destructive" />
@@ -52,24 +38,46 @@ const AdminGate = ({ onAuthenticated }: Props) => {
           </div>
         </div>
 
-        <label className="block text-xs font-mono uppercase tracking-wider text-muted-foreground mb-2">
-          Password
-        </label>
-        <Input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoFocus
-          className="rounded-none font-mono mb-3"
-          placeholder="••••••••"
-        />
-        {error && (
-          <p className="text-sm text-destructive font-mono mb-3">{error}</p>
+        {!ready ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground font-mono">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading wallet…
+          </div>
+        ) : !connected ? (
+          <>
+            <p className="text-sm text-muted-foreground font-mono mb-4">
+              Connect your admin wallet to continue.
+            </p>
+            <DynamicWidget />
+          </>
+        ) : isLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground font-mono">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Verifying access…
+          </div>
+        ) : !isAdmin ? (
+          <>
+            <p className="text-sm text-destructive font-mono mb-2">
+              This wallet does not have admin access.
+            </p>
+            <p className="text-xs font-mono text-muted-foreground mb-4 break-all">
+              {publicKey}
+            </p>
+            <Button
+              variant="outline"
+              className="w-full rounded-none"
+              onClick={() => handleLogOut()}
+            >
+              Disconnect & try another wallet
+            </Button>
+          </>
+        ) : (
+          <div className="flex items-center gap-2 text-sm text-primary font-mono">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Unlocking dashboard…
+          </div>
         )}
-        <Button type="submit" className="w-full rounded-none">
-          Unlock Dashboard
-        </Button>
-      </form>
+      </div>
     </div>
   );
 };
