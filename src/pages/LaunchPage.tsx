@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import CountdownTimer from "@/components/CountdownTimer";
 import Seo from "@/components/Seo";
-import { formatSol, solToLamports } from "@/lib/constants";
+import { formatSol, solToLamports, LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
 import { Wallet, Loader2, ExternalLink } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useWallet } from "@/hooks/useWallet";
@@ -29,7 +29,7 @@ const LaunchPage = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("launches")
-        .select("*")
+        .select(LAUNCH_PUBLIC_COLUMNS)
         .eq("id", id!)
         .single();
       if (error) throw error;

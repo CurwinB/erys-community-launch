@@ -12,6 +12,7 @@ import RefundsTab from "@/components/admin/RefundsTab";
 import RecoveryTab from "@/components/admin/RecoveryTab";
 import AccountingTab from "@/components/admin/AccountingTab";
 import { lamportsToSol } from "@/lib/adminFormat";
+import { LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
 
 const ACTIVE_STATUSES = new Set(["scheduled", "executing"]);
@@ -26,7 +27,7 @@ const AdminPage = () => {
       const [launchesRes, contributionsRes, claimsRes] = await Promise.all([
         supabase
           .from("launches")
-          .select("*")
+          .select(LAUNCH_PUBLIC_COLUMNS)
           .order("launch_datetime", { ascending: false })
           .limit(1000),
         supabase
