@@ -175,40 +175,58 @@ Deno.serve(async (req) => {
       return errorResponse("Basis points calculation failed");
     }
 
-    // Update each contribution with basis_points
-    for (let i = 0; i < filtered.length; i++) {
-      await supabase
-        .from("contributions")
-        .update({ basis_points: basisPoints[i], is_fee_claimer: true })
-        .eq("id", filtered[i].contribution.id);
-    }
-
     // Pre-calculate proportional token amounts for Railway distributor
     const totalLamportsForTokenCalc = filtered.reduce(
       (sum: bigint, f) => sum + BigInt(f.contribution.amount_lamports),
       0n
     );
 
+    // Bulk update fee-claimer rows in a single round-trip per group.
+    // Group by (basis_points, token_amount) so we issue one UPDATE per group
+    // using `.in("id", ...)` instead of N separate UPDATEs. In practice this
+    // is at most ~100 rows split across ~100 distinct values, but even the
+    // worst case is dramatically faster (no per-row network RTT) than the
+    // previous serial loops which were the main CPU/wall-time hog.
+    const updateGroups = new Map<string, { ids: string[]; basis_points: number; token_amount: number }>();
     for (let i = 0; i < filtered.length; i++) {
       const proportionalBps = Math.floor(
         (Number(BigInt(filtered[i].contribution.amount_lamports)) / Number(totalLamportsForTokenCalc)) * 10000
       );
+      const key = `${basisPoints[i]}:${proportionalBps}`;
+      const existing = updateGroups.get(key);
+      if (existing) {
+        existing.ids.push(filtered[i].contribution.id);
+      } else {
+        updateGroups.set(key, {
+          ids: [filtered[i].contribution.id],
+          basis_points: basisPoints[i],
+          token_amount: proportionalBps,
+        });
+      }
+    }
+    for (const group of updateGroups.values()) {
       await supabase
         .from("contributions")
-        .update({ token_amount: proportionalBps })
-        .eq("id", filtered[i].contribution.id);
+        .update({
+          basis_points: group.basis_points,
+          token_amount: group.token_amount,
+          is_fee_claimer: true,
+        })
+        .in("id", group.ids);
     }
 
-    // Mark any filtered-out (0 BP) contributors from activeClaims
+    // Mark any filtered-out (0 BP) contributors from activeClaims in a single
+    // bulk update instead of one query per row.
     const filteredIds = new Set(filtered.map((f) => f.contribution.id));
-    for (const c of activeClaims) {
-      if (!filteredIds.has(c.id)) {
-        await supabase
-          .from("contributions")
-          .update({ is_fee_claimer: false, basis_points: 0 })
-          .eq("id", c.id);
-        excludedCount++;
-      }
+    const zeroBpIds = activeClaims
+      .filter((c: any) => !filteredIds.has(c.id))
+      .map((c: any) => c.id);
+    if (zeroBpIds.length > 0) {
+      await supabase
+        .from("contributions")
+        .update({ is_fee_claimer: false, basis_points: 0 })
+        .in("id", zeroBpIds);
+      excludedCount += zeroBpIds.length;
     }
 
     const claimersArray = filtered.map((f) => f.contribution.wallet_address);
