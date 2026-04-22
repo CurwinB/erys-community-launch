@@ -23,6 +23,8 @@ export interface Launch {
   platform: string;
   pumpfun_fees_last_claimed_at: string | null;
   pumpfun_fees_claimed_total: number;
+  worker_locked_at: string | null;
+  worker_id: string | null;
 }
 
 export interface Contribution {
@@ -37,6 +39,7 @@ export interface Contribution {
   basis_points: number | null;
 }
 
+/** @deprecated Use claimNextDistribution for atomic worker-safe claiming. */
 export async function getPendingDistributions(): Promise<Launch[]> {
   const { data, error } = await supabase
     .from("launches")
@@ -51,6 +54,49 @@ export async function getPendingDistributions(): Promise<Launch[]> {
     return [];
   }
   return (data as Launch[]) || [];
+}
+
+// Atomically claim the next launch needing distribution for this worker.
+// Uses Postgres FOR UPDATE SKIP LOCKED via SQL function so multiple
+// distributor replicas can run safely in parallel without ever picking up
+// the same launch.
+export async function claimNextDistribution(workerId: string): Promise<Launch | null> {
+  const { data, error } = await supabase.rpc("claim_launch_for_worker", {
+    p_worker_id: workerId,
+    p_status: "launched",
+    p_lock_expiry_seconds: 300,
+  });
+
+  if (error) {
+    console.error("Error claiming launch for worker:", error.message);
+    return null;
+  }
+  return (data?.[0] as Launch) || null;
+}
+
+// Atomically claim the next Pump.fun launch needing a fee claim for this worker.
+export async function claimNextPumpfunFeeClaim(workerId: string): Promise<Launch | null> {
+  const { data, error } = await supabase.rpc("claim_pumpfun_launch_for_worker", {
+    p_worker_id: workerId,
+    p_lock_expiry_seconds: 300,
+  });
+
+  if (error) {
+    console.error("Error claiming Pump.fun launch for worker:", error.message);
+    return null;
+  }
+  return (data?.[0] as Launch) || null;
+}
+
+// Release a worker lock. Always called in a finally so crashed workers don't
+// hold rows hostage; the SQL claim functions also self-heal locks older than
+// the expiry window as a backstop.
+export async function releaseLaunchLock(launchId: string): Promise<void> {
+  const { error } = await supabase
+    .from("launches")
+    .update({ worker_locked_at: null, worker_id: null })
+    .eq("id", launchId);
+  if (error) console.error(`Error releasing lock for launch ${launchId}:`, error.message);
 }
 
 export async function getPendingContributions(launchId: string): Promise<Contribution[]> {
@@ -107,7 +153,8 @@ export async function markLaunchDistributionComplete(
 }
 
 // Find Pump.fun launches ready for fee claiming
-// Claim when: 24 hours have passed since last claim OR never been claimed
+// Claim when: 10 minutes have passed since last claim OR never been claimed
+/** @deprecated Use claimNextPumpfunFeeClaim for atomic worker-safe claiming. */
 export async function getPumpfunLaunchesForFeeClaim(): Promise<Launch[]> {
   const cutoff10min = new Date(Date.now() - 10 * 60 * 1000).toISOString();
 

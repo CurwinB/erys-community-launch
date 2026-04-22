@@ -19,6 +19,7 @@ import {
   markDistributed,
   markDistributionFailed,
   markLaunchDistributionComplete,
+  releaseLaunchLock,
   supabase,
 } from "./db";
 
@@ -154,6 +155,7 @@ async function sendTokensToContributor(
 export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
   console.log(`\nStarting distribution for launch ${launch.id} (${launch.token_name})`);
 
+  try {
   const connection = new Connection(SOLANA_RPC_URL, "confirmed");
 
   let escrowKeypair: Keypair;
