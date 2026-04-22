@@ -1,120 +1,68 @@
 
 
-# Admin Dashboard at /admin — Password-Gated Accounting View
+# Status: NOT READY for testing. Two critical, fund-loss bugs.
 
-A read-only QuickBooks-style admin view over the existing database. No edge functions, no schema changes, no on-chain reads. Single-password gate via env var.
+If you launch a token right now, **users will not get their tokens** and the launch will get stuck. Both issues must be fixed before any real-money test.
 
-## Files
+## Critical Issue 1 — Distributor cannot decrypt escrow keys (token distribution will fail 100% of the time)
 
-**New**
-- `src/pages/AdminPage.tsx` — gate + dashboard shell + 4 tabs
-- `src/components/admin/AdminGate.tsx` — password form
-- `src/components/admin/AdminNavbar.tsx` — top bar with logo, red "Admin" badge, logout
-- `src/components/admin/MetricCards.tsx` — 4 summary cards
-- `src/components/admin/LaunchesTab.tsx` — launches ledger + expandable rows
-- `src/components/admin/ContributorsTab.tsx` — contributor activity + filters
-- `src/components/admin/PlatformRevenueTab.tsx` — Bags + Pump.fun revenue
-- `src/components/admin/RefundsTab.tsx` — refunded contributions
-- `src/utils/exportCsv.ts` — CSV download helper
-- `src/lib/adminFormat.ts` — shared SOL/lamport/percent/wallet-truncation formatters
+**Where:** `distributor/src/distribute.ts:161-162` and `distributor/src/claimPumpfunFees.ts:22-23`
 
-**Edited**
-- `src/App.tsx` — add `<Route path="/admin" element={<AdminPage />} />`
-- `.env` — add `VITE_ADMIN_PASSWORD=` placeholder (user sets the value)
+**The mismatch:**
 
-## Step 1 — Password gate
+- `create-launch/index.ts` and `create-launch-pumpfun/index.ts` encrypt **the hex string** of the secret key:
+  ```ts
+  encryptKey(uint8ArrayToHex(secretKey), ESCROW_ENCRYPTION_KEY)
+  ```
+  → ciphertext plaintext is **128 ASCII hex chars** (a string).
 
-`AdminPage` checks `sessionStorage.getItem("admin_authenticated") === "true"`. If absent, render `AdminGate`. Gate shows centered card on `#0A0A0A` with logo, single password input, and submit button. On submit, compare against `import.meta.env.VITE_ADMIN_PASSWORD`. If match → set sessionStorage, re-render dashboard. If mismatch → red error text below input, clear input. No auth library, no token, no router redirect — pure conditional render. Logout button in `AdminNavbar` clears sessionStorage and `navigate("/")`.
+- `distributor/src/decrypt.ts` returns the raw decrypted **Buffer** (128 bytes of ASCII hex characters).
 
-**Caveat (must mention):** `VITE_*` env vars are bundled into the client JS. Anyone who downloads the JS can extract the password. This matches the prompt's "internal use only" framing but is not real security. We'll add a one-line warning comment in `AdminGate.tsx` to make this explicit for future maintainers.
+- The distributor then does:
+  ```ts
+  const decrypted = decryptEscrowKey(encrypted);          // 128-byte ASCII hex buffer
+  Keypair.fromSecretKey(new Uint8Array(decrypted));       // throws — needs 64 bytes
+  ```
 
-## Step 2 — Layout
+`Keypair.fromSecretKey` requires exactly 64 bytes. It receives 128. **Every distribution and every Pump.fun fee claim throws immediately and returns without sending tokens.** The launch sits at `status=launched, distribution_completed=false` forever; the contributor never receives tokens.
 
-```text
-┌─────────────────────────────────────────────────┐
-│ Erys logo  [Admin]                    [Logout]  │
-├─────────────────────────────────────────────────┤
-│ [Revenue] [Launches] [Active] [Contributors]    │ ← 4 metric cards
-├─────────────────────────────────────────────────┤
-│ Launches | Contributors | Revenue | Refunds     │ ← tabs
-├─────────────────────────────────────────────────┤
-│              {active tab content}               │
-└─────────────────────────────────────────────────┘
+The Bags edge function works because it parses the decrypted hex string back into bytes (`hexToUint8Array(escrowPrivateKey)`). The Railway distributor never does that conversion.
+
+**Fix:** In `distributor/src/decrypt.ts`, decode the decrypted buffer as a UTF-8 string then hex-decode to bytes — or change `distribute.ts` / `claimPumpfunFees.ts` to do `Buffer.from(decrypted.toString("utf8"), "hex")` before `Keypair.fromSecretKey`.
+
+**Severity: Critical — blocking. This alone means every launch will fail to distribute.**
+
+## Critical Issue 2 — `execute-launch` is timing out with status 546 (CPU Time exceeded)
+
+**Where:** Production logs show every recent invocation:
+
+```
+POST | 546 | execute-launch | execution_time_ms: 4101–5736
+event_message: "CPU Time exceeded"
 ```
 
-Top metrics computed once via a single `useQuery` that fetches `launches` + `contributions` + `platform_fee_claims` aggregates. Reused across tabs via React Query cache.
+Edge functions hit Supabase's CPU budget and crash before the launch transaction completes. Combined with Issue 1, the launch never gets to `launched` status either — it gets stuck in `executing`. The stale-recovery cron we added will flip it to `execution_failed` after 10 min, but it'll just timeout again on retry.
 
-## Step 3 — Launches tab
+Likely cause: the Bags branch makes 4+ sequential API calls (fee-share/config, multiple send-transaction calls for >15 contributors, create-launch-transaction, send-transaction) plus per-row contribution updates inside the same handler. The CPU budget is ~2–4 seconds; we're using 4–6 seconds of wall time and presumably more CPU.
 
-One query: `launches` ordered by `launch_datetime desc` + grouped contributions aggregate per launch. Columns exactly as specified.
+**Fix direction:** Move the Bags execution flow into a background task (`EdgeRuntime.waitUntil` / async pattern) or split into two functions (config + send), and batch the per-contribution DB updates into a single bulk update.
 
-Key calculations (all DB-derived, no on-chain):
-- **SOL In** = `sum(contributions.amount_lamports) / 1e9`
-- **ATA Reserve** = `contributorCount × (2_039_280 + 5_000) / 1e9`
-- **Gas Reserve** = `50_000 / 1e9` (matches execute-launch constant)
-- **Initial Buy** = `SOL In - ATA Reserve - Gas Reserve` (we don't persist `initialBuyLamports`; this is the only computable proxy)
-- **SOL Distributed** = `sum(contributions.token_amount where tokens_distributed=true)` reframed: actually for SOL flow, "distributed" means tokens went out → show `sum(amount_lamports where tokens_distributed=true) / 1e9` as the SOL-equivalent that was honored
-- **Platform Fee**:
-  - Bags: 25% × sum of `platform_fee_claims` rows associated with this launch. **Problem:** `platform_fee_claims` has no `launch_id` column (verified in schema). For Bags we cannot attribute platform fees to a specific launch from the DB alone. Plan: show a single "—" with a tooltip "Platform fees pooled (not per-launch)" for Bags rows, and surface the pooled total only in the Platform Revenue tab.
-  - Pump.fun: `pumpfun_fees_claimed_total × 0.5 / 1e9` ✓ (per-launch, works)
-- **Creator Fee**: same split logic; Bags shows "—", Pump.fun shows `pumpfun_fees_claimed_total × 0.5 / 1e9`
-- **Distribution Complete** = green badge if `distribution_completed`, else amber "Pending"
+**Severity: Critical — blocking. Even with Issue 1 fixed, launches won't complete.**
 
-Each row has a chevron → expands a sub-table of that launch's contributions (wallet, SOL in, basis points, token_amount, tokens_distributed, distribution_tx_signature). CSV export above table downloads parent rows only (not expanded sub-rows).
+## What works
 
-## Step 4 — Contributors tab
+- Contribution flow (on-chain verification + DB insert) — verified clean.
+- Admin dashboard read-only views.
+- Encryption on the create-launch side — keys are written correctly.
+- Distributor's share-calculation, retry-stability logic, concurrency guard, stale-recovery, and confirmation-strategy are all sound. They just never get to run because of Issue 1.
 
-Single query: `contributions` join `launches` (token_name, token_symbol, platform). Columns as spec'd.
+## Recommendation
 
-- **Share %** = `basis_points / 100` formatted `12.34%`
-- **Tokens Received** = `token_amount` if `tokens_distributed`, else "—"
-- **Fee Claimed** = column shown for all rows but value only for Bags; uses `is_fee_claimer`. Pump.fun rows show "N/A" (Pump.fun fees auto-distributed by Railway, no per-contributor claim flag).
+Do not run a real-money launch yet. Fix order:
 
-Filter bar:
-- Platform select (All / Bags / Pump.fun)
-- Status select (All / Distributed / Pending) — driven by `tokens_distributed`
-- Wallet search (case-insensitive substring match, client-side filter on loaded set)
+1. **Fix Issue 1** in `decrypt.ts` (one-line change). Without this, no tokens move, ever.
+2. **Fix Issue 2** by refactoring `execute-launch` to use background tasks for the post-config steps and bulk-update contributions in one query.
+3. Then run a small testnet / mainnet dry run with a single 0.05 SOL contribution from one wallet, confirm tokens land, before opening to real users.
 
-CSV export honors active filters.
-
-## Step 5 — Platform Revenue tab
-
-Two side-by-side cards (stack `<lg`).
-
-**Bags Revenue** (left):
-- Section total at top: `sum(platform_fee_claims.amount_lamports) / 1e9`
-- Table: claimed_at, amount (SOL, 4dp), tx_signature → link `https://solscan.io/tx/{sig}`
-
-**Pump.fun Revenue** (right):
-- Section total at top: `sum(launches.pumpfun_fees_claimed_total × 0.5) / 1e9` for `platform=pumpfun AND pumpfun_fees_claimed_total > 0`
-- Table: token_symbol, launch_datetime, total fees (SOL), Erys share (×0.5), creator share (×0.5), pumpfun_fees_last_claimed_at
-
-Combined total banner above both: `Bags total + Pump.fun Erys total`.
-
-CSV export: combined download with extra `platform` column distinguishing rows.
-
-## Step 6 — Refunds tab
-
-Query: `contributions where refund_tx_signature is not null` joined to `launches`. Columns as spec'd. **Reason column:** schema has no `refund_reason` field — we'll derive: if parent launch `status = 'cancelled'` → "Launch cancelled", else "Other". Acceptable since refunds only occur on cancellation in current flow.
-
-Total SOL refunded at top. CSV export.
-
-## Step 7 — CSV utility
-
-Exact `exportToCsv` implementation from the prompt placed in `src/utils/exportCsv.ts`. Each tab calls it with its current visible rows.
-
-## Step 8 — Styling
-
-All components use existing Tailwind tokens already in `src/index.css` / `tailwind.config.ts`. Sharp corners (`rounded-none`), `bg-[#0A0A0A]`, cards `bg-[#111111]` borders `border-[#1A1A1A]`, accent `text-[#00D4FF]`, success `text-[#00FF88]`, error `text-[#FF4444]`. Platform badges: Bags cyan, Pump.fun green. JetBrains Mono for all numeric cells. SOL formatted to 4dp with `Intl.NumberFormat`. Wallet/tx truncation: `abc…xyz` (first 4, last 4).
-
-## Step 9 — Routing
-
-In `src/App.tsx` add the import and route inside `<Routes>`. No nav link — `/admin` is intentionally undiscoverable via UI.
-
-## Out of scope
-
-- No new tables, no migrations, no edge functions, no Railway changes.
-- No on-chain RPC calls — all numbers come from existing DB columns.
-- Per-launch attribution of Bags platform fees (schema doesn't support it) — shown as pooled total in Revenue tab only.
-- Real auth — single shared password by design per the prompt.
+Want me to write the fix prompt for Issue 1 first (smallest, unblocks testing of the Bags edge function path), then the larger refactor for Issue 2?
 
