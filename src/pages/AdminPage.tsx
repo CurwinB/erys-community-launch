@@ -11,6 +11,7 @@ import PlatformRevenueTab from "@/components/admin/PlatformRevenueTab";
 import RefundsTab from "@/components/admin/RefundsTab";
 import RecoveryTab from "@/components/admin/RecoveryTab";
 import AccountingTab from "@/components/admin/AccountingTab";
+import SponsoredTab from "@/components/admin/SponsoredTab";
 import { lamportsToSol } from "@/lib/adminFormat";
 import { LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
@@ -140,6 +141,12 @@ const AdminPage = () => {
             >
               Recovery
             </TabsTrigger>
+            <TabsTrigger
+              value="sponsored"
+              className="rounded-none data-[state=active]:bg-background data-[state=active]:text-primary px-4 py-2 font-mono text-xs uppercase tracking-widest"
+            >
+              Sponsored
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="launches" className="mt-4">
@@ -166,6 +173,9 @@ const AdminPage = () => {
           </TabsContent>
           <TabsContent value="recovery" className="mt-4">
             <RecoveryTab launches={launches as any} contributions={contributions as any} />
+          </TabsContent>
+          <TabsContent value="sponsored" className="mt-4">
+            <SponsoredTab launches={launches as any} />
           </TabsContent>
         </Tabs>
       </div>

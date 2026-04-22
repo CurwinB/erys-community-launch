@@ -2,7 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 interface StatusBadgeProps {
-  status: "scheduled" | "executing" | "launched" | "execution_failed" | "cancelled";
+  status: "scheduled" | "executing" | "launched" | "execution_failed" | "cancelled" | "sponsor_pending";
   className?: string;
 }
 
@@ -12,6 +12,7 @@ const statusConfig = {
   launched: { label: "Completed", className: "border-success/50 bg-success/10 text-success" },
   execution_failed: { label: "Failed", className: "border-destructive/50 bg-destructive/10 text-destructive" },
   cancelled: { label: "Cancelled", className: "border-muted-foreground/50 bg-muted/50 text-muted-foreground" },
+  sponsor_pending: { label: "Awaiting Details", className: "border-amber-500/50 bg-amber-500/10 text-amber-400" },
 };
 
 const StatusBadge = ({ status, className }: StatusBadgeProps) => {

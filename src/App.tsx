@@ -12,12 +12,14 @@ import LaunchPage from "./pages/LaunchPage";
 import SchedulePage from "./pages/SchedulePage";
 import DashboardPage from "./pages/DashboardPage";
 import AdminPage from "./pages/AdminPage";
+import SponsoredPage from "./pages/SponsoredPage";
 import NotFound from "./pages/NotFound";
 import { useLocation } from "react-router-dom";
 
 const ConditionalNavbar = () => {
   const location = useLocation();
   if (location.pathname.startsWith("/admin")) return null;
+  if (location.pathname.startsWith("/sponsored")) return null;
   return <Navbar />;
 };
 
@@ -46,6 +48,7 @@ const App = () => (
             <Route path="/schedule" element={<SchedulePage />} />
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/admin" element={<AdminPage />} />
+            <Route path="/sponsored/:linkToken" element={<SponsoredPage />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>
