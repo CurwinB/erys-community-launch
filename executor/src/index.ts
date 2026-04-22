@@ -5,6 +5,11 @@ import { executeAllPendingLaunches } from "./executeLaunch";
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "30000");
 
+// Unique worker identifier — falls back to Railway's per-replica env var so
+// horizontal scaling needs no per-instance env config.
+const WORKER_ID =
+  process.env.WORKER_ID || process.env.RAILWAY_REPLICA_ID || "worker-default";
+
 function validateEnv(): void {
   const required = [
     "SUPABASE_URL",
@@ -34,13 +39,14 @@ async function main(): Promise<void> {
   }
 
   console.log(`Polling every ${POLL_INTERVAL_MS}ms for executing launches`);
+  console.log(`Worker ID: ${WORKER_ID}`);
   console.log(`Connected to Supabase: ${process.env.SUPABASE_URL}`);
   console.log(
     `Using RPC: ${process.env.SOLANA_RPC_URL?.split("/v2/")[0]}/v2/***`
   );
 
-  await executeAllPendingLaunches();
-  setInterval(executeAllPendingLaunches, POLL_INTERVAL_MS);
+  await executeAllPendingLaunches(WORKER_ID);
+  setInterval(() => executeAllPendingLaunches(WORKER_ID), POLL_INTERVAL_MS);
 
   process.on("SIGTERM", () => {
     console.log("SIGTERM received. Shutting down...");

@@ -19,6 +19,7 @@ import {
   markDistributed,
   markDistributionFailed,
   markLaunchDistributionComplete,
+  releaseLaunchLock,
   supabase,
 } from "./db";
 
@@ -154,6 +155,7 @@ async function sendTokensToContributor(
 export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
   console.log(`\nStarting distribution for launch ${launch.id} (${launch.token_name})`);
 
+  try {
   const connection = new Connection(SOLANA_RPC_URL, "confirmed");
 
   let escrowKeypair: Keypair;
@@ -278,5 +280,10 @@ export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
     console.log(
       `Distribution still in progress for launch ${launch.id}. Success: ${successCount}, Failed: ${failCount}`
     );
+  }
+  } finally {
+    // Always release the worker lock so another replica (or this one on its
+    // next poll) can re-process the launch if anything failed mid-flight.
+    await releaseLaunchLock(launch.id);
   }
 }

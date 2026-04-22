@@ -1,23 +1,17 @@
-import { getExecutingLaunches, getContributions } from "./db";
+import { claimNextExecutingLaunch, getContributions, releaseLaunchLock } from "./db";
 import { executeBagsLaunch } from "./executeBags";
 import { executePumpfunLaunch } from "./executePumpfun";
 
-const processing = new Set<string>();
-
-export async function executeAllPendingLaunches(): Promise<void> {
+export async function executeAllPendingLaunches(workerId: string): Promise<void> {
   try {
-    const launches = await getExecutingLaunches();
-    if (launches.length === 0) return;
+    // Atomically claim launches one at a time. SKIP LOCKED guarantees no two
+    // executor replicas ever pick up the same launch. Loop until this worker
+    // can't claim more, kicking each off in the background.
+    while (true) {
+      const launch = await claimNextExecutingLaunch(workerId);
+      if (!launch) break;
 
-    console.log(`Found ${launches.length} launches to execute`);
-
-    for (const launch of launches) {
-      if (processing.has(launch.id)) {
-        console.log(`Launch ${launch.id} already being executed, skipping`);
-        continue;
-      }
-
-      processing.add(launch.id);
+      console.log(`Worker ${workerId} claimed launch ${launch.id} for execution`);
 
       const run = async () => {
         try {
@@ -38,7 +32,7 @@ export async function executeAllPendingLaunches(): Promise<void> {
             err.message
           );
         } finally {
-          processing.delete(launch.id);
+          await releaseLaunchLock(launch.id);
         }
       };
 

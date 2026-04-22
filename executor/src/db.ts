@@ -28,6 +28,8 @@ export interface Launch {
   execution_error: string | null;
   pumpfun_mint_keypair_encrypted: string | null;
   pumpfun_launch_signature: string | null;
+  worker_locked_at: string | null;
+  worker_id: string | null;
 }
 
 export interface Contribution {
@@ -52,6 +54,32 @@ export async function getExecutingLaunches(): Promise<Launch[]> {
     return [];
   }
   return (data as Launch[]) || [];
+}
+
+// Atomically claim the next executing launch for this worker.
+// Uses Postgres FOR UPDATE SKIP LOCKED via SQL function so multiple
+// executor replicas can run safely in parallel.
+export async function claimNextExecutingLaunch(workerId: string): Promise<Launch | null> {
+  const { data, error } = await supabase.rpc("claim_executing_launch_for_worker", {
+    p_worker_id: workerId,
+    p_lock_expiry_seconds: 120,
+  });
+
+  if (error) {
+    console.error("Error claiming executing launch:", error.message);
+    return null;
+  }
+  return (data?.[0] as Launch) || null;
+}
+
+// Release a worker lock. Crashed workers' locks also self-heal via the
+// expiry window in claim_executing_launch_for_worker.
+export async function releaseLaunchLock(launchId: string): Promise<void> {
+  const { error } = await supabase
+    .from("launches")
+    .update({ worker_locked_at: null, worker_id: null })
+    .eq("id", launchId);
+  if (error) console.error(`Error releasing lock for launch ${launchId}:`, error.message);
 }
 
 export async function getContributions(launchId: string): Promise<Contribution[]> {
