@@ -9,6 +9,7 @@ import LaunchesTab from "@/components/admin/LaunchesTab";
 import ContributorsTab from "@/components/admin/ContributorsTab";
 import PlatformRevenueTab from "@/components/admin/PlatformRevenueTab";
 import RefundsTab from "@/components/admin/RefundsTab";
+import RecoveryTab from "@/components/admin/RecoveryTab";
 import { lamportsToSol } from "@/lib/adminFormat";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
 
@@ -125,6 +126,12 @@ const AdminPage = () => {
             >
               Refunds
             </TabsTrigger>
+            <TabsTrigger
+              value="recovery"
+              className="rounded-none data-[state=active]:bg-background data-[state=active]:text-destructive px-4 py-2 font-mono text-xs uppercase tracking-widest"
+            >
+              Recovery
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="launches" className="mt-4">
@@ -141,6 +148,9 @@ const AdminPage = () => {
           </TabsContent>
           <TabsContent value="refunds" className="mt-4">
             <RefundsTab contributions={contributions} launches={launches} />
+          </TabsContent>
+          <TabsContent value="recovery" className="mt-4">
+            <RecoveryTab launches={launches as any} contributions={contributions as any} />
           </TabsContent>
         </Tabs>
       </div>
