@@ -303,7 +303,7 @@ const SchedulePage = () => {
               </div>
             </div>
             <p className="text-[10px] text-muted-foreground">
-              Launch must be between 1 and 72 hours from now. Your timezone: {Intl.DateTimeFormat().resolvedOptions().timeZone}
+              Launch must be between 10 minutes and 72 hours from now. Contributions close 5 min before launch. Your timezone: {Intl.DateTimeFormat().resolvedOptions().timeZone}
             </p>
           </div>
 
