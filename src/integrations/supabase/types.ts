@@ -368,6 +368,7 @@ export type Database = {
         Args: { amount: number; launch_id: string }
         Returns: undefined
       }
+      is_admin_wallet: { Args: { p_wallet: string }; Returns: boolean }
     }
     Enums: {
       launch_status:

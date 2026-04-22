@@ -10,11 +10,12 @@ export function useIsAdmin() {
     queryKey: ["is-admin", address],
     enabled: ready && !!address,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("admin_wallets")
-        .select("wallet_address")
-        .eq("wallet_address", address!)
-        .maybeSingle();
+      // admin_wallets is no longer publicly readable (it contains emails).
+      // Use the SECURITY DEFINER membership-check RPC instead, which only
+      // returns a boolean and never exposes the email column.
+      const { data, error } = await supabase.rpc("is_admin_wallet", {
+        p_wallet: address!,
+      });
       if (error) throw error;
       return !!data;
     },

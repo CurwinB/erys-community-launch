@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/StatusBadge";
 import Seo from "@/components/Seo";
-import { formatSol } from "@/lib/constants";
+import { formatSol, LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
 import { Wallet, Coins, Rocket, ExternalLink, Loader2, AlertTriangle, XCircle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "@/hooks/use-toast";
@@ -34,7 +34,7 @@ const DashboardPage = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("contributions")
-        .select("*, launches(*)")
+        .select(`*, launches(${LAUNCH_PUBLIC_COLUMNS})`)
         .eq("wallet_address", walletAddress)
         .order("contributed_at", { ascending: false });
       if (error) throw error;
@@ -61,7 +61,7 @@ const DashboardPage = () => {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("launches")
-        .select("*")
+        .select(LAUNCH_PUBLIC_COLUMNS)
         .eq("created_by_wallet", walletAddress)
         .order("created_at", { ascending: false });
       if (error) throw error;
