@@ -1,1 +1,10 @@
 project_id = "cifdozolzbztuohtdavx"
+
+[functions.create-sponsored-slot]
+verify_jwt = false
+
+[functions.claim-sponsored-slot]
+verify_jwt = false
+
+[functions.cancel-sponsored-slot]
+verify_jwt = false
