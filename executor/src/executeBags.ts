@@ -122,21 +122,39 @@ export async function executeBagsLaunch(
 
   // Step 1: fee-share/config
   console.log(`Calling fee-share/config with ${claimersArray.length} claimers`);
-  const feeShareRes = await fetch(`${BAGS_API_BASE}/fee-share/config`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": BAGS_API_KEY,
-    },
-    body: JSON.stringify({
-      payer: launch.escrow_wallet_public_key,
-      baseMint: launch.token_mint_address,
-      claimersArray,
-      basisPointsArray,
-      partner: BAGS_PARTNER_WALLET,
-      partnerConfig: BAGS_PARTNER_CONFIG,
-    }),
-  });
+  const feeShareController = new AbortController();
+  const feeShareTimeout = setTimeout(() => feeShareController.abort(), 30_000);
+  let feeShareRes: any;
+  try {
+    feeShareRes = await fetch(`${BAGS_API_BASE}/fee-share/config`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": BAGS_API_KEY,
+      },
+      body: JSON.stringify({
+        payer: launch.escrow_wallet_public_key,
+        baseMint: launch.token_mint_address,
+        claimersArray,
+        basisPointsArray,
+        partner: BAGS_PARTNER_WALLET,
+        partnerConfig: BAGS_PARTNER_CONFIG,
+      }),
+      signal: feeShareController.signal,
+    });
+  } catch (err: any) {
+    if (err.name === "AbortError") {
+      await setFailed(
+        launch.id,
+        "Bags fee-share/config request timed out after 30 seconds"
+      );
+      return;
+    }
+    await setFailed(launch.id, `Bags fee-share/config request failed: ${err.message}`);
+    return;
+  } finally {
+    clearTimeout(feeShareTimeout);
+  }
 
   if (!feeShareRes.ok) {
     await setFailed(
@@ -172,23 +190,44 @@ export async function executeBagsLaunch(
 
   // Step 2: create-launch-transaction
   console.log("Calling create-launch-transaction");
-  const createTxRes = await fetch(
-    `${BAGS_API_BASE}/token-launch/create-launch-transaction`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": BAGS_API_KEY,
-      },
-      body: JSON.stringify({
-        ipfs: launch.ipfs_metadata_url,
-        tokenMint: launch.token_mint_address,
-        wallet: launch.escrow_wallet_public_key,
-        initialBuyLamports: Number(netBuyLamports),
-        configKey,
-      }),
+  const createTxController = new AbortController();
+  const createTxTimeout = setTimeout(() => createTxController.abort(), 30_000);
+  let createTxRes: any;
+  try {
+    createTxRes = await fetch(
+      `${BAGS_API_BASE}/token-launch/create-launch-transaction`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": BAGS_API_KEY,
+        },
+        body: JSON.stringify({
+          ipfs: launch.ipfs_metadata_url,
+          tokenMint: launch.token_mint_address,
+          wallet: launch.escrow_wallet_public_key,
+          initialBuyLamports: Number(netBuyLamports),
+          configKey,
+        }),
+        signal: createTxController.signal,
+      }
+    );
+  } catch (err: any) {
+    if (err.name === "AbortError") {
+      await setFailed(
+        launch.id,
+        "Bags create-launch-transaction request timed out after 30 seconds"
+      );
+      return;
     }
-  );
+    await setFailed(
+      launch.id,
+      `Bags create-launch-transaction request failed: ${err.message}`
+    );
+    return;
+  } finally {
+    clearTimeout(createTxTimeout);
+  }
 
   if (!createTxRes.ok) {
     await setFailed(

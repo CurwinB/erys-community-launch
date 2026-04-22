@@ -69,25 +69,40 @@ export async function executePumpfunLaunch(
 
   // Call PumpPortal
   console.log("Calling PumpPortal create");
-  const pumpRes = await fetch("https://pumpportal.fun/api/trade-local", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      publicKey: launch.escrow_wallet_public_key,
-      action: "create",
-      tokenMetadata: {
-        name: launch.token_name,
-        symbol: launch.token_symbol.toUpperCase(),
-        uri: launch.ipfs_metadata_url,
-      },
-      mint: launch.token_mint_address,
-      denominatedInSol: "true",
-      amount: Number(initialBuyLamports) / 1e9,
-      slippage: 15,
-      priorityFee: 0.00005,
-      pool: "pump",
-    }),
-  });
+  const pumpController = new AbortController();
+  const pumpTimeout = setTimeout(() => pumpController.abort(), 30_000);
+  let pumpRes: any;
+  try {
+    pumpRes = await fetch("https://pumpportal.fun/api/trade-local", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        publicKey: launch.escrow_wallet_public_key,
+        action: "create",
+        tokenMetadata: {
+          name: launch.token_name,
+          symbol: launch.token_symbol.toUpperCase(),
+          uri: launch.ipfs_metadata_url,
+        },
+        mint: launch.token_mint_address,
+        denominatedInSol: "true",
+        amount: Number(initialBuyLamports) / 1e9,
+        slippage: 15,
+        priorityFee: 0.00005,
+        pool: "pump",
+      }),
+      signal: pumpController.signal,
+    });
+  } catch (err: any) {
+    if (err.name === "AbortError") {
+      await setFailed(launch.id, "PumpPortal request timed out after 30 seconds");
+      return;
+    }
+    await setFailed(launch.id, `PumpPortal request failed: ${err.message}`);
+    return;
+  } finally {
+    clearTimeout(pumpTimeout);
+  }
 
   if (!pumpRes.ok) {
     await setFailed(launch.id, `PumpPortal create failed: ${await pumpRes.text()}`);
