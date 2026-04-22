@@ -41,7 +41,7 @@ const fmt = (iso: string | null) =>
 const truncate = (s: string, n = 6) => (s.length > n * 2 ? `${s.slice(0, n)}…${s.slice(-n)}` : s);
 
 const SponsoredTab = ({ launches }: Props) => {
-  const { walletAddress } = useWallet();
+  const { publicKey: walletAddress } = useWallet();
   const queryClient = useQueryClient();
 
   const [influencerWallet, setInfluencerWallet] = useState("");

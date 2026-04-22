@@ -214,9 +214,9 @@ const SponsoredPage = () => {
                 You have been selected for an Erys sponsored launch.
               </h1>
               <p className="text-muted-foreground mb-6">
-                Erys will fund your token launch on Pump.fm with{" "}
-                <span className="text-primary font-semibold">{seedSol} SOL</span> at no cost
-                to you. Fill in your token details below and share your launch link with your
+                Erys will fund your token launch on Pump.fun with{" "}
+                <span className="text-primary font-semibold">{seedSol} SOL</span> at no cost to
+                you. Fill in your token details below and share your launch link with your
                 community.
               </p>
               <div className="grid grid-cols-2 gap-4">
