@@ -11,6 +11,11 @@ const BAGS_API_BASE = "https://public-api-v2.bags.fm/api/v1";
 const TX_FEE_PER_TRANSFER = 5_000n; // 0.000005 SOL per SPL token transfer
 const ATA_COST_PER_CONTRIBUTOR = 2_039_280n; // 0.00203928 SOL per ATA creation
 
+// Background-task type for EdgeRuntime.waitUntil. Lets us return a 200 to the
+// scheduler immediately while the heavy Bags API + signing work continues.
+// @ts-ignore -- EdgeRuntime is provided by the Supabase Edge runtime
+declare const EdgeRuntime: { waitUntil: (p: Promise<unknown>) => void };
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
