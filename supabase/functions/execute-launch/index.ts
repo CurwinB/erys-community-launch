@@ -419,6 +419,192 @@ function signWithKeypair(txBase58: string, keypair: Keypair): string {
 }
 
 // =========================================
+// Bags background launch task
+// =========================================
+//
+// Runs the heavy Bags API + signing + send work after the main handler has
+// already returned a 200. Any failure here updates the launch row to
+// `execution_failed` so the next cron tick sees a recoverable state.
+async function runBagsLaunchInBackground(params: {
+  launch: any;
+  supabase: any;
+  BAGS_API_KEY: string;
+  BAGS_PARTNER_WALLET: string;
+  BAGS_PARTNER_CONFIG: string;
+  claimersArray: string[];
+  basisPointsArray: number[];
+  excludedCount: number;
+  netBuyLamports: bigint;
+  escrowKeypair: Keypair;
+}): Promise<void> {
+  const {
+    launch,
+    supabase,
+    BAGS_API_KEY,
+    BAGS_PARTNER_WALLET,
+    BAGS_PARTNER_CONFIG,
+    claimersArray,
+    basisPointsArray,
+    excludedCount,
+    netBuyLamports,
+    escrowKeypair,
+  } = params;
+
+  try {
+    // STEP 1: fee-share/config — MUST be first
+    const feeShareRes = await fetch(`${BAGS_API_BASE}/fee-share/config`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": BAGS_API_KEY,
+      },
+      body: JSON.stringify({
+        payer: launch.escrow_wallet_public_key,
+        baseMint: launch.token_mint_address,
+        claimersArray,
+        basisPointsArray,
+        partner: BAGS_PARTNER_WALLET,
+        partnerConfig: BAGS_PARTNER_CONFIG,
+      }),
+    });
+
+    if (!feeShareRes.ok) {
+      const errText = await feeShareRes.text();
+      await setFailed(supabase, launch.id, `fee-share/config failed: ${errText}`);
+      return;
+    }
+
+    const feeShareData = await feeShareRes.json();
+    const configKey = feeShareData.response?.meteoraConfigKey;
+
+    if (!configKey) {
+      await setFailed(supabase, launch.id, "fee-share/config returned no configKey");
+      return;
+    }
+
+    // Submit all fee-share transactions returned by Bags before launch tx.
+    // With >15 claimers, Bags returns multiple txs (lookup tables, etc.)
+    const feeShareTransactions = feeShareData.response?.transactions || [];
+    console.log(`fee-share/config returned ${feeShareTransactions.length} transactions`);
+
+    for (let i = 0; i < feeShareTransactions.length; i++) {
+      const txObj = feeShareTransactions[i];
+      const signedTxBase58 = signWithKeypair(txObj.transaction, escrowKeypair);
+      const sendRes = await fetch(`${BAGS_API_BASE}/solana/send-transaction`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-key": BAGS_API_KEY },
+        body: JSON.stringify({ transaction: signedTxBase58 }),
+      });
+      if (!sendRes.ok) {
+        const errText = await sendRes.text();
+        await setFailed(
+          supabase,
+          launch.id,
+          `fee-share tx ${i + 1}/${feeShareTransactions.length} failed: ${errText}`
+        );
+        return;
+      }
+      const sendData = await sendRes.json();
+      const feeShareSig = sendData.response ?? sendData.signature;
+      console.log(
+        `fee-share tx ${i + 1}/${feeShareTransactions.length} confirmed: ${feeShareSig}`
+      );
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    // Store configKey
+    await supabase
+      .from("launches")
+      .update({
+        fee_share_config_key: configKey,
+        claimer_count: claimersArray.length,
+        excluded_contributors: excludedCount,
+      })
+      .eq("id", launch.id);
+
+    // STEP 2: create-launch-transaction (using netBuyLamports)
+    if (!launch.ipfs_metadata_url || !launch.token_mint_address) {
+      await setFailed(
+        supabase,
+        launch.id,
+        "Missing ipfs_metadata_url or token_mint_address — cannot build launch transaction"
+      );
+      return;
+    }
+
+    const createTxRes = await fetch(
+      `${BAGS_API_BASE}/token-launch/create-launch-transaction`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": BAGS_API_KEY,
+        },
+        body: JSON.stringify({
+          ipfs: launch.ipfs_metadata_url,
+          tokenMint: launch.token_mint_address,
+          wallet: launch.escrow_wallet_public_key,
+          initialBuyLamports: Number(netBuyLamports),
+          configKey,
+        }),
+      }
+    );
+
+    if (!createTxRes.ok) {
+      const errText = await createTxRes.text();
+      await setFailed(supabase, launch.id, `create-launch-transaction failed: ${errText}`);
+      return;
+    }
+
+    const createTxData = await createTxRes.json();
+    const transaction = createTxData.response;
+
+    if (!transaction || typeof transaction !== "string") {
+      await setFailed(
+        supabase,
+        launch.id,
+        "create-launch-transaction returned no transaction string"
+      );
+      return;
+    }
+
+    // STEP 3: send-transaction
+    const signedLaunchTx = signWithKeypair(transaction, escrowKeypair);
+    const sendTxRes = await fetch(`${BAGS_API_BASE}/solana/send-transaction`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": BAGS_API_KEY,
+      },
+      body: JSON.stringify({ transaction: signedLaunchTx }),
+    });
+
+    if (!sendTxRes.ok) {
+      const errText = await sendTxRes.text();
+      await setFailed(supabase, launch.id, `send-transaction failed: ${errText}`);
+      return;
+    }
+
+    const sendTxData = await sendTxRes.json();
+    const launchSig =
+      sendTxData.response ?? sendTxData.signature ?? sendTxData.txSignature;
+    console.log(`Launch tx confirmed: ${launchSig}`);
+
+    await supabase
+      .from("launches")
+      .update({ status: "launched" })
+      .eq("id", launch.id);
+  } catch (err: any) {
+    console.error(`Background bags launch error for ${launch.id}:`, err);
+    await setFailed(
+      supabase,
+      launch.id,
+      `Background launch error: ${err.message || String(err)}`
+    );
+  }
+}
+
+// =========================================
 // Pump.fun Execution
 // =========================================
 
