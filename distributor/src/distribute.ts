@@ -281,4 +281,9 @@ export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
       `Distribution still in progress for launch ${launch.id}. Success: ${successCount}, Failed: ${failCount}`
     );
   }
+  } finally {
+    // Always release the worker lock so another replica (or this one on its
+    // next poll) can re-process the launch if anything failed mid-flight.
+    await releaseLaunchLock(launch.id);
+  }
 }
