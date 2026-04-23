@@ -79,11 +79,10 @@ Deno.serve(async (req) => {
       return errorResponse("Launch not found", 404);
     }
 
-    const escrowPrivateKeyHex = await decryptEscrowKey(
+    const escrowKeyBytes = await decryptEscrowKey(
       launch.escrow_wallet_encrypted_private_key,
       ESCROW_ENCRYPTION_KEY,
     );
-    const escrowKeyBytes = hexToUint8Array(escrowPrivateKeyHex);
 
     if (escrowKeyBytes.length !== 64) {
       return errorResponse(
@@ -149,7 +148,7 @@ Deno.serve(async (req) => {
 async function decryptEscrowKey(
   encryptedData: string,
   encryptionKeyHex: string,
-): Promise<string> {
+): Promise<Uint8Array> {
   const parts = encryptedData.split(":");
   if (parts.length !== 3) {
     throw new Error("Invalid encrypted data format");
@@ -178,7 +177,7 @@ async function decryptEscrowKey(
     combined,
   );
 
-  return new TextDecoder().decode(decrypted);
+  return new Uint8Array(decrypted);
 }
 
 function hexToUint8Array(hex: string): Uint8Array {
