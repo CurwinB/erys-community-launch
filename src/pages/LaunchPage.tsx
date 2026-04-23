@@ -258,6 +258,41 @@ const LaunchPage = () => {
             <div className="border border-primary/30 bg-card p-6 space-y-5">
               <h3 className="font-semibold text-foreground">Contribute</h3>
 
+              <div className="rounded-sm border border-border bg-background p-3 space-y-2">
+                <p className="text-xs font-semibold text-foreground">What you receive</p>
+                {isPumpfun ? (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <div className="h-1.5 w-1.5 rounded-full bg-success" />
+                      Tokens proportional to your SOL contribution
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <div className="h-1.5 w-1.5 rounded-full bg-success" />
+                      Earliest possible entry price
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <div className="h-1.5 w-1.5 rounded-full bg-success" />
+                      Tokens sent to your wallet automatically at launch
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <div className="h-1.5 w-1.5 rounded-full bg-success" />
+                      Tokens proportional to your SOL contribution
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <div className="h-1.5 w-1.5 rounded-full bg-success" />
+                      Permanent on-chain trading fee share proportional to your contribution
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <div className="h-1.5 w-1.5 rounded-full bg-success" />
+                      Tokens and fees sent to your wallet automatically at launch
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <span>Min: {formatSol(Number(launch.min_contribution_lamports))} SOL</span>
@@ -304,7 +339,7 @@ const LaunchPage = () => {
               <p className="text-[10px] leading-relaxed text-muted-foreground">
                 {isPumpfun
                   ? "Your SOL is held in escrow until launch. You will receive tokens at the earliest possible entry price proportional to your contribution. If this launch is cancelled your SOL is refunded automatically."
-                  : "Your SOL is held in escrow until launch. You will be registered as a permanent Bags fee share recipient proportional to your contribution. If this launch is cancelled your SOL is refunded automatically."}
+                  : "Your SOL is held in escrow until launch. You will receive tokens AND be registered as a permanent Bags fee share recipient proportional to your contribution. If this launch is cancelled your SOL is refunded automatically."}
               </p>
             </div>
 
