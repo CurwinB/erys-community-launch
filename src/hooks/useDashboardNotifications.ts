@@ -74,11 +74,25 @@ export function useDashboardNotifications() {
     queryKey: ["claimable-positions", walletAddress],
     enabled: connected && !!walletAddress,
     queryFn: async () => {
-      const { data, error } = await supabase.functions.invoke("claim-fees", {
-        body: { action: "claimable-positions", wallet: walletAddress },
-      });
-      if (error) throw error;
-      return (data as ClaimablePosition[]) || [];
+      try {
+        const { data, error } = await supabase.functions.invoke("claim-fees", {
+          body: { action: "claimable-positions", wallet: walletAddress },
+        });
+        if (error) throw error;
+        // Normalize: accept raw array, or wrapped { response: [...] } / { data: [...] }
+        const raw: any = data;
+        const arr = Array.isArray(raw)
+          ? raw
+          : Array.isArray(raw?.response)
+            ? raw.response
+            : Array.isArray(raw?.data)
+              ? raw.data
+              : [];
+        return arr as ClaimablePosition[];
+      } catch (err) {
+        console.warn("[useDashboardNotifications] claimable-positions failed:", err);
+        return [] as ClaimablePosition[];
+      }
     },
     refetchInterval: 30000,
   });
@@ -86,7 +100,8 @@ export function useDashboardNotifications() {
   const getClaimableForMint = useCallback(
     (mint: string | null | undefined): number => {
       if (!mint) return 0;
-      const pos = claimablePositions.find((p) => p.baseMint === mint);
+      if (!Array.isArray(claimablePositions)) return 0;
+      const pos = claimablePositions.find((p) => p?.baseMint === mint);
       return pos?.claimableDisplayAmount || 0;
     },
     [claimablePositions]
