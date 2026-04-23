@@ -603,8 +603,17 @@ const SchedulePage = () => {
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-destructive" />
                 <div className="space-y-1">
                   <p className="text-sm font-medium text-destructive">
-                    {pendingLaunch ? "Contribution failed" : "Failed to schedule"}
+                    {pendingLaunch?.last_tx_signature
+                      ? "Couldn't confirm in time"
+                      : pendingLaunch
+                        ? "Contribution failed"
+                        : "Failed to schedule"}
                   </p>
+                  {pendingLaunch?.last_tx_signature && (
+                    <p className="text-xs text-muted-foreground">
+                      Your transaction may have already landed. Click <strong>Check status</strong> below — we'll verify on-chain before asking you to sign again.
+                    </p>
+                  )}
                   <p className="text-xs text-muted-foreground break-words">{errorMsg}</p>
                 </div>
               </div>
@@ -618,7 +627,7 @@ const SchedulePage = () => {
                     onClick={handleRetryContribution}
                     disabled={isBusy}
                   >
-                    Retry contribution
+                    {pendingLaunch.last_tx_signature ? "Check status" : "Retry contribution"}
                   </Button>
                   <Button
                     type="button"
