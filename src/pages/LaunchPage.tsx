@@ -21,6 +21,7 @@ const LaunchPage = () => {
   const [solAmount, setSolAmount] = useState("");
   const [isContributing, setIsContributing] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [copied, setCopied] = useState(false);
   const { connected, publicKey, wallet } = useWallet();
   const { toast } = useToast();
   const { setShowAuthFlow } = useDynamicContext();
