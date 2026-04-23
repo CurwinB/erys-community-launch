@@ -592,6 +592,15 @@ const WalletDropdown = () => {
               >
                 Export Private Key
               </button>
+              {/* Dashboard */}
+              <Link
+                to="/dashboard"
+                onClick={() => setOpen(false)}
+                className="flex w-full items-center justify-center gap-2 text-center text-xs text-muted-foreground hover:text-foreground transition-colors py-2 border-t border-border"
+              >
+                <LayoutDashboard className="h-3 w-3" />
+                Dashboard
+              </Link>
               <p className="px-3 pt-2 pb-1 text-[10px] text-center text-muted-foreground/70 leading-relaxed">
                 Your keys are non-custodial. Export to use in any Solana wallet.
               </p>
