@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import LaunchCard from "@/components/LaunchCard";
@@ -8,6 +9,10 @@ import { LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
 import { Coins, Clock, Shield, ArrowDown } from "lucide-react";
 
 const Index = () => {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [completedPage, setCompletedPage] = useState(1);
+  const LAUNCHES_PER_PAGE = 20;
+
   const { data: liveLaunches, isLoading: liveLaunchesLoading } = useQuery({
     queryKey: ["launches", "live"],
     queryFn: async () => {
@@ -29,8 +34,7 @@ const Index = () => {
         .from("launches")
         .select(LAUNCH_PUBLIC_COLUMNS)
         .eq("status", "launched")
-        .order("launch_datetime", { ascending: false })
-        .limit(6);
+        .order("launch_datetime", { ascending: false });
       if (error) throw error;
       return data || [];
     },
@@ -59,6 +63,26 @@ const Index = () => {
       return stats;
     },
   });
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [liveLaunches?.length]);
+
+  useEffect(() => {
+    setCompletedPage(1);
+  }, [completedLaunches?.length]);
+
+  const totalPages = Math.ceil((liveLaunches?.length || 0) / LAUNCHES_PER_PAGE);
+  const paginatedLaunches = liveLaunches?.slice(
+    (currentPage - 1) * LAUNCHES_PER_PAGE,
+    currentPage * LAUNCHES_PER_PAGE,
+  ) || [];
+
+  const totalCompletedPages = Math.ceil((completedLaunches?.length || 0) / LAUNCHES_PER_PAGE);
+  const paginatedCompleted = completedLaunches?.slice(
+    (completedPage - 1) * LAUNCHES_PER_PAGE,
+    completedPage * LAUNCHES_PER_PAGE,
+  ) || [];
 
   const features = [
     {
@@ -135,8 +159,9 @@ const Index = () => {
               ))}
             </div>
           ) : liveLaunches && liveLaunches.length > 0 ? (
+            <>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {liveLaunches.map((launch, i) => {
+              {paginatedLaunches.map((launch, i) => {
                 const stats = contributionStats?.[launch.id];
                 return (
                   <LaunchCard
@@ -156,6 +181,28 @@ const Index = () => {
                 );
               })}
             </div>
+            {totalPages > 1 && (
+              <div className="mt-6 flex items-center justify-between border border-border bg-card px-4 py-3">
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="text-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  ← Previous
+                </button>
+                <span className="font-mono text-xs text-muted-foreground">
+                  Page {currentPage} of {totalPages} · {liveLaunches.length} launches
+                </span>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="text-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  Next →
+                </button>
+              </div>
+            )}
+            </>
           ) : (
             <div className="mx-auto flex max-w-md flex-col items-center justify-center border border-border bg-card px-6 py-12 text-center">
               <p className="mb-6 text-muted-foreground">No launches scheduled yet.</p>
@@ -179,8 +226,9 @@ const Index = () => {
               ))}
             </div>
           ) : completedLaunches && completedLaunches.length > 0 ? (
+            <>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 opacity-75">
-              {completedLaunches.map((launch, i) => (
+              {paginatedCompleted.map((launch, i) => (
                 <LaunchCard
                   key={launch.id}
                   id={launch.id}
@@ -197,6 +245,28 @@ const Index = () => {
                 />
               ))}
             </div>
+            {totalCompletedPages > 1 && (
+              <div className="mt-6 flex items-center justify-between border border-border bg-card px-4 py-3">
+                <button
+                  onClick={() => setCompletedPage((p) => Math.max(1, p - 1))}
+                  disabled={completedPage === 1}
+                  className="text-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  ← Previous
+                </button>
+                <span className="font-mono text-xs text-muted-foreground">
+                  Page {completedPage} of {totalCompletedPages} · {completedLaunches.length} launches
+                </span>
+                <button
+                  onClick={() => setCompletedPage((p) => Math.min(totalCompletedPages, p + 1))}
+                  disabled={completedPage === totalCompletedPages}
+                  className="text-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  Next →
+                </button>
+              </div>
+            )}
+            </>
           ) : (
             <div className="flex flex-col items-center justify-center rounded-sm border border-dashed border-border py-12">
               <p className="text-muted-foreground">No completed launches yet.</p>
