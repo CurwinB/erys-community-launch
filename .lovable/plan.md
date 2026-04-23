@@ -1,38 +1,48 @@
 
 
-# Make "Connect Wallet to Contribute" trigger login
+# Add Share Button to Launch Page and Launch Cards
 
-## Change
+## What to build
 
-On `src/pages/LaunchPage.tsx`, when the user is not connected, the contribute button should:
-
-- Display the label **"Login to Contribute"** instead of "Connect Wallet to Contribute"
-- Be **enabled** (not disabled) even when no wallet is connected
-- On click, open the Dynamic auth/login modal (sign up + connect wallet flow) instead of doing nothing
+Add a share section to the launch page and a share button to launch cards, allowing anyone (regardless of wallet connection or creator status) to copy the launch link or share it on Twitter.
 
 ## Implementation
 
-In `src/pages/LaunchPage.tsx`:
+### 1. LaunchPage.tsx changes
 
-1. Import `useDynamicContext` from `@dynamic-labs/sdk-react-core` and pull `setShowAuthFlow` from it.
-2. Update the Contribute button:
-   - Disabled state becomes: `!canContribute || isContributing || (connected && !solAmount)` style logic — specifically, when not connected the button is **enabled** so the user can click it to log in. Keep it disabled only when contributions are closed or a contribute call is in flight.
-   - `onClick` handler: if `!connected`, call `setShowAuthFlow(true)` and return early. Otherwise call the existing `handleContribute()`.
-   - Label logic:
-     - Contributions closed → "Contributions Closed"
-     - Not connected → **"Login to Contribute"**
-     - Sending → "Sending..."
-     - Default → "Contribute SOL"
-   - Icon: keep `Wallet` icon for the login state (matches the visual in the screenshot).
+**Imports**: Add `Share2, Copy, Check` from `lucide-react` to the existing import.
 
-3. Leave the SOL input disabled when `!canContribute` (unchanged). The amount field stays usable once the user logs in, since `connected` flips to true and the page re-renders.
+**State**: Add `copied` state with `useState(false)`.
 
-## Out of scope
+**Constants** (after existing platform variables):
+- `shareUrl`: Full URL to the launch page using `window.location.origin`
+- `platformLabel`: "Pump.fun" or "Bags.fm" based on launch platform
+- `tweetText`: Pre-composed tweet with token name, symbol, platform mention, and share URL
 
-- No changes to `Navbar`, `DashboardPage`, `SchedulePage`, or `AdminGate`. Only the launch page contribute CTA is updated, per the request.
-- No styling or layout changes to the card.
+**Functions**:
+- `handleCopy()`: Writes shareUrl to clipboard, sets copied state for 2 seconds
 
-## Files edited
+**UI**: Insert a share bar between `LaunchHeader` and the main grid container:
+- Full-width card with border and bg-card styling
+- Left side: Share icon + "Share" label
+- Center: Truncated share URL
+- Right side: Copy button (icon changes to checkmark when copied) and Tweet button (with X logo)
+
+### 2. LaunchCard.tsx changes
+
+**Imports**: Add `Copy, Check` from `lucide-react`.
+
+**State**: Add local `copied` state.
+
+**Functions**:
+- `handleCopy(e)`: Stops propagation (prevents card navigation), copies share URL, shows brief copied state
+
+**UI**: Add a small share icon button at the bottom right of the card, next to the existing "Participate/View Details" button.
+
+## Files to edit
 
 - `src/pages/LaunchPage.tsx`
+- `src/components/LaunchCard.tsx`
+
+No backend changes. No schema changes. No auth changes.
 
