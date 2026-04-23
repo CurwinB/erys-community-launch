@@ -5,7 +5,6 @@ import {
   PublicKey,
   SystemProgram,
   Transaction,
-  sendAndConfirmTransaction,
 } from "npm:@solana/web3.js@1.95.3";
 
 const corsHeaders = {
@@ -104,20 +103,20 @@ Deno.serve(async (req) => {
     const connection = new Connection(SOLANA_RPC_URL, "confirmed");
     const escrowKeypair = Keypair.fromSecretKey(escrowKeyBytes);
 
-    const tx = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: escrowKeypair.publicKey,
-        toPubkey: new PublicKey(contribution.wallet_address),
-        lamports: Number(refundLamports),
-      }),
-    );
-
-    const txSignature = await sendAndConfirmTransaction(
-      connection,
-      tx,
-      [escrowKeypair],
-      { commitment: "confirmed", preflightCommitment: "confirmed" },
-    );
+    let txSignature: string;
+    try {
+      txSignature = await sendRefundWithRetry(
+        connection,
+        escrowKeypair,
+        new PublicKey(contribution.wallet_address),
+        Number(refundLamports),
+      );
+    } catch (sendErr: any) {
+      return errorResponse(
+        sendErr?.message ?? String(sendErr),
+        200,
+      );
+    }
 
     await supabase
       .from("contributions")
@@ -144,6 +143,113 @@ Deno.serve(async (req) => {
     );
   }
 });
+
+async function sendRefundWithRetry(
+  connection: Connection,
+  escrowKeypair: Keypair,
+  recipient: PublicKey,
+  lamports: number,
+  maxAttempts = 3,
+): Promise<string> {
+  let lastErr: any;
+  let lastSignature: string | undefined;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const { blockhash, lastValidBlockHeight } =
+      await connection.getLatestBlockhash("confirmed");
+    const tx = new Transaction({
+      feePayer: escrowKeypair.publicKey,
+      blockhash,
+      lastValidBlockHeight,
+    }).add(
+      SystemProgram.transfer({
+        fromPubkey: escrowKeypair.publicKey,
+        toPubkey: recipient,
+        lamports,
+      }),
+    );
+    tx.sign(escrowKeypair);
+    const raw = tx.serialize();
+    let signature: string;
+    try {
+      signature = await connection.sendRawTransaction(raw, {
+        skipPreflight: false,
+        preflightCommitment: "confirmed",
+        maxRetries: 5,
+      });
+      lastSignature = signature;
+    } catch (sendErr: any) {
+      lastErr = sendErr;
+      const msg = sendErr?.message ?? String(sendErr);
+      // Deterministic failures — do not retry
+      if (
+        /insufficient/i.test(msg) ||
+        /invalid/i.test(msg) ||
+        /unauthorized/i.test(msg) ||
+        /forbidden/i.test(msg)
+      ) {
+        throw new Error(`Refund send failed: ${msg}`);
+      }
+      if (attempt < maxAttempts) {
+        await sleep(500 * attempt);
+        continue;
+      }
+      throw new Error(`Refund send failed after ${maxAttempts} attempts: ${msg}`);
+    }
+
+    try {
+      const result = await connection.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        "confirmed",
+      );
+      if (result.value.err) {
+        throw new Error(
+          `Refund transaction failed on-chain: ${JSON.stringify(result.value.err)}`,
+        );
+      }
+      return signature;
+    } catch (confirmErr: any) {
+      lastErr = confirmErr;
+      const msg = confirmErr?.message ?? String(confirmErr);
+      const expired =
+        /block height exceeded/i.test(msg) ||
+        /TransactionExpired/i.test(msg) ||
+        confirmErr?.name === "TransactionExpiredBlockheightExceededError";
+
+      // Defensive check: did it actually land?
+      try {
+        const status = await connection.getSignatureStatus(signature, {
+          searchTransactionHistory: true,
+        });
+        const conf = status?.value?.confirmationStatus;
+        if (
+          status?.value &&
+          !status.value.err &&
+          (conf === "confirmed" || conf === "finalized")
+        ) {
+          return signature;
+        }
+      } catch (_) {
+        // ignore status lookup failure
+      }
+
+      if (expired && attempt < maxAttempts) {
+        await sleep(500 * attempt);
+        continue;
+      }
+      if (expired) {
+        throw new Error(
+          `Refund failed after ${maxAttempts} attempts due to blockhash expiry`,
+        );
+      }
+      throw new Error(`Refund confirmation failed: ${msg}`);
+    }
+  }
+  throw lastErr ?? new Error("Refund failed: unknown error");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function decryptEscrowKey(
   encryptedData: string,
