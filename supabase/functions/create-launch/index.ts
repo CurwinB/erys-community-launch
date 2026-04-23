@@ -65,7 +65,10 @@ Deno.serve(async (req) => {
       const tokenInfoData = await tokenInfoRes.json();
       console.log("create-token-info response:", JSON.stringify(tokenInfoData));
       tokenMint = tokenInfoData.response?.tokenMint || null;
-      ipfsMetadataUrl = tokenInfoData.response?.tokenLaunch?.uri || null;
+      ipfsMetadataUrl =
+        tokenInfoData.response?.tokenMetadata ||
+        tokenInfoData.response?.tokenLaunch?.uri ||
+        null;
       console.log("tokenMint:", tokenMint, "ipfsMetadataUrl:", ipfsMetadataUrl);
     } else {
       const errText = await tokenInfoRes.text();
