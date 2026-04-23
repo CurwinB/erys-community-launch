@@ -149,9 +149,19 @@ const RecoveryTab = ({ launches, contributions }: Props) => {
       );
       if (error) throw new Error(error.message);
       if (data?.error) throw new Error(data.error);
-      toast.success(
-        `Refunded ${lamportsToSol(contribution.amount_lamports).toFixed(4)} SOL`,
-      );
+      const refundedSol = lamportsToSol(
+        Number(data?.refundedLamports ?? contribution.amount_lamports),
+      ).toFixed(4);
+      const shortfallSol = lamportsToSol(
+        Number(data?.shortfallLamports ?? 0),
+      ).toFixed(4);
+      if (data?.partial) {
+        toast.warning(
+          `Refunded ${refundedSol} SOL — ${shortfallSol} SOL unrecoverable due to escrow shortfall`,
+        );
+      } else {
+        toast.success(`Refunded ${refundedSol} SOL`);
+      }
       await queryClient.invalidateQueries({ queryKey: ["admin-dashboard"] });
       return { ok: true as const, signature: data?.txSignature };
     } catch (err: any) {
