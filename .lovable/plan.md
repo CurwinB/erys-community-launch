@@ -1,48 +1,41 @@
 
 
-# Add Share Button to Launch Page and Launch Cards
+# Platform-specific contributor messaging on Launch Page
 
 ## What to build
 
-Add a share section to the launch page and a share button to launch cards, allowing anyone (regardless of wallet connection or creator status) to copy the launch link or share it on Twitter.
+Update the launch page so contributors clearly understand they receive **both tokens AND** (for Bags) **fee share** — not just fees. Make all messaging branch on `launch.platform` (`pumpfun` vs `bags`).
 
-## Implementation
+## Changes
 
-### 1. LaunchPage.tsx changes
+### 1. `src/components/launch/HowItWorks.tsx`
+- Convert to accept a `platform` prop (`"pumpfun" | "bags"`).
+- Define two step arrays:
+  - **Bags**: Contribute SOL → Receive Tokens → Earn Trading Fees Forever
+  - **Pump.fun**: Contribute SOL → Receive Tokens at Launch Price → Early Entry Advantage
+- Render the array matching the platform. Keep existing card styling (border, numbered badge).
 
-**Imports**: Add `Share2, Copy, Check` from `lucide-react` to the existing import.
+### 2. `src/pages/LaunchPage.tsx`
 
-**State**: Add `copied` state with `useState(false)`.
+**a. Pass platform to HowItWorks:**
+```tsx
+<HowItWorks platform={launch.platform} />
+```
 
-**Constants** (after existing platform variables):
-- `shareUrl`: Full URL to the launch page using `window.location.origin`
-- `platformLabel`: "Pump.fun" or "Bags.fm" based on launch platform
-- `tweetText`: Pre-composed tweet with token name, symbol, platform mention, and share URL
+**b. Add a "What you receive" summary card directly above the SOL amount input** inside the contribute card (the `border border-primary/30 bg-card p-6` block). Bullet list with success-colored dots:
+- Pump.fun: tokens proportional to contribution / earliest entry price / auto-sent at launch
+- Bags: tokens proportional to contribution / permanent on-chain trading fee share / tokens + fees auto-sent at launch
 
-**Functions**:
-- `handleCopy()`: Writes shareUrl to clipboard, sets copied state for 2 seconds
+**c. Update the existing escrow info banner** (the small text at the bottom of the contribute card) so it explicitly mentions tokens for both platforms:
+- Bags: "Your SOL is held in escrow until launch. You will receive tokens AND be registered as a permanent Bags fee share recipient proportional to your contribution. If this launch is cancelled your SOL is refunded automatically."
+- Pump.fun: "Your SOL is held in escrow until launch. You will receive tokens at the earliest possible entry price proportional to your contribution. If this launch is cancelled your SOL is refunded automatically." (already correct — leave as-is)
 
-**UI**: Insert a share bar between `LaunchHeader` and the main grid container:
-- Full-width card with border and bg-card styling
-- Left side: Share icon + "Share" label
-- Center: Truncated share URL
-- Right side: Copy button (icon changes to checkmark when copied) and Tweet button (with X logo)
+## Out of scope
 
-### 2. LaunchCard.tsx changes
+No backend, schema, or other component changes. The current `HowItWorks` is a separate file (`src/components/launch/HowItWorks.tsx`), so it's edited there rather than inlined into `LaunchPage.tsx` — net behavior matches the request.
 
-**Imports**: Add `Copy, Check` from `lucide-react`.
+## Files edited
 
-**State**: Add local `copied` state.
-
-**Functions**:
-- `handleCopy(e)`: Stops propagation (prevents card navigation), copies share URL, shows brief copied state
-
-**UI**: Add a small share icon button at the bottom right of the card, next to the existing "Participate/View Details" button.
-
-## Files to edit
-
+- `src/components/launch/HowItWorks.tsx`
 - `src/pages/LaunchPage.tsx`
-- `src/components/LaunchCard.tsx`
-
-No backend changes. No schema changes. No auth changes.
 
