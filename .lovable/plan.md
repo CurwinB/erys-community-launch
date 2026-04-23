@@ -1,50 +1,68 @@
 
 
-# Fix admin refund failure — RPC error handling + visibility
+# Fix `Invalid key usage` — replace Web Crypto Ed25519 with a real Solana signer
 
 ## Root cause
 
-The `refund-contributor` edge function called `await res.json()` on the Solana RPC response without checking HTTP status or content-type. The RPC returned a plain-text error starting with `"Unspecifie..."` (e.g. `"Unspecified origin"` / `"Unspecified API key"` / a 401/403/429 body), JSON.parse threw, and the admin saw the generic "Edge Function returned a non-2xx status code" toast with no detail.
+Deno's Web Crypto `Ed25519` implementation rejects the raw 32-byte seed import with `"Invalid key usage"`. It's been buggy across Deno/edge-runtime versions and is not reliable for Solana signing. The executor on Railway works because it uses Node + `@solana/web3.js` (which uses `tweetnacl` under the hood). The edge function tried to roll its own signer and hit this exact issue.
 
-Stack trace from logs:
-```text
-SyntaxError: Unexpected token 'U', "Unspecifie"... is not valid JSON
-  at getLatestBlockhash (refund-contributor/index.ts:96)
+## Fix
+
+Replace the hand-rolled Web Crypto signer + manual transaction encoder in `supabase/functions/refund-contributor/index.ts` with the official Solana SDK from npm. Deno supports `npm:` specifiers natively in edge functions.
+
+### Imports
+```ts
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  sendAndConfirmTransaction,
+} from "npm:@solana/web3.js@1.95.3";
 ```
 
-The same unsafe pattern exists in `waitForConfirmation` and `buildAndSendTransfer` (and in `refund-launch` / `claim-sponsored-slot`, but those aren't what failed today — fix only the failing path now).
+### Refund flow becomes
+```ts
+const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+const escrowKeypair = Keypair.fromSecretKey(escrowKeyBytes); // 64 bytes, already decoded
+const tx = new Transaction().add(
+  SystemProgram.transfer({
+    fromPubkey: escrowKeypair.publicKey,
+    toPubkey: new PublicKey(contribution.wallet_address),
+    lamports: Number(refundLamports),
+  })
+);
+const txSignature = await sendAndConfirmTransaction(
+  connection, tx, [escrowKeypair],
+  { commitment: "confirmed", preflightCommitment: "confirmed" }
+);
+```
 
-## Plan
+### What gets removed
+- `buildAndSendTransfer` (hand-rolled message builder)
+- `getLatestBlockhash` (web3.js handles it)
+- `waitForConfirmation` (`sendAndConfirmTransaction` does this)
+- `concatBytes`, `base58DecodeProper`, manual instruction encoding
+- The `crypto.subtle.importKey("Ed25519", …)` call that throws `Invalid key usage`
 
-### 1. `supabase/functions/refund-contributor/index.ts` — robust RPC handling
+### What stays
+- CORS, request validation, Supabase queries, `decryptEscrowKey`, `hexToUint8Array`
+- The 200-status error envelope so admin sees the real error message
+- The `SOLANA_RPC_URL` validation guard (still useful)
 
-Add a single helper `rpcCall(rpcUrl, method, params)` that:
-- POSTs to the RPC with the standard JSON-RPC body
-- Reads the response as **text first**
-- If `!res.ok`, throws `RPC <method> HTTP <status>: <truncated text>` (so the real upstream error reaches the client, e.g. `"Unspecified origin"`)
-- Tries `JSON.parse(text)` in a try/catch — on failure, throws `RPC <method> returned non-JSON: <truncated text>`
-- If parsed JSON has `.error`, throws `RPC <method> error: <JSON.stringify(error)>`
-- Returns the parsed `result` field
-
-Replace the three inline `fetch(...).json()` blocks (`getLatestBlockhash`, `waitForConfirmation`, `buildAndSendTransfer`'s `sendTransaction`) with this helper.
-
-### 2. Surface the real error to admin UI
-
-In the catch at line 108, return HTTP **200** with `{ error, errorDetail }` instead of 500. Reason: `supabase.functions.invoke()` swallows the body of non-2xx responses and only returns `"Edge Function returned a non-2xx status code"` — exactly what the screenshot shows. Returning 200 with an `error` field lets `RecoveryTab.refundOne` (which already checks `data?.error`) show the real message in the toast and inline error row.
-
-### 3. Confirm secret is set, otherwise prompt
-
-Before any RPC call, validate that `SOLANA_RPC_URL` is set and not the public mainnet endpoint (`api.mainnet-beta.solana.com` is heavily rate-limited and commonly returns the kind of plaintext errors we hit). If unset, return a clear error: `"SOLANA_RPC_URL secret is not configured"`.
-
-If after this fix the surfaced message turns out to be `"Unspecified origin"` or similar from the RPC provider, the next step will be to update the `SOLANA_RPC_URL` secret to a working Helius/QuickNode endpoint with no origin restriction — but we'll know that from the new clear error message rather than guessing.
-
-### 4. No frontend changes required
-
-`RecoveryTab` already handles `data?.error` and displays it both in `toast.error` and in the inline `errors[contribution.id]` row. The current "Edge Function returned a non-2xx status code" message comes from `error.message` on the Functions client; once the function returns 200 with `{ error: "<real message>" }`, the admin will see the actual cause.
+### Why this is safe
+- `@solana/web3.js` is the same library the existing executor uses successfully
+- `npm:` specifiers in Supabase Edge Functions are stable and supported
+- All on-chain semantics stay identical (System transfer, same amount minus 5000 lamport fee buffer, same escrow keypair derivation)
 
 ## Files changed
 
-- `supabase/functions/refund-contributor/index.ts` — add `rpcCall` helper, replace 3 raw fetches, validate RPC URL secret, return errors as 200 + JSON `{ error }`
+- `supabase/functions/refund-contributor/index.ts` — swap manual signer + RPC for `@solana/web3.js`. Net result: ~150 fewer lines, correct signing, same admin-facing API.
 
-No DB migration, no frontend changes, no new secrets (unless the surfaced error reveals the RPC URL itself is the problem — handled in a follow-up).
+No DB migration. No frontend changes. No new secrets.
+
+## Follow-up note
+
+`refund-launch/index.ts` and `claim-sponsored-slot/index.ts` use the same broken hand-rolled signer. They'll hit the same error if/when invoked. Out of scope for this fix (you asked to unblock the refund button), but I'll flag them once this works so we can port them over too.
 
