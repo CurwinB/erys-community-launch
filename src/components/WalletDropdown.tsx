@@ -36,7 +36,7 @@ const connection = new Connection(ALCHEMY_RPC, "confirmed");
 
 const WalletDropdown = () => {
   const { connected, publicKey, wallet } = useWallet();
-  const { handleLogOut } = useDynamicContext();
+  const { handleLogOut, setShowDynamicUserProfile } = useDynamicContext();
 
   const [open, setOpen] = useState(false);
   const [solBalance, setSolBalance] = useState<number | null>(null);
@@ -581,13 +581,27 @@ const WalletDropdown = () => {
                 </div>
               )}
 
+              {/* Export key */}
+              <button
+                onClick={() => {
+                  setShowDynamicUserProfile(true);
+                  setOpen(false);
+                }}
+                className="w-full text-center text-xs text-muted-foreground hover:text-foreground transition-colors py-2 border-t border-border"
+              >
+                Export Private Key
+              </button>
+              <p className="px-3 pt-2 pb-1 text-[10px] text-center text-muted-foreground/70 leading-relaxed">
+                Your keys are non-custodial. Export to use in any Solana wallet.
+              </p>
+
               {/* Disconnect */}
               <button
                 onClick={() => {
                   handleLogOut();
                   setOpen(false);
                 }}
-                className="w-full text-center text-xs text-muted-foreground hover:text-destructive transition-colors py-3"
+                className="w-full text-center text-xs text-muted-foreground hover:text-destructive transition-colors py-2 pb-3"
               >
                 Disconnect
               </button>
