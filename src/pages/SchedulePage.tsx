@@ -359,8 +359,9 @@ const SchedulePage = () => {
   };
 
   const platformLabel = platform === "pumpfun" ? "Pump.fun" : "Bags.fm";
+  const platformTag = platform === "pumpfun" ? "@pumpfun" : "@BagsApp";
   const tweetText = encodeURIComponent(
-    `I just scheduled a community token launch on @eryslive via ${platformLabel}.\n\nGet in before it goes live and secure your early position.\n\n${successData?.url || ""}`
+    `I just scheduled a community token launch on @eryslive via ${platformTag}.\n\nGet in before it goes live and secure your early position.\n\n${successData?.url || ""}`
   );
 
   if (step === "success" && successData) {

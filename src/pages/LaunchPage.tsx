@@ -158,8 +158,9 @@ const LaunchPage = () => {
   const platformHref = isPumpfun ? "https://pump.fun" : "https://bags.fm";
 
   const shareUrl = `${window.location.origin}/launch/${launch.id}`;
+  const platformTag = isPumpfun ? "@pumpfun" : "@BagsApp";
   const tweetText = encodeURIComponent(
-    `${launch.token_name} ($${launch.token_symbol}) is launching on @eryslive via ${platformName}.\n\nGet in before it goes live and secure your early position.\n\n${shareUrl}`
+    `${launch.token_name} ($${launch.token_symbol}) is launching on @eryslive via ${platformTag}.\n\nGet in before it goes live and secure your early position.\n\n${shareUrl}`
   );
   const tweetHref = `https://twitter.com/intent/tweet?text=${tweetText}`;
 
