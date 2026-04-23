@@ -64,6 +64,7 @@ const SchedulePage = () => {
   const [pendingLaunch, setPendingLaunch] = useState<{
     launch_id: string;
     escrow_wallet: string;
+    last_tx_signature?: string;
   } | null>(null);
   const [successData, setSuccessData] = useState<{ id: string; url: string } | null>(null);
   const [copied, setCopied] = useState(false);
