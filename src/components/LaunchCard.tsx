@@ -33,6 +33,16 @@ const LaunchCard = ({
   animationDelay = 0,
 }: LaunchCardProps) => {
   const isLive = status === "scheduled";
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const shareUrl = `${window.location.origin}/launch/${id}`;
+    navigator.clipboard.writeText(shareUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <div
