@@ -263,26 +263,11 @@ async function buildAndSendTransfer(
   const tx = concatBytes([new Uint8Array([1]), signature, message]);
 
   const txBase64 = btoa(String.fromCharCode(...tx));
-  const sendRes = await fetch(rpcUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "sendTransaction",
-      params: [
-        txBase64,
-        { encoding: "base64", preflightCommitment: "confirmed" },
-      ],
-    }),
-  });
-
-  const sendData = await sendRes.json();
-  if (sendData.error) {
-    throw new Error(`sendTransaction failed: ${JSON.stringify(sendData.error)}`);
-  }
-
-  return sendData.result;
+  const result = await rpcCall(rpcUrl, "sendTransaction", [
+    txBase64,
+    { encoding: "base64", preflightCommitment: "confirmed" },
+  ]);
+  return result;
 }
 
 function concatBytes(arrays: Uint8Array[]): Uint8Array {
