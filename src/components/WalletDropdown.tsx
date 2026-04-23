@@ -603,7 +603,7 @@ const WalletDropdown = () => {
                 }}
                 className="w-full text-center text-xs text-muted-foreground hover:text-destructive transition-colors py-2 pb-3"
               >
-                Disconnect
+                Log out
               </button>
             </div>
           )}
