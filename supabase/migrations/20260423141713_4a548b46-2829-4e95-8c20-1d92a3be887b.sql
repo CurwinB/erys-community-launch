@@ -1,0 +1,1 @@
+INSERT INTO public.contributions (launch_id, wallet_address, amount_lamports, tx_signature) VALUES ('637f3b75-8ada-4d3f-accd-1490e0ebeb41', 'BvpGuDSLDafZXSDeokapirQqiPshocaMFHG5N46c9rxV', 100000000, '3Cqc9K5orLe9mvnxfY3GAXfYBgPwe7UTqMSJBMqZHywwVruoZEwnTx4evu5dcqUqZYvtEDgmvASHkbkkna88vMBb');

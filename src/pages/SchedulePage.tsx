@@ -64,6 +64,7 @@ const SchedulePage = () => {
   const [pendingLaunch, setPendingLaunch] = useState<{
     launch_id: string;
     escrow_wallet: string;
+    last_tx_signature?: string;
   } | null>(null);
   const [successData, setSuccessData] = useState<{ id: string; url: string } | null>(null);
   const [copied, setCopied] = useState(false);
@@ -157,17 +158,57 @@ const SchedulePage = () => {
           (txResult as any)?.hash ||
           JSON.stringify(txResult);
 
-    setStep("confirming");
-    await connection.confirmTransaction(
-      { signature, blockhash, lastValidBlockHeight },
-      "confirmed"
+    // Persist the signature immediately so retries can verify on-chain status
+    // instead of asking the user to sign and pay again.
+    setPendingLaunch((prev) =>
+      prev
+        ? { ...prev, last_tx_signature: signature }
+        : { launch_id: launchId, escrow_wallet: escrowWallet, last_tx_signature: signature }
     );
 
+    setStep("confirming");
+    await pollForConfirmation(signature);
+
     setStep("recording");
+    await recordContribution(launchId, signature, lamports);
+  };
+
+  // Poll getSignatureStatuses every 2s for up to 60s. Resolves on confirmed/finalized,
+  // throws if the tx errored, throws "timeout" if not seen in time.
+  const pollForConfirmation = async (signature: string, timeoutMs = 60_000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const { value } = await connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: true,
+      });
+      const status = value[0];
+      if (status) {
+        if (status.err) {
+          throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err)}`);
+        }
+        if (
+          status.confirmationStatus === "confirmed" ||
+          status.confirmationStatus === "finalized"
+        ) {
+          return;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    throw new Error(
+      "Couldn't confirm in time — the network is slow. Use Retry to check on-chain status."
+    );
+  };
+
+  const recordContribution = async (
+    launchId: string,
+    signature: string,
+    lamports: number
+  ) => {
     const { data, error } = await supabase.functions.invoke("contribute", {
       body: {
         launch_id: launchId,
-        wallet_address: publicKey,
+        wallet_address: publicKey!,
         amount_lamports: lamports,
         tx_signature: signature,
       },
@@ -269,6 +310,35 @@ const SchedulePage = () => {
     if (!pendingLaunch) return;
     setErrorMsg(null);
     try {
+      // If we already sent a transaction, check whether it landed before re-signing.
+      if (pendingLaunch.last_tx_signature) {
+        setStep("confirming");
+        const { value } = await connection.getSignatureStatuses(
+          [pendingLaunch.last_tx_signature],
+          { searchTransactionHistory: true }
+        );
+        const status = value[0];
+        if (
+          status &&
+          !status.err &&
+          (status.confirmationStatus === "confirmed" ||
+            status.confirmationStatus === "finalized")
+        ) {
+          // Already on-chain — just record it, don't ask user to pay again.
+          setStep("recording");
+          const lamports = solToLamports(parseFloat(form.creatorContribution));
+          await recordContribution(
+            pendingLaunch.launch_id,
+            pendingLaunch.last_tx_signature,
+            lamports
+          );
+          const url = `${window.location.origin}/launch/${pendingLaunch.launch_id}`;
+          setSuccessData({ id: pendingLaunch.launch_id, url });
+          setStep("success");
+          return;
+        }
+        // Status unknown or errored — fall through and send a new tx.
+      }
       await performContribution(pendingLaunch.launch_id, pendingLaunch.escrow_wallet);
       const url = `${window.location.origin}/launch/${pendingLaunch.launch_id}`;
       setSuccessData({ id: pendingLaunch.launch_id, url });
@@ -533,8 +603,17 @@ const SchedulePage = () => {
                 <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-destructive" />
                 <div className="space-y-1">
                   <p className="text-sm font-medium text-destructive">
-                    {pendingLaunch ? "Contribution failed" : "Failed to schedule"}
+                    {pendingLaunch?.last_tx_signature
+                      ? "Couldn't confirm in time"
+                      : pendingLaunch
+                        ? "Contribution failed"
+                        : "Failed to schedule"}
                   </p>
+                  {pendingLaunch?.last_tx_signature && (
+                    <p className="text-xs text-muted-foreground">
+                      Your transaction may have already landed. Click <strong>Check status</strong> below — we'll verify on-chain before asking you to sign again.
+                    </p>
+                  )}
                   <p className="text-xs text-muted-foreground break-words">{errorMsg}</p>
                 </div>
               </div>
@@ -548,7 +627,7 @@ const SchedulePage = () => {
                     onClick={handleRetryContribution}
                     disabled={isBusy}
                   >
-                    Retry contribution
+                    {pendingLaunch.last_tx_signature ? "Check status" : "Retry contribution"}
                   </Button>
                   <Button
                     type="button"
