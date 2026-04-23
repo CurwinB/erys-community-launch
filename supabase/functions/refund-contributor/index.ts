@@ -91,9 +91,10 @@ Deno.serve(async (req) => {
     }
 
     const TX_FEE = 5_000n;
-    const refundLamports = BigInt(contribution.amount_lamports) - TX_FEE;
+    const RENT_EXEMPT_RESERVE = 890_880n;
+    const requested = BigInt(contribution.amount_lamports) - TX_FEE;
 
-    if (refundLamports <= 0n) {
+    if (requested <= 0n) {
       return errorResponse(
         "Contribution too small to refund after network fee",
         400,
@@ -103,13 +104,38 @@ Deno.serve(async (req) => {
     const connection = new Connection(SOLANA_RPC_URL, "confirmed");
     const escrowKeypair = Keypair.fromSecretKey(escrowKeyBytes);
 
+    // Read live escrow balance and reserve the rent-exempt minimum + tx fee.
+    const escrowBalance = BigInt(
+      await connection.getBalance(escrowKeypair.publicKey, "confirmed"),
+    );
+    const available = escrowBalance - RENT_EXEMPT_RESERVE - TX_FEE;
+
+    if (available <= 0n) {
+      return new Response(
+        JSON.stringify({
+          error:
+            "Escrow is depleted; nothing recoverable after reserving rent-exempt minimum",
+          escrowBalance: Number(escrowBalance),
+          rentExemptReserve: Number(RENT_EXEMPT_RESERVE),
+          requested: Number(requested),
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+
+    const payout = requested < available ? requested : available;
+    const shortfall = requested - payout;
+
     let txSignature: string;
     try {
       txSignature = await sendRefundWithRetry(
         connection,
         escrowKeypair,
         new PublicKey(contribution.wallet_address),
-        Number(refundLamports),
+        Number(payout),
       );
     } catch (sendErr: any) {
       return errorResponse(
@@ -120,14 +146,19 @@ Deno.serve(async (req) => {
 
     await supabase
       .from("contributions")
-      .update({ refund_tx_signature: txSignature })
+      .update({
+        refund_tx_signature: txSignature,
+        refund_shortfall_lamports: Number(shortfall),
+      })
       .eq("id", contribution_id);
 
     return new Response(
       JSON.stringify({
         success: true,
+        partial: shortfall > 0n,
         txSignature,
-        refundedLamports: Number(refundLamports),
+        refundedLamports: Number(payout),
+        shortfallLamports: Number(shortfall),
         solscan: `https://solscan.io/tx/${txSignature}`,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
