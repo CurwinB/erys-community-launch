@@ -157,6 +157,18 @@ const LaunchPage = () => {
   const platformName = isPumpfun ? "Pump.fun" : "Bags.fm";
   const platformHref = isPumpfun ? "https://pump.fun" : "https://bags.fm";
 
+  const shareUrl = `${window.location.origin}/launch/${launch.id}`;
+  const tweetText = encodeURIComponent(
+    `${launch.token_name} ($${launch.token_symbol}) is launching on @eryslive via ${platformName}.\n\nGet in before it goes live and secure your early position.\n\n${shareUrl}`
+  );
+  const tweetHref = `https://twitter.com/intent/tweet?text=${tweetText}`;
+
+  const handleCopyShare = () => {
+    navigator.clipboard.writeText(shareUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
     <main className="min-h-screen">
       <Seo
