@@ -17,9 +17,19 @@ Deno.serve(async (req) => {
   );
 
   const ESCROW_ENCRYPTION_KEY = Deno.env.get("ESCROW_ENCRYPTION_KEY")!;
-  const SOLANA_RPC_URL = Deno.env.get("SOLANA_RPC_URL")!;
+  const SOLANA_RPC_URL = Deno.env.get("SOLANA_RPC_URL");
 
   try {
+    if (!SOLANA_RPC_URL) {
+      return errorResponse("SOLANA_RPC_URL secret is not configured", 200);
+    }
+    if (SOLANA_RPC_URL.includes("api.mainnet-beta.solana.com")) {
+      return errorResponse(
+        "SOLANA_RPC_URL is set to the public mainnet endpoint, which is rate-limited and unreliable. Configure a Helius/QuickNode endpoint.",
+        200,
+      );
+    }
+
     const body = await req.json();
     const { contribution_id, launch_id } = body;
 
@@ -107,28 +117,50 @@ Deno.serve(async (req) => {
     );
   } catch (error: any) {
     console.error("refund-contributor error:", error);
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
+    return new Response(JSON.stringify({ error: error?.message ?? String(error) }), {
+      status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
 
-async function getLatestBlockhash(
+async function rpcCall(
   rpcUrl: string,
-): Promise<{ blockhash: string }> {
+  method: string,
+  params: any[],
+): Promise<any> {
   const res = await fetch(rpcUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "getLatestBlockhash",
-      params: [{ commitment: "confirmed" }],
-    }),
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
   });
-  const data = await res.json();
-  return { blockhash: data.result.value.blockhash };
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(
+      `RPC ${method} HTTP ${res.status}: ${text.slice(0, 200)}`,
+    );
+  }
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(
+      `RPC ${method} returned non-JSON: ${text.slice(0, 200)}`,
+    );
+  }
+  if (parsed.error) {
+    throw new Error(`RPC ${method} error: ${JSON.stringify(parsed.error)}`);
+  }
+  return parsed.result;
+}
+
+async function getLatestBlockhash(
+  rpcUrl: string,
+): Promise<{ blockhash: string }> {
+  const result = await rpcCall(rpcUrl, "getLatestBlockhash", [
+    { commitment: "confirmed" },
+  ]);
+  return { blockhash: result.value.blockhash };
 }
 
 async function waitForConfirmation(
@@ -138,18 +170,18 @@ async function waitForConfirmation(
 ): Promise<void> {
   const start = Date.now();
   while ((Date.now() - start) / 1000 < maxSeconds) {
-    const res = await fetch(rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getSignatureStatuses",
-        params: [[signature], { searchTransactionHistory: true }],
-      }),
-    });
-    const data = await res.json();
-    const status = data?.result?.value?.[0];
+    let result: any;
+    try {
+      result = await rpcCall(rpcUrl, "getSignatureStatuses", [
+        [signature],
+        { searchTransactionHistory: true },
+      ]);
+    } catch (e) {
+      console.warn(`getSignatureStatuses transient error: ${(e as Error).message}`);
+      await new Promise((r) => setTimeout(r, 2000));
+      continue;
+    }
+    const status = result?.value?.[0];
     if (status) {
       if (status.err) {
         throw new Error(`Transaction failed: ${JSON.stringify(status.err)}`);
@@ -231,26 +263,11 @@ async function buildAndSendTransfer(
   const tx = concatBytes([new Uint8Array([1]), signature, message]);
 
   const txBase64 = btoa(String.fromCharCode(...tx));
-  const sendRes = await fetch(rpcUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "sendTransaction",
-      params: [
-        txBase64,
-        { encoding: "base64", preflightCommitment: "confirmed" },
-      ],
-    }),
-  });
-
-  const sendData = await sendRes.json();
-  if (sendData.error) {
-    throw new Error(`sendTransaction failed: ${JSON.stringify(sendData.error)}`);
-  }
-
-  return sendData.result;
+  const result = await rpcCall(rpcUrl, "sendTransaction", [
+    txBase64,
+    { encoding: "base64", preflightCommitment: "confirmed" },
+  ]);
+  return result;
 }
 
 function concatBytes(arrays: Uint8Array[]): Uint8Array {
