@@ -235,7 +235,7 @@ const LaunchPage = () => {
           )}
 
           <ContributionFeed contributions={contributions || []} />
-          <HowItWorks />
+          <HowItWorks platform={launch.platform} />
         </div>
 
         {/* Right column - Contribution card */}
