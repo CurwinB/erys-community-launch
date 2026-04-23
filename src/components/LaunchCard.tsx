@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
-import { Users, Coins } from "lucide-react";
+import { useState } from "react";
+import { Users, Coins, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import CountdownTimer from "@/components/CountdownTimer";
 import { formatSol } from "@/lib/constants";
