@@ -10,6 +10,7 @@ import { Wallet, Loader2, ExternalLink } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useWallet } from "@/hooks/useWallet";
 import { useToast } from "@/hooks/use-toast";
+import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 import LaunchHeader from "@/components/launch/LaunchHeader";
 import LaunchStats from "@/components/launch/LaunchStats";
 import ContributionFeed from "@/components/launch/ContributionFeed";
@@ -22,6 +23,7 @@ const LaunchPage = () => {
   const [now, setNow] = useState(() => Date.now());
   const { connected, publicKey, wallet } = useWallet();
   const { toast } = useToast();
+  const { setShowAuthFlow } = useDynamicContext();
   const queryClient = useQueryClient();
 
   const { data: launch, isLoading } = useQuery({
@@ -238,7 +240,13 @@ const LaunchPage = () => {
               <Button
                 className="w-full gap-2"
                 disabled={!canContribute || isContributing}
-                onClick={handleContribute}
+                onClick={() => {
+                  if (!connected) {
+                    setShowAuthFlow(true);
+                    return;
+                  }
+                  handleContribute();
+                }}
               >
                 {isContributing ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -248,7 +256,7 @@ const LaunchPage = () => {
                 {!canContribute
                   ? "Contributions Closed"
                   : !connected
-                    ? "Connect Wallet to Contribute"
+                    ? "Login to Contribute"
                     : isContributing
                       ? "Sending..."
                       : "Contribute SOL"}
