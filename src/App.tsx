@@ -1,3 +1,4 @@
+import { Component, ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { HelmetProvider } from "react-helmet-async";
@@ -23,6 +24,35 @@ const ConditionalNavbar = () => {
   return <Navbar />;
 };
 
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: unknown) {
+    console.error("[ErrorBoundary]", error, info);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <main className="flex min-h-screen flex-col items-center justify-center bg-background px-4">
+          <h2 className="mb-2 text-xl font-bold text-foreground">Something went wrong</h2>
+          <p className="mb-6 max-w-md text-center text-sm text-muted-foreground">
+            {this.state.error.message || "An unexpected error occurred."}
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="rounded-sm border border-border bg-card px-4 py-2 text-sm text-foreground hover:bg-muted"
+          >
+            Reload
+          </button>
+        </main>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const queryClient = new QueryClient();
 
 const App = () => (
@@ -42,7 +72,8 @@ const App = () => (
         <Sonner />
         <BrowserRouter>
           <ConditionalNavbar />
-          <Routes>
+          <ErrorBoundary>
+            <Routes>
             <Route path="/" element={<Index />} />
             <Route path="/launch/:id" element={<LaunchPage />} />
             <Route path="/schedule" element={<SchedulePage />} />
@@ -50,7 +81,8 @@ const App = () => (
             <Route path="/admin" element={<AdminPage />} />
             <Route path="/sponsored/:linkToken" element={<SponsoredPage />} />
             <Route path="*" element={<NotFound />} />
-          </Routes>
+            </Routes>
+          </ErrorBoundary>
         </BrowserRouter>
       </TooltipProvider>
     </QueryClientProvider>

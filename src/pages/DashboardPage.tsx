@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { DynamicWidget } from "@dynamic-labs/sdk-react-core";
@@ -108,14 +108,34 @@ const DashboardPage = () => {
     }
   };
 
-  const bagsContributions = contributions.filter((c) => c.launches?.platform === "bags");
-  const claimableMints = bagsContributions
-    .filter((c) => c.is_fee_claimer !== false && c.launches?.token_mint_address)
-    .map((c) => c.launches.token_mint_address as string);
-  const uniqueClaimableMints = Array.from(new Set(claimableMints));
-  const totalClaimable = uniqueClaimableMints.reduce(
-    (sum, m) => sum + getClaimableForMint(m),
-    0
+  const safeContributions = useMemo(
+    () => (Array.isArray(contributions) ? contributions.filter((c) => c && c.launches) : []),
+    [contributions]
+  );
+
+  const bagsContributions = useMemo(
+    () => safeContributions.filter((c) => c.launches?.platform === "bags"),
+    [safeContributions]
+  );
+
+  const uniqueClaimableMints = useMemo(() => {
+    const mints = bagsContributions
+      .filter((c) => c.is_fee_claimer !== false && c.launches?.token_mint_address)
+      .map((c) => c.launches.token_mint_address as string);
+    return Array.from(new Set(mints));
+  }, [bagsContributions]);
+
+  const totalClaimable = useMemo(() => {
+    const sum = uniqueClaimableMints.reduce(
+      (acc, m) => acc + (Number(getClaimableForMint(m)) || 0),
+      0
+    );
+    return Number.isFinite(sum) ? sum : 0;
+  }, [uniqueClaimableMints, getClaimableForMint]);
+
+  const distributedContributions = useMemo(
+    () => safeContributions.filter((c) => c.tokens_distributed),
+    [safeContributions]
   );
 
   const handleClaimAll = async () => {
@@ -139,8 +159,6 @@ const DashboardPage = () => {
       variant: failed > 0 ? "destructive" : "default",
     });
   };
-
-  const distributedContributions = contributions.filter((c) => c.tokens_distributed);
 
   if (!connected) {
     return (
@@ -225,7 +243,7 @@ const DashboardPage = () => {
               claimingAll={claimingAll}
             />
           ) : (
-            <ContributionsTab contributions={contributions} />
+            <ContributionsTab contributions={safeContributions} />
           )}
         </div>
       </div>
