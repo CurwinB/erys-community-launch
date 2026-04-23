@@ -25,6 +25,7 @@ interface Contribution {
   amount_lamports: number;
   refund_tx_signature: string | null;
   contributed_at: string;
+  refund_shortfall_lamports?: number | null;
 }
 
 interface Launch {
@@ -63,12 +64,28 @@ const RefundsTab = ({ contributions, launches }: Props) => {
     return l?.status === "cancelled" ? "Launch cancelled" : "Other";
   };
 
+  const totalShortfallSol = useMemo(
+    () =>
+      lamportsToSol(
+        refunded.reduce(
+          (sum, c) => sum + Number(c.refund_shortfall_lamports ?? 0),
+          0,
+        ),
+      ),
+    [refunded],
+  );
+
+  const hasShortfalls = totalShortfallSol > 0;
+
   const handleExport = () => {
     const rows = refunded.map((c) => ({
       launch_id: c.launch_id,
       token: launchMap.get(c.launch_id)?.token_symbol ?? "",
       wallet: c.wallet_address,
       sol_refunded: lamportsToSol(c.amount_lamports).toFixed(4),
+      sol_shortfall: lamportsToSol(
+        Number(c.refund_shortfall_lamports ?? 0),
+      ).toFixed(4),
       refund_tx: c.refund_tx_signature ?? "",
       contribution_date: c.contributed_at,
       reason: reasonFor(c.launch_id),
