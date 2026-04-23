@@ -243,7 +243,7 @@ const DashboardPage = () => {
               claimingAll={claimingAll}
             />
           ) : (
-            <ContributionsTab contributions={contributions} />
+            <ContributionsTab contributions={safeContributions} />
           )}
         </div>
       </div>
