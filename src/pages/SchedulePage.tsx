@@ -1,5 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  Connection,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  LAMPORTS_PER_SOL,
+} from "@solana/web3.js";
+import { isSolanaWallet } from "@dynamic-labs/solana";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -7,16 +15,31 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import Seo from "@/components/Seo";
 import { supabase } from "@/integrations/supabase/client";
-import { solToLamports } from "@/lib/constants";
+import { solToLamports, lamportsToSol } from "@/lib/constants";
 import { useToast } from "@/hooks/use-toast";
 import { useWallet } from "@/hooks/useWallet";
-import { Upload, Copy, ExternalLink, Check } from "lucide-react";
+import { Upload, Copy, ExternalLink, Check, Loader2, AlertCircle } from "lucide-react";
 import { DynamicWidget } from "@dynamic-labs/sdk-react-core";
+
+const RPC_URL = import.meta.env.VITE_SOLANA_RPC_URL;
+const connection = new Connection(RPC_URL, "confirmed");
+
+const FEE_RESERVE_SOL = 0.01;
+const MIN_CREATOR_SOL = 0.05;
+
+type Step =
+  | "idle"
+  | "creating"
+  | "awaiting_signature"
+  | "confirming"
+  | "recording"
+  | "success"
+  | "error";
 
 const SchedulePage = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { connected, publicKey } = useWallet();
+  const { connected, publicKey, wallet } = useWallet();
 
   const [platform, setPlatform] = useState<"bags" | "pumpfun">("bags");
   const [form, setForm] = useState({
@@ -31,12 +54,41 @@ const SchedulePage = () => {
     minContribution: "",
     maxContribution: "",
     enableMaxContribution: false,
+    creatorContribution: "",
   });
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const [step, setStep] = useState<Step>("idle");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [pendingLaunch, setPendingLaunch] = useState<{
+    launch_id: string;
+    escrow_wallet: string;
+  } | null>(null);
   const [successData, setSuccessData] = useState<{ id: string; url: string } | null>(null);
   const [copied, setCopied] = useState(false);
+
+  const [solBalance, setSolBalance] = useState<number | null>(null);
+
+  // Load SOL balance on connect
+  useEffect(() => {
+    let cancelled = false;
+    if (!connected || !publicKey) {
+      setSolBalance(null);
+      return;
+    }
+    (async () => {
+      try {
+        const lamports = await connection.getBalance(new PublicKey(publicKey), "confirmed");
+        if (!cancelled) setSolBalance(lamports / LAMPORTS_PER_SOL);
+      } catch (e) {
+        console.error("Balance load failed:", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [connected, publicKey]);
 
   const update = (key: string, value: string | boolean) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -50,6 +102,80 @@ const SchedulePage = () => {
     }
   };
 
+  // Live validation for creator contribution
+  const creatorContribNum = parseFloat(form.creatorContribution);
+  const minContribNum = parseFloat(form.minContribution);
+  const maxAffordable = solBalance !== null ? Math.max(0, solBalance - FEE_RESERVE_SOL) : null;
+
+  let creatorContribError: string | null = null;
+  if (form.creatorContribution !== "") {
+    if (isNaN(creatorContribNum)) {
+      creatorContribError = "Enter a valid number";
+    } else if (creatorContribNum < MIN_CREATOR_SOL) {
+      creatorContribError = `Minimum ${MIN_CREATOR_SOL} SOL`;
+    } else if (maxAffordable !== null && creatorContribNum > maxAffordable) {
+      creatorContribError = `Insufficient balance. Max ${maxAffordable.toFixed(4)} SOL (after ${FEE_RESERVE_SOL} SOL fee reserve)`;
+    } else if (!isNaN(minContribNum) && creatorContribNum < minContribNum) {
+      creatorContribError = `Must be ≥ launch minimum (${minContribNum} SOL)`;
+    }
+  }
+
+  const isBusy = step !== "idle" && step !== "error";
+  const canSubmit =
+    connected &&
+    !isBusy &&
+    form.creatorContribution !== "" &&
+    !creatorContribError;
+
+  const performContribution = async (launchId: string, escrowWallet: string) => {
+    if (!wallet || !isSolanaWallet(wallet) || !publicKey) {
+      throw new Error("Wallet not connected");
+    }
+
+    setStep("awaiting_signature");
+    const lamports = solToLamports(parseFloat(form.creatorContribution));
+
+    const { blockhash, lastValidBlockHeight } =
+      await connection.getLatestBlockhash("confirmed");
+
+    const tx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: new PublicKey(publicKey),
+        toPubkey: new PublicKey(escrowWallet),
+        lamports,
+      })
+    );
+    tx.feePayer = new PublicKey(publicKey);
+    tx.recentBlockhash = blockhash;
+
+    const signer = await wallet.getSigner();
+    const txResult = await signer.signAndSendTransaction(tx as any);
+    const signature =
+      typeof txResult === "string"
+        ? txResult
+        : (txResult as any)?.signature ||
+          (txResult as any)?.hash ||
+          JSON.stringify(txResult);
+
+    setStep("confirming");
+    await connection.confirmTransaction(
+      { signature, blockhash, lastValidBlockHeight },
+      "confirmed"
+    );
+
+    setStep("recording");
+    const { data, error } = await supabase.functions.invoke("contribute", {
+      body: {
+        launch_id: launchId,
+        wallet_address: publicKey,
+        amount_lamports: lamports,
+        tx_signature: signature,
+      },
+    });
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -57,21 +183,22 @@ const SchedulePage = () => {
       toast({ title: "Connect Wallet", description: "Please connect your wallet to schedule a launch.", variant: "destructive" });
       return;
     }
+    if (creatorContribError || form.creatorContribution === "") {
+      toast({ title: "Invalid contribution", description: creatorContribError || "Enter your contribution amount.", variant: "destructive" });
+      return;
+    }
 
-    setIsSubmitting(true);
+    setErrorMsg(null);
 
     try {
       const launchDatetimeLocal = new Date(`${form.launchDate}T${form.launchTime}`);
       const diffMinutes = (launchDatetimeLocal.getTime() - Date.now()) / 60_000;
-      // Minimum 10 minutes so the contribution window (which closes 5 min
-      // before launch) leaves at least 5 minutes for a contribution.
       if (diffMinutes < 10) {
         toast({
           title: "Launch time too soon",
           description: "Launch must be scheduled at least 10 minutes from now (contributions close 5 min before launch).",
           variant: "destructive",
         });
-        setIsSubmitting(false);
         return;
       }
       if (diffMinutes > 72 * 60) {
@@ -80,12 +207,12 @@ const SchedulePage = () => {
           description: "Launch must be scheduled within 72 hours from now.",
           variant: "destructive",
         });
-        setIsSubmitting(false);
         return;
       }
 
-      let imageUrl: string | null = null;
+      setStep("creating");
 
+      let imageUrl: string | null = null;
       if (imageFile) {
         const ext = imageFile.name.split(".").pop();
         const path = `${crypto.randomUUID()}.${ext}`;
@@ -122,16 +249,34 @@ const SchedulePage = () => {
       if (data?.error) throw new Error(data.error);
 
       const launchId = data.launch_id;
+      const escrowWallet = data.escrow_wallet;
+      setPendingLaunch({ launch_id: launchId, escrow_wallet: escrowWallet });
+
+      // Now run the contribution flow
+      await performContribution(launchId, escrowWallet);
+
       const url = `${window.location.origin}/launch/${launchId}`;
       setSuccessData({ id: launchId, url });
+      setStep("success");
     } catch (err: any) {
-      toast({
-        title: "Error",
-        description: err.message || "Failed to schedule launch.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsSubmitting(false);
+      console.error("Schedule flow error:", err);
+      setErrorMsg(err.message || "Something went wrong.");
+      setStep("error");
+    }
+  };
+
+  const handleRetryContribution = async () => {
+    if (!pendingLaunch) return;
+    setErrorMsg(null);
+    try {
+      await performContribution(pendingLaunch.launch_id, pendingLaunch.escrow_wallet);
+      const url = `${window.location.origin}/launch/${pendingLaunch.launch_id}`;
+      setSuccessData({ id: pendingLaunch.launch_id, url });
+      setStep("success");
+    } catch (err: any) {
+      console.error("Retry contribution failed:", err);
+      setErrorMsg(err.message || "Contribution failed.");
+      setStep("error");
     }
   };
 
@@ -148,7 +293,7 @@ const SchedulePage = () => {
     `I just scheduled a community token launch on @eryslive via ${platformLabel}.\n\nGet in before it goes live and secure your early position.\n\n${successData?.url || ""}`
   );
 
-  if (successData) {
+  if (step === "success" && successData) {
     return (
       <main className="min-h-screen">
         <div className="container mx-auto max-w-lg px-4 py-16">
@@ -160,7 +305,9 @@ const SchedulePage = () => {
             <p className="text-xs uppercase tracking-widest text-primary">
               Launching on {platformLabel}
             </p>
-            <p className="text-sm text-muted-foreground">Share this link with your community.</p>
+            <p className="text-sm text-muted-foreground">
+              Your {form.creatorContribution} SOL seed contribution is in escrow. Share this link with your community.
+            </p>
 
             <div className="flex items-center gap-2 rounded-sm border border-border bg-background p-3">
               <code className="flex-1 truncate text-xs text-primary">{successData.url}</code>
@@ -188,6 +335,22 @@ const SchedulePage = () => {
       </main>
     );
   }
+
+  const submitLabel = (() => {
+    if (!connected) return "Connect Wallet to Schedule";
+    switch (step) {
+      case "creating":
+        return "Creating launch…";
+      case "awaiting_signature":
+        return "Sign the transaction in your wallet…";
+      case "confirming":
+        return "Confirming on-chain…";
+      case "recording":
+        return "Recording contribution…";
+      default:
+        return "Schedule Launch & Contribute";
+    }
+  })();
 
   return (
     <main className="min-h-screen">
@@ -325,16 +488,90 @@ const SchedulePage = () => {
             )}
           </div>
 
+          <div className="space-y-3 border border-primary/40 bg-card p-6">
+            <div>
+              <Label className="text-sm font-semibold text-foreground">Your Contribution (SOL)</Label>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                As the creator you must contribute SOL to seed your launch. This goes directly to the escrow wallet and demonstrates commitment to your community.
+              </p>
+            </div>
+            <Input
+              type="number"
+              step="0.01"
+              min={MIN_CREATOR_SOL}
+              value={form.creatorContribution}
+              onChange={(e) => update("creatorContribution", e.target.value)}
+              placeholder="0.1"
+              className="font-mono"
+              required
+            />
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+              <span>Minimum {MIN_CREATOR_SOL} SOL</span>
+              {solBalance !== null && (
+                <span className="font-mono">Balance: {solBalance.toFixed(4)} SOL</span>
+              )}
+            </div>
+            {creatorContribError && (
+              <p className="flex items-start gap-1.5 text-xs text-destructive">
+                <AlertCircle className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                <span>{creatorContribError}</span>
+              </p>
+            )}
+          </div>
+
           <div className="border-l-2 border-primary bg-muted p-4">
             <p className="text-xs leading-relaxed text-muted-foreground">
               {platform === "pumpfun"
-                ? "A unique escrow wallet and token mint address are generated when you schedule. All contributor SOL is held in escrow until your token launches automatically on Pump.fun at the scheduled time."
-                : "A unique escrow wallet is generated for this launch. All contributor SOL is held there until your token launches automatically on Bags.fm at the scheduled time."}
+                ? "A unique escrow wallet and token mint address are generated when you schedule. Your seed SOL transfers to escrow immediately. All contributor SOL is held there until your token launches automatically on Pump.fun at the scheduled time."
+                : "A unique escrow wallet is generated for this launch. Your seed SOL transfers to escrow immediately. All contributor SOL is held there until your token launches automatically on Bags.fm at the scheduled time."}
             </p>
           </div>
 
-          <Button type="submit" className="w-full" size="lg" disabled={isSubmitting || !connected}>
-            {isSubmitting ? "Scheduling..." : !connected ? "Connect Wallet to Schedule" : "Schedule Launch"}
+          {step === "error" && errorMsg && (
+            <div className="space-y-3 border border-destructive/50 bg-destructive/10 p-4">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-destructive" />
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-destructive">
+                    {pendingLaunch ? "Contribution failed" : "Failed to schedule"}
+                  </p>
+                  <p className="text-xs text-muted-foreground break-words">{errorMsg}</p>
+                </div>
+              </div>
+              {pendingLaunch && (
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="flex-1"
+                    onClick={handleRetryContribution}
+                    disabled={isBusy}
+                  >
+                    Retry contribution
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => navigate(`/launch/${pendingLaunch.launch_id}`)}
+                  >
+                    Skip and view launch
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          <Button
+            type="submit"
+            className="w-full gap-2"
+            size="lg"
+            disabled={!canSubmit || (step === "error" && !!pendingLaunch)}
+          >
+            {isBusy && <Loader2 className="h-4 w-4 animate-spin" />}
+            {submitLabel}
           </Button>
         </form>
       </div>
