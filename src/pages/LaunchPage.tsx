@@ -182,6 +182,32 @@ const LaunchPage = () => {
       />
       <LaunchHeader launch={launch} />
 
+      <div className="container mx-auto px-4 pt-6">
+        <div className="flex flex-col gap-3 border border-border bg-card p-3 sm:flex-row sm:items-center">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Share2 className="h-3.5 w-3.5" />
+            <span className="text-[10px] font-semibold uppercase tracking-widest">Share</span>
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-mono text-xs text-foreground">{shareUrl}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={handleCopyShare} className="gap-1.5">
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? "Copied" : "Copy"}
+            </Button>
+            <a href={tweetHref} target="_blank" rel="noopener noreferrer">
+              <Button size="sm" className="gap-1.5">
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor" aria-hidden="true">
+                  <path d="M18.244 2H21.5l-7.5 8.57L23 22h-6.844l-5.36-7.01L4.5 22H1.244l8.03-9.18L1 2h6.99l4.84 6.4L18.244 2zm-1.2 18h1.86L7.04 4H5.07l11.974 16z" />
+                </svg>
+                Tweet
+              </Button>
+            </a>
+          </div>
+        </div>
+      </div>
+
       <div className="container mx-auto grid gap-6 px-4 py-8 lg:grid-cols-5">
         <div className="space-y-6 lg:col-span-3">
           {isScheduled && (
