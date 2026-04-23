@@ -64,6 +64,26 @@ const Index = () => {
     },
   });
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [liveLaunches?.length]);
+
+  useEffect(() => {
+    setCompletedPage(1);
+  }, [completedLaunches?.length]);
+
+  const totalPages = Math.ceil((liveLaunches?.length || 0) / LAUNCHES_PER_PAGE);
+  const paginatedLaunches = liveLaunches?.slice(
+    (currentPage - 1) * LAUNCHES_PER_PAGE,
+    currentPage * LAUNCHES_PER_PAGE,
+  ) || [];
+
+  const totalCompletedPages = Math.ceil((completedLaunches?.length || 0) / LAUNCHES_PER_PAGE);
+  const paginatedCompleted = completedLaunches?.slice(
+    (completedPage - 1) * LAUNCHES_PER_PAGE,
+    completedPage * LAUNCHES_PER_PAGE,
+  ) || [];
+
   const features = [
     {
       icon: Coins,
