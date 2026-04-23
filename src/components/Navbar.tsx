@@ -4,6 +4,7 @@ import { DynamicWidget } from "@dynamic-labs/sdk-react-core";
 import WalletDropdown from "@/components/WalletDropdown";
 import { useWallet } from "@/hooks/useWallet";
 import { useDashboardNotifications } from "@/hooks/useDashboardNotifications";
+import { LayoutDashboard } from "lucide-react";
 
 const Navbar = () => {
   const { connected } = useWallet();
@@ -25,17 +26,30 @@ const Navbar = () => {
             </Button>
           </Link>
           {connected && (
-            <Link to="/dashboard" className="relative hidden sm:inline-flex">
-              <Button size="sm" variant="outline">
-                Dashboard
-              </Button>
-              {hasUnread && (
-                <span className="pointer-events-none absolute -right-1 -top-1 flex h-2.5 w-2.5">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
-                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary" />
-                </span>
-              )}
-            </Link>
+            <>
+              <Link to="/dashboard" className="relative inline-flex sm:hidden" aria-label="Dashboard">
+                <Button size="icon" variant="outline" aria-label="Dashboard">
+                  <LayoutDashboard className="h-4 w-4" />
+                </Button>
+                {hasUnread && (
+                  <span className="pointer-events-none absolute -right-1 -top-1 flex h-2.5 w-2.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary" />
+                  </span>
+                )}
+              </Link>
+              <Link to="/dashboard" className="relative hidden sm:inline-flex">
+                <Button size="sm" variant="outline">
+                  Dashboard
+                </Button>
+                {hasUnread && (
+                  <span className="pointer-events-none absolute -right-1 -top-1 flex h-2.5 w-2.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-primary" />
+                  </span>
+                )}
+              </Link>
+            </>
           )}
           {connected ? (
             <>
