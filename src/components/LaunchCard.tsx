@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
-import { Users, Coins } from "lucide-react";
+import { useState } from "react";
+import { Users, Coins, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import CountdownTimer from "@/components/CountdownTimer";
 import { formatSol } from "@/lib/constants";
@@ -32,6 +33,16 @@ const LaunchCard = ({
   animationDelay = 0,
 }: LaunchCardProps) => {
   const isLive = status === "scheduled";
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const shareUrl = `${window.location.origin}/launch/${id}`;
+    navigator.clipboard.writeText(shareUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <div
@@ -104,11 +115,24 @@ const LaunchCard = ({
       </div>
 
       <div className="border-t border-border p-4">
-        <Link to={`/launch/${id}`}>
-          <Button className="w-full" size="sm">
-            {isLive ? "Participate" : "View Details"}
+        <div className="flex items-center gap-2">
+          <Link to={`/launch/${id}`} className="flex-1">
+            <Button className="w-full" size="sm">
+              {isLive ? "Participate" : "View Details"}
+            </Button>
+          </Link>
+          <Button
+            type="button"
+            size="icon"
+            variant="outline"
+            className="h-9 w-9 flex-shrink-0"
+            onClick={handleCopy}
+            aria-label="Copy launch link"
+            title={copied ? "Copied" : "Copy link"}
+          >
+            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
           </Button>
-        </Link>
+        </div>
       </div>
     </div>
   );

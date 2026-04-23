@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import CountdownTimer from "@/components/CountdownTimer";
 import Seo from "@/components/Seo";
 import { formatSol, solToLamports, LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
-import { Wallet, Loader2, ExternalLink } from "lucide-react";
+import { Wallet, Loader2, ExternalLink, Share2, Copy, Check } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useWallet } from "@/hooks/useWallet";
 import { useToast } from "@/hooks/use-toast";
@@ -21,6 +21,7 @@ const LaunchPage = () => {
   const [solAmount, setSolAmount] = useState("");
   const [isContributing, setIsContributing] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [copied, setCopied] = useState(false);
   const { connected, publicKey, wallet } = useWallet();
   const { toast } = useToast();
   const { setShowAuthFlow } = useDynamicContext();
@@ -156,6 +157,18 @@ const LaunchPage = () => {
   const platformName = isPumpfun ? "Pump.fun" : "Bags.fm";
   const platformHref = isPumpfun ? "https://pump.fun" : "https://bags.fm";
 
+  const shareUrl = `${window.location.origin}/launch/${launch.id}`;
+  const tweetText = encodeURIComponent(
+    `${launch.token_name} ($${launch.token_symbol}) is launching on @eryslive via ${platformName}.\n\nGet in before it goes live and secure your early position.\n\n${shareUrl}`
+  );
+  const tweetHref = `https://twitter.com/intent/tweet?text=${tweetText}`;
+
+  const handleCopyShare = () => {
+    navigator.clipboard.writeText(shareUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
     <main className="min-h-screen">
       <Seo
@@ -168,6 +181,32 @@ const LaunchPage = () => {
         image={launch.image_url || undefined}
       />
       <LaunchHeader launch={launch} />
+
+      <div className="container mx-auto px-4 pt-6">
+        <div className="flex flex-col gap-3 border border-border bg-card p-3 sm:flex-row sm:items-center">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Share2 className="h-3.5 w-3.5" />
+            <span className="text-[10px] font-semibold uppercase tracking-widest">Share</span>
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-mono text-xs text-foreground">{shareUrl}</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={handleCopyShare} className="gap-1.5">
+              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              {copied ? "Copied" : "Copy"}
+            </Button>
+            <a href={tweetHref} target="_blank" rel="noopener noreferrer">
+              <Button size="sm" className="gap-1.5">
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor" aria-hidden="true">
+                  <path d="M18.244 2H21.5l-7.5 8.57L23 22h-6.844l-5.36-7.01L4.5 22H1.244l8.03-9.18L1 2h6.99l4.84 6.4L18.244 2zm-1.2 18h1.86L7.04 4H5.07l11.974 16z" />
+                </svg>
+                Tweet
+              </Button>
+            </a>
+          </div>
+        </div>
+      </div>
 
       <div className="container mx-auto grid gap-6 px-4 py-8 lg:grid-cols-5">
         <div className="space-y-6 lg:col-span-3">
