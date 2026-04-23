@@ -226,8 +226,9 @@ const Index = () => {
               ))}
             </div>
           ) : completedLaunches && completedLaunches.length > 0 ? (
+            <>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 opacity-75">
-              {completedLaunches.map((launch, i) => (
+              {paginatedCompleted.map((launch, i) => (
                 <LaunchCard
                   key={launch.id}
                   id={launch.id}
@@ -244,6 +245,28 @@ const Index = () => {
                 />
               ))}
             </div>
+            {totalCompletedPages > 1 && (
+              <div className="mt-6 flex items-center justify-between border border-border bg-card px-4 py-3">
+                <button
+                  onClick={() => setCompletedPage((p) => Math.max(1, p - 1))}
+                  disabled={completedPage === 1}
+                  className="text-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  ← Previous
+                </button>
+                <span className="font-mono text-xs text-muted-foreground">
+                  Page {completedPage} of {totalCompletedPages} · {completedLaunches.length} launches
+                </span>
+                <button
+                  onClick={() => setCompletedPage((p) => Math.min(totalCompletedPages, p + 1))}
+                  disabled={completedPage === totalCompletedPages}
+                  className="text-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  Next →
+                </button>
+              </div>
+            )}
+            </>
           ) : (
             <div className="flex flex-col items-center justify-center rounded-sm border border-dashed border-border py-12">
               <p className="text-muted-foreground">No completed launches yet.</p>
