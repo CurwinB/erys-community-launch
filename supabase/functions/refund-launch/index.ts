@@ -69,7 +69,8 @@ Deno.serve(async (req) => {
     const { data: contributions, error: contribErr } = await supabase
       .from("contributions")
       .select("*")
-      .eq("launch_id", launch_id);
+      .eq("launch_id", launch_id)
+      .order("contributed_at", { ascending: true });
 
     if (contribErr) throw contribErr;
 
@@ -95,36 +96,76 @@ Deno.serve(async (req) => {
     const connection = new Connection(SOLANA_RPC_URL, "confirmed");
     const escrowKeypair = Keypair.fromSecretKey(escrowKeyBytes);
     const TX_FEE = 5_000n;
+    const RENT_EXEMPT_RESERVE = 890_880n;
+
+    // Track escrow balance locally to avoid re-querying the chain per contribution.
+    let escrowAvailable =
+      BigInt(await connection.getBalance(escrowKeypair.publicKey, "confirmed")) -
+      RENT_EXEMPT_RESERVE;
 
     let refundedCount = 0;
+    let partialCount = 0;
+    let unrecoverableCount = 0;
     let failedCount = 0;
     const errors: string[] = [];
+    const shortfalls: { wallet: string; shortfall_lamports: number }[] = [];
 
     for (const contrib of contributions) {
       try {
         if (contrib.refund_tx_signature) {
           continue;
         }
-        const refundLamports = BigInt(contrib.amount_lamports) - TX_FEE;
-        if (refundLamports <= 0n) {
+        const requested = BigInt(contrib.amount_lamports) - TX_FEE;
+        if (requested <= 0n) {
           failedCount++;
           errors.push(`${contrib.wallet_address}: amount too small after fee`);
           continue;
         }
 
+        // Not enough left to even cover one tx fee — mark as unrecoverable, skip send.
+        if (escrowAvailable <= TX_FEE) {
+          await supabase
+            .from("contributions")
+            .update({ refund_shortfall_lamports: Number(requested) })
+            .eq("id", contrib.id);
+          unrecoverableCount++;
+          shortfalls.push({
+            wallet: contrib.wallet_address,
+            shortfall_lamports: Number(requested),
+          });
+          continue;
+        }
+
+        const spendable = escrowAvailable - TX_FEE;
+        const payout = requested < spendable ? requested : spendable;
+        const shortfall = requested - payout;
+
         const txSignature = await sendRefundWithRetry(
           connection,
           escrowKeypair,
           new PublicKey(contrib.wallet_address),
-          Number(refundLamports),
+          Number(payout),
         );
 
         await supabase
           .from("contributions")
-          .update({ refund_tx_signature: txSignature })
+          .update({
+            refund_tx_signature: txSignature,
+            refund_shortfall_lamports: Number(shortfall),
+          })
           .eq("id", contrib.id);
 
+        // Decrement local balance: payout + network fee
+        escrowAvailable -= payout + TX_FEE;
+
         refundedCount++;
+        if (shortfall > 0n) {
+          partialCount++;
+          shortfalls.push({
+            wallet: contrib.wallet_address,
+            shortfall_lamports: Number(shortfall),
+          });
+        }
       } catch (err: any) {
         console.error(`Refund failed for ${contrib.wallet_address}:`, err?.message ?? err);
         failedCount++;
@@ -136,8 +177,11 @@ Deno.serve(async (req) => {
       JSON.stringify({
         success: true,
         refunded: refundedCount,
+        partial: partialCount,
+        unrecoverable: unrecoverableCount,
         failed: failedCount,
         total: contributions.length,
+        shortfalls: shortfalls.length > 0 ? shortfalls : undefined,
         errors: errors.length > 0 ? errors : undefined,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
