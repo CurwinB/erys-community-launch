@@ -25,6 +25,7 @@ interface Contribution {
   amount_lamports: number;
   refund_tx_signature: string | null;
   contributed_at: string;
+  refund_shortfall_lamports?: number | null;
 }
 
 interface Launch {
@@ -63,12 +64,28 @@ const RefundsTab = ({ contributions, launches }: Props) => {
     return l?.status === "cancelled" ? "Launch cancelled" : "Other";
   };
 
+  const totalShortfallSol = useMemo(
+    () =>
+      lamportsToSol(
+        refunded.reduce(
+          (sum, c) => sum + Number(c.refund_shortfall_lamports ?? 0),
+          0,
+        ),
+      ),
+    [refunded],
+  );
+
+  const hasShortfalls = totalShortfallSol > 0;
+
   const handleExport = () => {
     const rows = refunded.map((c) => ({
       launch_id: c.launch_id,
       token: launchMap.get(c.launch_id)?.token_symbol ?? "",
       wallet: c.wallet_address,
       sol_refunded: lamportsToSol(c.amount_lamports).toFixed(4),
+      sol_shortfall: lamportsToSol(
+        Number(c.refund_shortfall_lamports ?? 0),
+      ).toFixed(4),
       refund_tx: c.refund_tx_signature ?? "",
       contribution_date: c.contributed_at,
       reason: reasonFor(c.launch_id),
@@ -78,8 +95,8 @@ const RefundsTab = ({ contributions, launches }: Props) => {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="bg-card border border-destructive/40 rounded-none p-4 flex-1 mr-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="bg-card border border-destructive/40 rounded-none p-4 flex-1">
           <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-1">
             Total SOL Refunded
           </div>
@@ -87,6 +104,16 @@ const RefundsTab = ({ contributions, launches }: Props) => {
             {formatSolNumber(totalRefundedSol)} SOL
           </div>
         </div>
+        {hasShortfalls && (
+          <div className="bg-card border border-primary/40 rounded-none p-4 flex-1">
+            <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-1">
+              Total Shortfall
+            </div>
+            <div className="font-mono text-2xl font-bold text-primary">
+              {formatSolNumber(totalShortfallSol)} SOL
+            </div>
+          </div>
+        )}
         <Button
           size="sm"
           variant="outline"
@@ -106,6 +133,7 @@ const RefundsTab = ({ contributions, launches }: Props) => {
               <TableHead>Token</TableHead>
               <TableHead>Wallet</TableHead>
               <TableHead className="text-right">SOL Refunded</TableHead>
+              <TableHead className="text-right">Shortfall</TableHead>
               <TableHead>Refund TX</TableHead>
               <TableHead>Refund Date</TableHead>
               <TableHead>Reason</TableHead>
@@ -115,7 +143,7 @@ const RefundsTab = ({ contributions, launches }: Props) => {
             {refunded.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={8}
                   className="text-center text-muted-foreground py-8 font-mono text-sm"
                 >
                   No refunds
@@ -124,6 +152,7 @@ const RefundsTab = ({ contributions, launches }: Props) => {
             )}
             {refunded.map((c) => {
               const l = launchMap.get(c.launch_id);
+              const shortfallLamports = Number(c.refund_shortfall_lamports ?? 0);
               return (
                 <TableRow key={c.id} className="border-border">
                   <TableCell className="font-mono text-xs text-muted-foreground">
@@ -137,6 +166,15 @@ const RefundsTab = ({ contributions, launches }: Props) => {
                   </TableCell>
                   <TableCell className="font-mono text-right text-destructive">
                     {formatSol(c.amount_lamports)}
+                  </TableCell>
+                  <TableCell
+                    className={`font-mono text-right ${
+                      shortfallLamports > 0
+                        ? "text-primary"
+                        : "text-muted-foreground"
+                    }`}
+                  >
+                    {shortfallLamports > 0 ? formatSol(shortfallLamports) : "—"}
                   </TableCell>
                   <TableCell className="font-mono text-xs">
                     {c.refund_tx_signature ? (
