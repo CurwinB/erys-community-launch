@@ -105,11 +105,11 @@ const RefundsTab = ({ contributions, launches }: Props) => {
           </div>
         </div>
         {hasShortfalls && (
-          <div className="bg-card border border-warning/40 rounded-none p-4 flex-1">
+          <div className="bg-card border border-primary/40 rounded-none p-4 flex-1">
             <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-1">
               Total Shortfall
             </div>
-            <div className="font-mono text-2xl font-bold text-warning">
+            <div className="font-mono text-2xl font-bold text-primary">
               {formatSolNumber(totalShortfallSol)} SOL
             </div>
           </div>
@@ -170,7 +170,7 @@ const RefundsTab = ({ contributions, launches }: Props) => {
                   <TableCell
                     className={`font-mono text-right ${
                       shortfallLamports > 0
-                        ? "text-warning"
+                        ? "text-primary"
                         : "text-muted-foreground"
                     }`}
                   >
