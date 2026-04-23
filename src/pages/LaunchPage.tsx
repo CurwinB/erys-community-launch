@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import CountdownTimer from "@/components/CountdownTimer";
 import Seo from "@/components/Seo";
 import { formatSol, solToLamports, LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
-import { Wallet, Loader2, ExternalLink } from "lucide-react";
+import { Wallet, Loader2, ExternalLink, Share2, Copy, Check } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useWallet } from "@/hooks/useWallet";
 import { useToast } from "@/hooks/use-toast";
