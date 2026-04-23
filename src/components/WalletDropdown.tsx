@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { Link } from "react-router-dom";
 import {
   Connection,
   PublicKey,
@@ -16,7 +17,7 @@ import { isSolanaWallet } from "@dynamic-labs/solana";
 import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 import { useWallet } from "@/hooks/useWallet";
 import { supabase } from "@/integrations/supabase/client";
-import { Copy, Send, ChevronDown, Loader2, X } from "lucide-react";
+import { Copy, Send, ChevronDown, Loader2, X, LayoutDashboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
