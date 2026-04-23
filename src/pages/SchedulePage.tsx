@@ -310,6 +310,35 @@ const SchedulePage = () => {
     if (!pendingLaunch) return;
     setErrorMsg(null);
     try {
+      // If we already sent a transaction, check whether it landed before re-signing.
+      if (pendingLaunch.last_tx_signature) {
+        setStep("confirming");
+        const { value } = await connection.getSignatureStatuses(
+          [pendingLaunch.last_tx_signature],
+          { searchTransactionHistory: true }
+        );
+        const status = value[0];
+        if (
+          status &&
+          !status.err &&
+          (status.confirmationStatus === "confirmed" ||
+            status.confirmationStatus === "finalized")
+        ) {
+          // Already on-chain — just record it, don't ask user to pay again.
+          setStep("recording");
+          const lamports = solToLamports(parseFloat(form.creatorContribution));
+          await recordContribution(
+            pendingLaunch.launch_id,
+            pendingLaunch.last_tx_signature,
+            lamports
+          );
+          const url = `${window.location.origin}/launch/${pendingLaunch.launch_id}`;
+          setSuccessData({ id: pendingLaunch.launch_id, url });
+          setStep("success");
+          return;
+        }
+        // Status unknown or errored — fall through and send a new tx.
+      }
       await performContribution(pendingLaunch.launch_id, pendingLaunch.escrow_wallet);
       const url = `${window.location.origin}/launch/${pendingLaunch.launch_id}`;
       setSuccessData({ id: pendingLaunch.launch_id, url });
