@@ -119,73 +119,83 @@ export async function executeBagsLaunch(
   // Adjust to ensure sum equals remaining
   basisPointsArray[0] += remaining - usedBps;
 
-  // Step 1: fee-share/config
-  console.log(`Calling fee-share/config with ${claimersArray.length} claimers`);
-  const feeShareController = new AbortController();
-  const feeShareTimeout = setTimeout(() => feeShareController.abort(), 30_000);
-  let feeShareRes: any;
-  try {
-    feeShareRes = await fetch(`${BAGS_API_BASE}/fee-share/config`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": BAGS_API_KEY,
-      },
-      body: JSON.stringify({
-        payer: launch.escrow_wallet_public_key,
-        baseMint: launch.token_mint_address,
-        claimersArray,
-        basisPointsArray,
-        partner: BAGS_PARTNER_WALLET,
-        partnerConfig: BAGS_PARTNER_CONFIG,
-      }),
-      signal: feeShareController.signal,
-    });
-  } catch (err: any) {
-    if (err.name === "AbortError") {
+  // Step 1: fee-share/config (skipped on retry if a configKey already exists for this launch)
+  let configKey: string;
+
+  if (launch.fee_share_config_key) {
+    console.log(
+      `Using existing fee_share_config_key from previous attempt: ${launch.fee_share_config_key}`
+    );
+    configKey = launch.fee_share_config_key;
+  } else {
+    console.log(`Calling fee-share/config with ${claimersArray.length} claimers`);
+    const feeShareController = new AbortController();
+    const feeShareTimeout = setTimeout(() => feeShareController.abort(), 30_000);
+    let feeShareRes: any;
+    try {
+      feeShareRes = await fetch(`${BAGS_API_BASE}/fee-share/config`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": BAGS_API_KEY,
+        },
+        body: JSON.stringify({
+          payer: launch.escrow_wallet_public_key,
+          baseMint: launch.token_mint_address,
+          claimersArray,
+          basisPointsArray,
+          partner: BAGS_PARTNER_WALLET,
+          partnerConfig: BAGS_PARTNER_CONFIG,
+        }),
+        signal: feeShareController.signal,
+      });
+    } catch (err: any) {
+      if (err.name === "AbortError") {
+        await setFailed(
+          launch.id,
+          "Bags fee-share/config request timed out after 30 seconds"
+        );
+        return;
+      }
+      await setFailed(launch.id, `Bags fee-share/config request failed: ${err.message}`);
+      return;
+    } finally {
+      clearTimeout(feeShareTimeout);
+    }
+
+    if (!feeShareRes.ok) {
       await setFailed(
         launch.id,
-        "Bags fee-share/config request timed out after 30 seconds"
+        `fee-share/config failed: ${await feeShareRes.text()}`
       );
       return;
     }
-    await setFailed(launch.id, `Bags fee-share/config request failed: ${err.message}`);
-    return;
-  } finally {
-    clearTimeout(feeShareTimeout);
-  }
 
-  if (!feeShareRes.ok) {
-    await setFailed(
-      launch.id,
-      `fee-share/config failed: ${await feeShareRes.text()}`
-    );
-    return;
-  }
+    const feeShareData = (await feeShareRes.json()) as any;
+    const returnedConfigKey = feeShareData.response?.meteoraConfigKey;
+    const feeShareTxs = feeShareData.response?.transactions || [];
 
-  const feeShareData = (await feeShareRes.json()) as any;
-  const configKey = feeShareData.response?.meteoraConfigKey;
-  const feeShareTxs = feeShareData.response?.transactions || [];
-
-  if (!configKey) {
-    await setFailed(launch.id, "fee-share/config returned no configKey");
-    return;
-  }
-
-  console.log(`fee-share/config returned ${feeShareTxs.length} transactions`);
-
-  for (let i = 0; i < feeShareTxs.length; i++) {
-    try {
-      const sig = await signAndSendToBags(feeShareTxs[i].transaction, escrowKeypair);
-      console.log(`fee-share tx ${i + 1}/${feeShareTxs.length}: ${sig}`);
-    } catch (err: any) {
-      await setFailed(launch.id, `fee-share tx ${i + 1} failed: ${err.message}`);
+    if (!returnedConfigKey) {
+      await setFailed(launch.id, "fee-share/config returned no configKey");
       return;
     }
-    await new Promise((r) => setTimeout(r, 500));
-  }
 
-  await storeFeeShareConfig(launch.id, configKey, claimersArray.length);
+    console.log(`fee-share/config returned ${feeShareTxs.length} transactions`);
+
+    for (let i = 0; i < feeShareTxs.length; i++) {
+      try {
+        const sig = await signAndSendToBags(feeShareTxs[i].transaction, escrowKeypair);
+        console.log(`fee-share tx ${i + 1}/${feeShareTxs.length}: ${sig}`);
+      } catch (err: any) {
+        await setFailed(launch.id, `fee-share tx ${i + 1} failed: ${err.message}`);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    await storeFeeShareConfig(launch.id, returnedConfigKey, claimersArray.length);
+    configKey = returnedConfigKey;
+  }
 
   // Step 2: create-launch-transaction
   console.log("Calling create-launch-transaction");
