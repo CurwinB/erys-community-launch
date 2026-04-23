@@ -91,9 +91,8 @@ export async function executeBagsLaunch(
   }
 
   // Build fee share claimers
-  const PLATFORM_BPS = 2500;
   const CREATOR_MIN_BPS = 750;
-  const remaining = 10000 - PLATFORM_BPS;
+  const remaining = 10000; // claimers must sum to 10000; partner handled separately by Bags
   const totalNum = Number(totalLamports);
 
   const claimersArray: string[] = [];
@@ -108,7 +107,7 @@ export async function executeBagsLaunch(
   basisPointsArray.push(creatorBps);
 
   let usedBps = creatorBps;
-  for (let i = 1; i < Math.min(contributions.length, 99); i++) {
+  for (let i = 1; i < Math.min(contributions.length, 100); i++) {
     const bps = Math.floor(
       (Number(BigInt(contributions[i].amount_lamports)) / totalNum) * remaining
     );
