@@ -1,0 +1,1 @@
+UPDATE public.launches SET status = 'cancelled', execution_error = COALESCE(execution_error, '') || ' [admin: paused pending refund mechanism fix]' WHERE id = '637f3b75-8ada-4d3f-accd-1490e0ebeb41' AND status = 'scheduled';
