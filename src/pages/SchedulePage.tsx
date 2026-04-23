@@ -158,17 +158,57 @@ const SchedulePage = () => {
           (txResult as any)?.hash ||
           JSON.stringify(txResult);
 
-    setStep("confirming");
-    await connection.confirmTransaction(
-      { signature, blockhash, lastValidBlockHeight },
-      "confirmed"
+    // Persist the signature immediately so retries can verify on-chain status
+    // instead of asking the user to sign and pay again.
+    setPendingLaunch((prev) =>
+      prev
+        ? { ...prev, last_tx_signature: signature }
+        : { launch_id: launchId, escrow_wallet: escrowWallet, last_tx_signature: signature }
     );
 
+    setStep("confirming");
+    await pollForConfirmation(signature);
+
     setStep("recording");
+    await recordContribution(launchId, signature, lamports);
+  };
+
+  // Poll getSignatureStatuses every 2s for up to 60s. Resolves on confirmed/finalized,
+  // throws if the tx errored, throws "timeout" if not seen in time.
+  const pollForConfirmation = async (signature: string, timeoutMs = 60_000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const { value } = await connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: true,
+      });
+      const status = value[0];
+      if (status) {
+        if (status.err) {
+          throw new Error(`Transaction failed on-chain: ${JSON.stringify(status.err)}`);
+        }
+        if (
+          status.confirmationStatus === "confirmed" ||
+          status.confirmationStatus === "finalized"
+        ) {
+          return;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    throw new Error(
+      "Couldn't confirm in time — the network is slow. Use Retry to check on-chain status."
+    );
+  };
+
+  const recordContribution = async (
+    launchId: string,
+    signature: string,
+    lamports: number
+  ) => {
     const { data, error } = await supabase.functions.invoke("contribute", {
       body: {
         launch_id: launchId,
-        wallet_address: publicKey,
+        wallet_address: publicKey!,
         amount_lamports: lamports,
         tx_signature: signature,
       },
