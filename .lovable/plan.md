@@ -1,98 +1,52 @@
 
 
-# Add pagination to homepage launch feeds
+# What happened
 
-Add pagination controls to both live and completed launches sections on the homepage. Show 20 launches per page with previous/next navigation.
+Your SOL was taken — the transaction succeeded on-chain. But the app failed to record it because of a UX bug in the retry flow.
 
-## Changes to `src/pages/Index.tsx`
+## The actual sequence of events
 
-### 1. Add imports and pagination state
+1. You signed and sent the 0.1 SOL transfer to escrow `3mdZYeCn5y…Zuu7`.
+2. The frontend waited for confirmation but Solana was slow that block. The frontend's `confirmTransaction` call timed out with **"block height exceeded"** — meaning *"I didn't see it confirm in time"*, NOT *"it failed"*.
+3. Seconds later, Solana finalized the transaction successfully. Verified just now:
+   - Tx `3Cqc9K5o…vMBb` → `confirmationStatus: finalized`, `err: null`
+   - Escrow `3mdZYeCn…Zuu7` balance → **0.1 SOL** (exactly your contribution)
+4. The frontend showed "Contribution failed" and offered "Retry contribution" — but **the retry button builds a brand new transaction** instead of just recording the one that already landed. So clicking it would have you pay another 0.1 SOL on top.
 
-Import `useState` and `useEffect` from React. Add two separate pagination states:
+Your SOL is safe in escrow. It just isn't reflected as a contribution row in the database, so the launch shows 0 raised and you have no fee-share entitlement on the launch page.
 
-```typescript
-const [currentPage, setCurrentPage] = useState(1);
-const [completedPage, setCompletedPage] = useState(1);
-const LAUNCHES_PER_PAGE = 20;
-```
+## What to fix
 
-### 2. Add useEffect hooks to reset pagination
+### 1. Immediate recovery for your stuck contribution
 
-Reset to page 1 when the respective launch data changes:
+Insert a contribution row directly for launch `637f3b75-8ada-4d3f-accd-1490e0ebeb41`:
+- `wallet_address`: `BvpGuDSLDafZXSDeokapirQqiPshocaMFHG5N46c9rxV`
+- `amount_lamports`: `100000000`
+- `tx_signature`: `3Cqc9K5orLe9mvnxfY3GAXfYBgPwe7UTqMSJBMqZHywwVruoZEwnTx4evu5dcqUqZYvtEDgmvASHkbkkna88vMBb`
 
-```typescript
-useEffect(() => {
-  setCurrentPage(1);
-}, [liveLaunches?.length]);
+Done as a one-off SQL insert (the `contribute` edge function's on-chain verification would also accept this — both paths work).
 
-useEffect(() => {
-  setCompletedPage(1);
-}, [completedLaunches?.length]);
-```
+### 2. Fix the SchedulePage retry logic — the real bug
 
-### 3. Paginate live launches
+`performContribution` always builds & sends a NEW transaction. After a confirmation timeout, the retry should first check whether the original tx already landed before asking the user to pay again.
 
-After fetching `liveLaunches`, compute paginated subset:
+Changes to `src/pages/SchedulePage.tsx`:
 
-```typescript
-const totalPages = Math.ceil((liveLaunches?.length || 0) / LAUNCHES_PER_PAGE);
-const paginatedLaunches = liveLaunches?.slice(
-  (currentPage - 1) * LAUNCHES_PER_PAGE,
-  currentPage * LAUNCHES_PER_PAGE
-) || [];
-```
+- **Save the signature** as soon as `signAndSendTransaction` returns. Store it in `pendingLaunch` alongside `launch_id` and `escrow_wallet` (e.g. `last_tx_signature`).
+- **Split confirmation from sending.** When `confirmTransaction` rejects (timeout / block height exceeded), do NOT discard the signature. Poll `getSignatureStatuses` for ~30s — if it lands, jump straight to the `recording` step.
+- **Smart retry.** "Retry contribution" should:
+  1. If we have a saved signature, first call `getSignatureStatuses` (with `searchTransactionHistory: true`). If it's finalized with `err: null`, skip straight to calling the `contribute` edge function — never send a new tx.
+  2. Only if there's no signature OR the saved one is genuinely missing/failed, build & send a fresh transaction.
+- **Better error copy.** "block height exceeded" should not be shown as "Contribution failed". Show: *"Couldn't confirm in time — checking on-chain status…"* and run the status check automatically before offering manual retry.
 
-Replace `liveLaunches.map` with `paginatedLaunches.map` in the grid render.
+### 3. Resilience improvement
 
-### 4. Add live launches pagination controls
+Use `connection.confirmTransaction` with a longer timeout, or replace it with a polling loop on `getSignatureStatuses` (more reliable on busy RPCs). Standard pattern: poll every 2s for up to 60s, succeed on `confirmationStatus === "confirmed" | "finalized"` with `err === null`.
 
-Below the live launches grid, add pagination UI when `totalPages > 1`:
+## Files changed
 
-```tsx
-<div className="flex items-center justify-between border border-border bg-card px-4 py-3 mt-6">
-  <button
-    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-    disabled={currentPage === 1}
-    className="text-sm text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-  >
-    ← Previous
-  </button>
-  <span className="font-mono text-xs text-muted-foreground">
-    Page {currentPage} of {totalPages} · {liveLaunches?.length || 0} launches
-  </span>
-  <button
-    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-    disabled={currentPage === totalPages}
-    className="text-sm text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-  >
-    Next →
-  </button>
-</div>
-```
+- One-off SQL: insert the missing contribution row for launch `637f3b75…`
+- `src/pages/SchedulePage.tsx` — save signature before confirming, status-check before re-sending on retry, friendlier timeout copy, polling-based confirmation
 
-### 5. Paginate completed launches
-
-Apply the same pattern to completed launches with separate state:
-
-```typescript
-const totalCompletedPages = Math.ceil((completedLaunches?.length || 0) / LAUNCHES_PER_PAGE);
-const paginatedCompleted = completedLaunches?.slice(
-  (completedPage - 1) * LAUNCHES_PER_PAGE,
-  completedPage * LAUNCHES_PER_PAGE
-) || [];
-```
-
-Replace `completedLaunches.map` with `paginatedCompleted.map`.
-
-### 6. Add completed launches pagination controls
-
-Add identical pagination UI below the completed launches grid using `completedPage` state.
-
-### 7. Remove completed launches limit
-
-Change the `completedLaunches` query to remove the `.limit(6)` so all completed launches are fetched and can be paginated.
-
-## Files edited
-
-- `src/pages/Index.tsx` — add imports, state, pagination logic, and controls
+No edge function changes needed — `contribute` already does proper on-chain verification, so it will accept the recovery insert via the API too if you'd rather we go through that path than raw SQL.
 
