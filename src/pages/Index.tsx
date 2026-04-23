@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import LaunchCard from "@/components/LaunchCard";
@@ -8,6 +9,10 @@ import { LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
 import { Coins, Clock, Shield, ArrowDown } from "lucide-react";
 
 const Index = () => {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [completedPage, setCompletedPage] = useState(1);
+  const LAUNCHES_PER_PAGE = 20;
+
   const { data: liveLaunches, isLoading: liveLaunchesLoading } = useQuery({
     queryKey: ["launches", "live"],
     queryFn: async () => {
@@ -29,8 +34,7 @@ const Index = () => {
         .from("launches")
         .select(LAUNCH_PUBLIC_COLUMNS)
         .eq("status", "launched")
-        .order("launch_datetime", { ascending: false })
-        .limit(6);
+        .order("launch_datetime", { ascending: false });
       if (error) throw error;
       return data || [];
     },
