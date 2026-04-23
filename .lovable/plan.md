@@ -1,37 +1,76 @@
 
 
-# Fix: Bags create-launch returns "non-2xx" error
+# Add mandatory creator contribution to Schedule flow
 
-## Root cause
+The creator becomes the first contributor at schedule time. SOL transfers from their wallet to the new escrow wallet immediately after the launch row is created.
 
-The Bags `create-token-info` API returns the metadata URL at `response.tokenMetadata`, but `supabase/functions/create-launch/index.ts` reads it from `response.tokenLaunch.uri`, which doesn't exist. `ipfsMetadataUrl` becomes `null`, the function bails with a 500, and the form shows "Edge Function returned a non-2xx status code".
+## Changes — `src/pages/SchedulePage.tsx` only
 
-Confirmed from edge function logs:
+No edge function, DB, or other file changes. Both `create-launch` and `create-launch-pumpfun` already return `escrow_wallet`, and `contribute` already verifies on-chain transfers and inserts the row.
+
+### 1. Form state + new field
+
+Add `creatorContribution: ""` to form state. Render a new required field at the top of the "Contribution Limits" card (or above it) labelled **Your Contribution (SOL)** with helper text:
+
+> As the creator you must contribute SOL to seed your launch. This goes directly to the escrow wallet and demonstrates commitment to your community.
+
+Input: `type="number"`, `min="0.05"`, `step="0.01"`, monospace, required.
+
+### 2. SOL balance + live validation
+
+On wallet connect, fetch the user's SOL balance using a `Connection` to `VITE_SOLANA_RPC_URL` (same pattern as `WalletDropdown`). Show real-time inline error under the input when:
+- value is not a valid number
+- value < 0.05
+- value > `solBalance - 0.01` (reserve 0.01 SOL for fees)
+
+Disable the submit button while invalid.
+
+### 3. Multi-step submit flow
+
+Replace the single `isSubmitting` boolean with a `step` state machine:
+
+```text
+idle → creating → awaiting_signature → confirming → recording → success
+                                    ↘ error (with retry from saved launch_id)
 ```
-create-token-info response: {"success":true,"response":{
-  "tokenMint":"8NnLKEm2mkXxuiEXdiXgPjn2yFBZPaRk7LzBwA7vBAGS",
-  "tokenMetadata":"https://ipfs.io/ipfs/QmTvqPgxnVJdpTntaZU3ybZfEuqKmDPcAG1JeQJ4wfrNFR",
-  "tokenLaunch":{ ...no `uri` field... }
-}}
-tokenMint: 8NnLKEm2mkXxuiEXdiXgPjn2yFBZPaRk7LzBwA7vBAGS ipfsMetadataUrl: null
-```
 
-## Fix
+Submit handler sequence:
+1. **creating** — call `create-launch` or `create-launch-pumpfun`. Save returned `launch_id` and `escrow_wallet` into a `pendingLaunch` state object (so retries don't recreate the launch).
+2. **awaiting_signature** — build a `SystemProgram.transfer` from `publicKey` → `escrow_wallet` for `creatorContribution * LAMPORTS_PER_SOL` lamports. Set `feePayer` and `recentBlockhash` (from `connection.getLatestBlockhash("confirmed")`). Call `wallet.getSigner()` then `signer.signAndSendTransaction(tx)`. Extract signature using the same normalization as `WalletDropdown` (string | `.signature` | `.hash`).
+3. **confirming** — `connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, "confirmed")`.
+4. **recording** — call `contribute` edge function with `{ launch_id, wallet_address: publicKey, amount_lamports, tx_signature }`. The function re-verifies on-chain and inserts the contribution row (including basis-points eligibility for Bags fee shares — automatic, no extra fields needed).
+5. **success** — show the existing success card.
 
-Edit `supabase/functions/create-launch/index.ts` (line ~68):
+### 4. Error handling + retry
 
-- Change `ipfsMetadataUrl = tokenInfoData.response?.tokenLaunch?.uri || null;`
-- To: `ipfsMetadataUrl = tokenInfoData.response?.tokenMetadata || tokenInfoData.response?.tokenLaunch?.uri || null;`
+If step 1 fails, show error and reset (no launch was created).
 
-Keeping the `tokenLaunch.uri` fallback in case Bags ever changes the response shape back.
+If step 2/3/4 fails, keep `pendingLaunch` in state and show:
+- The error message
+- A "Retry contribution" button that re-runs steps 2–4 against the existing `launch_id` + `escrow_wallet` (does NOT call create-launch again)
+- A "Skip and view launch" link to the launch page (creator can contribute later via the normal launch page contribution flow if it exists)
 
-No other files need changing — the executor (`executor/src/executeBags.ts`) already passes whatever `launch.ipfs_metadata_url` contains as the `ipfs` field to `token-launch/create-launch-transaction`, and `https://ipfs.io/ipfs/Qm...` is the standard format Bags accepts.
+### 5. Submit button states
 
-## Cleanup of orphaned row
+Replace the existing label logic:
+- `idle` + connected + valid → "Schedule Launch & Contribute"
+- `creating` → "Creating launch…" (spinner)
+- `awaiting_signature` → "Sign the transaction in your wallet…" (spinner)
+- `confirming` → "Confirming on-chain…" (spinner)
+- `recording` → "Recording contribution…" (spinner)
+- error state with `pendingLaunch` → "Retry contribution"
 
-The failed attempt created a Bags token-info entry (`8NnLKEm2mkXxuiEXdiXgPjn2yFBZPaRk7LzBwA7vBAGS`) but no `launches` row (insert never ran). Nothing to clean up in our DB. The orphan token-info on Bags' side is harmless — it just won't be launched.
+Disabled while in any non-idle, non-error step.
+
+## Technical notes
+
+- Imports added: `Connection`, `PublicKey`, `SystemProgram`, `Transaction`, `LAMPORTS_PER_SOL` from `@solana/web3.js`; `isSolanaWallet` from `@dynamic-labs/solana`.
+- Use `import.meta.env.VITE_SOLANA_RPC_URL` (already configured per WalletDropdown).
+- Min contribution validation is independent of `form.minContribution` (the per-contributor minimum the creator sets for the launch). The 0.05 SOL floor is purely a UX guard for skin-in-the-game; it is NOT enforced by the edge function.
+- `contribute` edge function will reject the creator's contribution if `amount_lamports < min_contribution_lamports` of the launch. Add a client-side check that creator contribution ≥ `form.minContribution` and surface a clear inline error if not (otherwise we'd create a launch then fail recording).
+- The 5-min-before-launch contribution cutoff in `contribute` doesn't apply here because we already require launch_datetime ≥ 10 min from now in the existing validation.
 
 ## Files edited
 
-- `supabase/functions/create-launch/index.ts` — one-line fix to read `tokenMetadata` from the Bags response.
+- `src/pages/SchedulePage.tsx` — single-file change.
 
