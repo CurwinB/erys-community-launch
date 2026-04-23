@@ -159,8 +159,9 @@ const Index = () => {
               ))}
             </div>
           ) : liveLaunches && liveLaunches.length > 0 ? (
+            <>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {liveLaunches.map((launch, i) => {
+              {paginatedLaunches.map((launch, i) => {
                 const stats = contributionStats?.[launch.id];
                 return (
                   <LaunchCard
@@ -180,6 +181,28 @@ const Index = () => {
                 );
               })}
             </div>
+            {totalPages > 1 && (
+              <div className="mt-6 flex items-center justify-between border border-border bg-card px-4 py-3">
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="text-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  ← Previous
+                </button>
+                <span className="font-mono text-xs text-muted-foreground">
+                  Page {currentPage} of {totalPages} · {liveLaunches.length} launches
+                </span>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="text-sm text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  Next →
+                </button>
+              </div>
+            )}
+            </>
           ) : (
             <div className="mx-auto flex max-w-md flex-col items-center justify-center border border-border bg-card px-6 py-12 text-center">
               <p className="mb-6 text-muted-foreground">No launches scheduled yet.</p>
