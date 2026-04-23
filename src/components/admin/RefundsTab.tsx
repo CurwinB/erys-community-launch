@@ -95,8 +95,8 @@ const RefundsTab = ({ contributions, launches }: Props) => {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="bg-card border border-destructive/40 rounded-none p-4 flex-1 mr-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="bg-card border border-destructive/40 rounded-none p-4 flex-1">
           <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-1">
             Total SOL Refunded
           </div>
@@ -104,6 +104,16 @@ const RefundsTab = ({ contributions, launches }: Props) => {
             {formatSolNumber(totalRefundedSol)} SOL
           </div>
         </div>
+        {hasShortfalls && (
+          <div className="bg-card border border-warning/40 rounded-none p-4 flex-1">
+            <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-1">
+              Total Shortfall
+            </div>
+            <div className="font-mono text-2xl font-bold text-warning">
+              {formatSolNumber(totalShortfallSol)} SOL
+            </div>
+          </div>
+        )}
         <Button
           size="sm"
           variant="outline"
@@ -123,6 +133,7 @@ const RefundsTab = ({ contributions, launches }: Props) => {
               <TableHead>Token</TableHead>
               <TableHead>Wallet</TableHead>
               <TableHead className="text-right">SOL Refunded</TableHead>
+              <TableHead className="text-right">Shortfall</TableHead>
               <TableHead>Refund TX</TableHead>
               <TableHead>Refund Date</TableHead>
               <TableHead>Reason</TableHead>
@@ -132,7 +143,7 @@ const RefundsTab = ({ contributions, launches }: Props) => {
             {refunded.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={8}
                   className="text-center text-muted-foreground py-8 font-mono text-sm"
                 >
                   No refunds
@@ -141,6 +152,7 @@ const RefundsTab = ({ contributions, launches }: Props) => {
             )}
             {refunded.map((c) => {
               const l = launchMap.get(c.launch_id);
+              const shortfallLamports = Number(c.refund_shortfall_lamports ?? 0);
               return (
                 <TableRow key={c.id} className="border-border">
                   <TableCell className="font-mono text-xs text-muted-foreground">
@@ -154,6 +166,15 @@ const RefundsTab = ({ contributions, launches }: Props) => {
                   </TableCell>
                   <TableCell className="font-mono text-right text-destructive">
                     {formatSol(c.amount_lamports)}
+                  </TableCell>
+                  <TableCell
+                    className={`font-mono text-right ${
+                      shortfallLamports > 0
+                        ? "text-warning"
+                        : "text-muted-foreground"
+                    }`}
+                  >
+                    {shortfallLamports > 0 ? formatSol(shortfallLamports) : "—"}
                   </TableCell>
                   <TableCell className="font-mono text-xs">
                     {c.refund_tx_signature ? (
