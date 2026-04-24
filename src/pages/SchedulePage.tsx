@@ -25,7 +25,7 @@ const RPC_URL = import.meta.env.VITE_SOLANA_RPC_URL;
 const connection = new Connection(RPC_URL, "confirmed");
 
 const FEE_RESERVE_SOL = 0.01;
-const MIN_CREATOR_SOL_PUMPFUN = 0.05;
+const MIN_CREATOR_SOL_PUMPFUN = 0.2;
 const MIN_CREATOR_SOL_BAGS = 0.2;
 
 type Step =
@@ -116,7 +116,7 @@ const SchedulePage = () => {
     if (isNaN(creatorContribNum)) {
       creatorContribError = "Enter a valid number";
     } else if (creatorContribNum < minCreatorSol) {
-      creatorContribError = `Minimum ${minCreatorSol} SOL${platform === "bags" ? " (required by Bags.fm)" : ""}`;
+      creatorContribError = `Minimum ${minCreatorSol} SOL (required by ${platform === "bags" ? "Bags.fm" : "Pump.fun"})`;
     } else if (maxAffordable !== null && creatorContribNum > maxAffordable) {
       creatorContribError = `Insufficient balance. Max ${maxAffordable.toFixed(4)} SOL (after ${FEE_RESERVE_SOL} SOL fee reserve)`;
     } else if (!isNaN(minContribNum) && creatorContribNum < minContribNum) {
@@ -230,11 +230,11 @@ const SchedulePage = () => {
       return;
     }
 
-    // Hard guard: Bags.fm requires at least 0.2 SOL initial buy
-    if (platform === "bags" && parseFloat(form.creatorContribution) < MIN_CREATOR_SOL_BAGS) {
+    // Hard guard: both platforms require at least 0.2 SOL initial buy
+    if (parseFloat(form.creatorContribution) < minCreatorSol) {
       toast({
-        title: "Minimum 0.2 SOL required",
-        description: "Bags.fm requires at least 0.2 SOL as the creator's seed contribution.",
+        title: `Minimum ${minCreatorSol} SOL required`,
+        description: `${platform === "bags" ? "Bags.fm" : "Pump.fun"} requires at least ${minCreatorSol} SOL as the creator's seed contribution.`,
         variant: "destructive",
       });
       return;
@@ -581,7 +581,7 @@ const SchedulePage = () => {
               required
             />
             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-              <span>Minimum {minCreatorSol} SOL{platform === "bags" ? " (Bags.fm)" : ""}</span>
+              <span>Minimum {minCreatorSol} SOL ({platform === "bags" ? "Bags.fm" : "Pump.fun"})</span>
               {solBalance !== null && (
                 <span className="font-mono">Balance: {solBalance.toFixed(4)} SOL</span>
               )}
