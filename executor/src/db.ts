@@ -124,6 +124,18 @@ export async function setFailed(launchId: string, reason: string): Promise<void>
     .eq("id", launchId);
 
   if (error) console.error(`Error marking launch ${launchId} failed:`, error.message);
+
+  // Auto-refund contributors. Imported lazily to avoid a circular dependency
+  // (refundFailedLaunch.ts imports `supabase` from this file).
+  try {
+    const { refundFailedLaunch } = await import("./refundFailedLaunch");
+    await refundFailedLaunch(launchId);
+  } catch (refundErr: any) {
+    console.error(
+      `Auto-refund failed for launch ${launchId}:`,
+      refundErr?.message ?? refundErr,
+    );
+  }
 }
 
 export async function storeFeeShareConfig(
