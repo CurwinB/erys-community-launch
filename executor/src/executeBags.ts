@@ -72,10 +72,11 @@ export async function executeBagsLaunch(
   // Calculate reserves
   const ATA_COST = 2_039_280n;
   const TX_FEE = 5_000n;
+  const PRIORITY_FEE_PER_CONTRIBUTOR = 10_000n; // buffer for ComputeBudgetProgram priority fee per distribution tx
   const BASE_TX_FEES = 20_000n;
   const LOOKUP_TABLE_RENT = 2_550_000n;
   const contributorCount = BigInt(contributions.length);
-  const ataReserve = contributorCount * (ATA_COST + TX_FEE);
+  const ataReserve = contributorCount * (ATA_COST + TX_FEE + PRIORITY_FEE_PER_CONTRIBUTOR);
   const lookupTableReserve = contributorCount > 15n ? LOOKUP_TABLE_RENT : 0n;
   const netBuyLamports =
     totalLamports - ataReserve - lookupTableReserve - BASE_TX_FEES;

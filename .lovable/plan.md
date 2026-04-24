@@ -1,69 +1,72 @@
-
-
-# Skip fee-share/config on retry when configKey already stored
+# Add Priority Fee Buffer to ATA Reserve Calculation
 
 ## Problem
+The current ATA reserve calculation in both executor files does not account for the ComputeBudgetProgram.setComputeUnitPrice instruction added to each distribution transaction, which costs additional lamports per transfer.
 
-When `executeBags` retries a launch, it always calls `POST /fee-share/config`. Bags treats that mint as already-configured and returns `{success:true}` with no `meteoraConfigKey`, so our code fails at line 170 with `"fee-share/config returned no configKey"`. The valid key is already in `launches.fee_share_config_key` from the first attempt.
+## Solution
+Add a priority fee buffer constant (10,000 lamports per contributor) to the ATA reserve calculation in both executor files.
 
-## Fix — `executor/src/executeBags.ts`
+## Changes Required
 
-Wrap the existing fee-share block (lines 122–188) in a guard:
+### Fix 1: executor/src/executeBags.ts
 
-```ts
-let configKey: string;
+**Location:** Lines 73-78 (reserve calculation section)
 
-if (launch.fee_share_config_key) {
-  console.log(`Using existing fee_share_config_key: ${launch.fee_share_config_key}`);
-  configKey = launch.fee_share_config_key;
-} else {
-  // existing fee-share/config call, response handling,
-  // tx submission loop, and storeFeeShareConfig(...) — unchanged
-  configKey = feeShareData.response?.meteoraConfigKey;
-  if (!configKey) {
-    await setFailed(launch.id, "fee-share/config returned no configKey");
-    return;
-  }
-  // ... existing tx loop ...
-  await storeFeeShareConfig(launch.id, configKey, claimersArray.length);
-}
-
-// Step 2: create-launch-transaction — unchanged, uses configKey
+**Current code:**
+```typescript
+  // Calculate reserves
+  const ATA_COST = 2_039_280n;
+  const TX_FEE = 5_000n;
+  const BASE_TX_FEES = 20_000n;
+  const LOOKUP_TABLE_RENT = 2_550_000n;
+  const contributorCount = BigInt(contributions.length);
+  const ataReserve = contributorCount * (ATA_COST + TX_FEE);
 ```
 
-The `configKey` declaration on line 167 changes from `const` to be supplied by whichever branch ran. No other logic touched. Step 2 (`create-launch-transaction`) and Step 3 (sign + send) are unchanged.
-
-## Fix — `executor/src/db.ts`
-
-Already correct — `fee_share_config_key: string | null` exists on the `Launch` interface at line 25. No change needed; flagging so we don't waste an edit.
-
-## Manual follow-up (after deploy)
-
-Run in Supabase SQL editor to re-queue the launch:
-
-```sql
-UPDATE public.launches
-SET status = 'scheduled',
-    execution_error = null,
-    worker_locked_at = null,
-    worker_id = null
-WHERE id = 'a0d56180-c34a-4588-b4a4-709197996f94';
+**Replace with:**
+```typescript
+  // Calculate reserves
+  const ATA_COST = 2_039_280n;
+  const TX_FEE = 5_000n;
+  const PRIORITY_FEE_PER_CONTRIBUTOR = 10_000n; // buffer for ComputeBudgetProgram priority fee per distribution tx
+  const BASE_TX_FEES = 20_000n;
+  const LOOKUP_TABLE_RENT = 2_550_000n;
+  const contributorCount = BigInt(contributions.length);
+  const ataReserve = contributorCount * (ATA_COST + TX_FEE + PRIORITY_FEE_PER_CONTRIBUTOR);
 ```
 
-`execution_attempts` stays at 2 — this will be the third and final auto-attempt before the executor's `< 3` cap.
+### Fix 2: executor/src/executePumpfun.ts
 
-## Notes / risks
+**Location:** Lines 48-53 (reserve calculation section)
 
-1. **Claimers can't change on retry.** Because we skip re-registering, the on-chain config is locked to the claimer set from attempt 1. If contributors were added/removed between attempts, the new ones won't be in the fee-share config. For `a0d56180…` this is fine — same 2 contributors, same amounts.
-2. **If Bags ever invalidates a stale config key**, this retry will fail at `create-launch-transaction` instead. Acceptable — that's the correct failure mode and surfaces a real Bags-side problem rather than masking it.
-3. **No change to `claimer_count`** on retry, since we skip `storeFeeShareConfig`. Already correct from attempt 1.
+**Current code:**
+```typescript
+  // Calculate reserves
+  const ATA_COST = 2_039_280n;
+  const TX_FEE = 5_000n;
+  const PRIORITY_FEE = 50_000n;
+  const contributorCount = BigInt(contributions.length);
+  const ataReserve = contributorCount * (ATA_COST + TX_FEE);
+```
 
-## Out of scope
+**Replace with:**
+```typescript
+  // Calculate reserves
+  const ATA_COST = 2_039_280n;
+  const TX_FEE = 5_000n;
+  const PRIORITY_FEE = 10_000n; // buffer for ComputeBudgetProgram priority fee per distribution tx
+  const PRIORITY_FEE = 50_000n;
+  const contributorCount = BigInt(contributions.length);
+  const ataReserve = contributorCount * (ATA_COST + TX_FEE + PRIORITY_FEE);
+```
 
-- No change to `refund` flow, `db.ts`, `executeLaunch.ts`, or pumpfun path.
-- Not touching `execution_attempts` reset logic — keeping the 3-attempt cap as-is.
+**Note:** The first PRIORITY_FEE (10_000n) is for per-contributor distribution transactions. The second PRIORITY_FEE (50_000n) is the existing priority fee for the main launch transaction. Consider renaming one for clarity.
 
-## Files edited
+## Files Edited
+- executor/src/executeBags.ts
+- executor/src/executePumpfun.ts
 
-- `executor/src/executeBags.ts`
-
+## Impact
+- Ensures sufficient lamports are reserved for priority fees on each contributor's distribution transaction
+- Prevents "Insufficient SOL" errors during launch execution when priority fees are applied
+- No schema changes or environment variable changes required
