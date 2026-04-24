@@ -5,8 +5,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const BAGS_API_BASE = "https://public-api-v2.bags.fm/api/v1";
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -17,7 +15,6 @@ Deno.serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
   );
 
-  const BAGS_API_KEY = Deno.env.get("BAGS_API_KEY")!;
   const ESCROW_ENCRYPTION_KEY = Deno.env.get("ESCROW_ENCRYPTION_KEY")!;
 
   try {
@@ -40,47 +37,15 @@ Deno.serve(async (req) => {
       return errorResponse("Missing required fields", 400);
     }
 
-    // Step 1: Create token info on Bags API (multipart/form-data — do NOT set Content-Type)
-    const formData = new FormData();
-    formData.append("name", token_name);
-    formData.append("symbol", token_symbol.toUpperCase());
-    formData.append("description", description || "");
-    if (image_url) formData.append("imageUrl", image_url);
-    if (twitter_url) formData.append("twitter", twitter_url);
-    if (telegram_url) formData.append("telegram", telegram_url);
-    if (website_url) formData.append("website", website_url);
+    // NOTE: We intentionally do NOT call Bags' create-token-info here.
+    // Bags' mint reservation has a TTL and would expire between scheduling
+    // and execution. The executor calls create-token-info immediately
+    // before fee-share/config + create-launch-transaction so the
+    // reservation is always fresh. token_mint_address and
+    // ipfs_metadata_url are therefore inserted as null and populated by
+    // the executor at launch time.
 
-    const tokenInfoRes = await fetch(`${BAGS_API_BASE}/token-launch/create-token-info`, {
-      method: "POST",
-      headers: {
-        "x-api-key": BAGS_API_KEY,
-      },
-      body: formData,
-    });
-
-    let tokenMint: string | null = null;
-    let ipfsMetadataUrl: string | null = null;
-
-    if (tokenInfoRes.ok) {
-      const tokenInfoData = await tokenInfoRes.json();
-      console.log("create-token-info response:", JSON.stringify(tokenInfoData));
-      tokenMint = tokenInfoData.response?.tokenMint || null;
-      ipfsMetadataUrl =
-        tokenInfoData.response?.tokenMetadata ||
-        tokenInfoData.response?.tokenLaunch?.uri ||
-        null;
-      console.log("tokenMint:", tokenMint, "ipfsMetadataUrl:", ipfsMetadataUrl);
-    } else {
-      const errText = await tokenInfoRes.text();
-      console.error("create-token-info failed:", errText);
-      return errorResponse(`Bags create-token-info failed: ${errText}`, 500);
-    }
-
-    if (!tokenMint || !ipfsMetadataUrl) {
-      return errorResponse("Bags API did not return tokenMint or metadata URI. Cannot create launch.", 500);
-    }
-
-    // Step 2: Generate escrow keypair using Web Crypto (Ed25519 via raw bytes)
+    // Step 1: Generate escrow keypair using Web Crypto (Ed25519 via raw bytes)
     const keyPairBytes = new Uint8Array(64);
     crypto.getRandomValues(keyPairBytes);
 
@@ -114,7 +79,7 @@ Deno.serve(async (req) => {
       ESCROW_ENCRYPTION_KEY
     );
 
-    // Step 4: Insert into launches table
+    // Step 3: Insert into launches table
     const { data, error } = await supabase.from("launches").insert({
       token_name,
       token_symbol: token_symbol.toUpperCase(),
@@ -129,8 +94,8 @@ Deno.serve(async (req) => {
       escrow_wallet_public_key: escrowPublicKey,
       escrow_wallet_encrypted_private_key: encryptedPrivateKey,
       created_by_wallet,
-      token_mint_address: tokenMint,
-      ipfs_metadata_url: ipfsMetadataUrl,
+      token_mint_address: null,
+      ipfs_metadata_url: null,
       status: "scheduled",
     }).select("id").single();
 

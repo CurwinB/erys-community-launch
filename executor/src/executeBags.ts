@@ -5,6 +5,7 @@ import { decryptEscrowKey } from "./decrypt";
 import {
   Launch,
   Contribution,
+  supabase,
   setFailed,
   setLaunched,
   storeFeeShareConfig,
@@ -55,10 +56,90 @@ export async function executeBagsLaunch(
 ): Promise<void> {
   console.log(`Executing Bags launch ${launch.id} (${launch.token_name})`);
 
-  if (!launch.ipfs_metadata_url || !launch.token_mint_address) {
-    await setFailed(launch.id, "Missing ipfs_metadata_url or token_mint_address");
+  // Step 0: ALWAYS call create-token-info to get a fresh mint reservation.
+  // Bags' mint reservation has a TTL — calling this at scheduling time leads to
+  // stale reservations by the time the executor runs. We do this on every
+  // attempt (including retries) so a fresh reservation is always used.
+  console.log("Calling create-token-info for fresh mint reservation");
+  const tokenInfoForm = new FormData();
+  tokenInfoForm.append("name", launch.token_name);
+  tokenInfoForm.append("symbol", launch.token_symbol.toUpperCase());
+  tokenInfoForm.append("description", launch.description || "");
+  if (launch.image_url) tokenInfoForm.append("imageUrl", launch.image_url);
+  if (launch.twitter_url) tokenInfoForm.append("twitter", launch.twitter_url);
+  if (launch.telegram_url) tokenInfoForm.append("telegram", launch.telegram_url);
+  if (launch.website_url) tokenInfoForm.append("website", launch.website_url);
+
+  let tokenInfoRes: any;
+  try {
+    tokenInfoRes = await fetch(
+      `${BAGS_API_BASE}/token-launch/create-token-info`,
+      {
+        method: "POST",
+        headers: { "x-api-key": BAGS_API_KEY },
+        body: tokenInfoForm as any,
+      }
+    );
+  } catch (err: any) {
+    await setFailed(launch.id, `create-token-info request failed: ${err.message}`);
     return;
   }
+
+  if (!tokenInfoRes.ok) {
+    const errText = await tokenInfoRes.text();
+    console.error(
+      `create-token-info HTTP ${tokenInfoRes.status}: ${errText}`
+    );
+    await setFailed(launch.id, `create-token-info failed: ${errText}`);
+    return;
+  }
+
+  const tokenInfoData = (await tokenInfoRes.json()) as any;
+  console.log("create-token-info response:", JSON.stringify(tokenInfoData));
+  const tokenMint: string | undefined = tokenInfoData.response?.tokenMint;
+  const ipfsMetadataUrl: string | undefined =
+    tokenInfoData.response?.tokenMetadata ||
+    tokenInfoData.response?.tokenLaunch?.uri;
+
+  if (!tokenMint || !ipfsMetadataUrl) {
+    const errText = JSON.stringify(tokenInfoData);
+    console.error(`create-token-info returned no tokenMint or metadata URI: ${errText}`);
+    await setFailed(
+      launch.id,
+      `create-token-info returned no tokenMint or metadata URI: ${errText}`
+    );
+    return;
+  }
+
+  console.log(`Fresh tokenMint: ${tokenMint}`);
+  console.log(`Fresh ipfsMetadataUrl: ${ipfsMetadataUrl}`);
+
+  // Persist fresh mint + IPFS URL, and clear any stale fee_share_config_key /
+  // claimer_count from a previous attempt so fee-share/config is rebuilt
+  // against the new mint.
+  const { error: updateErr } = await supabase
+    .from("launches")
+    .update({
+      token_mint_address: tokenMint,
+      ipfs_metadata_url: ipfsMetadataUrl,
+      fee_share_config_key: null,
+      claimer_count: null,
+    })
+    .eq("id", launch.id);
+  if (updateErr) {
+    console.error(
+      `Failed to persist fresh mint/IPFS for ${launch.id}: ${updateErr.message}`
+    );
+    await setFailed(
+      launch.id,
+      `Failed to persist fresh mint/IPFS: ${updateErr.message}`
+    );
+    return;
+  }
+  // Reflect the cleared stale config locally so the rest of the function
+  // doesn't reuse it.
+  launch.fee_share_config_key = null;
+  launch.claimer_count = null;
 
   // Decrypt escrow keypair (decrypt.ts already returns the raw 64-byte secret key)
   const escrowSecret = decryptEscrowKey(launch.escrow_wallet_encrypted_private_key);
@@ -142,7 +223,7 @@ export async function executeBagsLaunch(
         },
         body: JSON.stringify({
           payer: launch.escrow_wallet_public_key,
-          baseMint: launch.token_mint_address,
+          baseMint: tokenMint,
           claimersArray,
           basisPointsArray,
           partner: BAGS_PARTNER_WALLET,
@@ -172,7 +253,7 @@ export async function executeBagsLaunch(
       console.error(
         `Request body was: ${JSON.stringify({
           payer: launch.escrow_wallet_public_key,
-          baseMint: launch.token_mint_address,
+          baseMint: tokenMint,
           claimersArray,
           basisPointsArray,
           partner: BAGS_PARTNER_WALLET,
@@ -218,16 +299,9 @@ export async function executeBagsLaunch(
   // Step 2: create-launch-transaction
   console.log("Calling create-launch-transaction");
 
-  // Convert IPFS gateway URL to ipfs:// URI if needed
-  // Bags create-launch-transaction expects ipfs:// format
-  const ipfsUri = launch.ipfs_metadata_url?.includes("ipfs.io/ipfs/")
-    ? launch.ipfs_metadata_url.replace("https://ipfs.io/ipfs/", "ipfs://")
-    : launch.ipfs_metadata_url;
-  console.log(`IPFS URI for create-launch-transaction: ${ipfsUri}`);
-
   const createLaunchBody = {
-    ipfs: ipfsUri,
-    tokenMint: launch.token_mint_address,
+    ipfs: ipfsMetadataUrl,
+    tokenMint: tokenMint,
     wallet: launch.escrow_wallet_public_key,
     initialBuyLamports: Number(netBuyLamports),
     configKey,
