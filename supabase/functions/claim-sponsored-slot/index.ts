@@ -214,10 +214,10 @@ async function encryptKey(dataHex: string, encryptionKeyHex: string): Promise<st
   const iv = new Uint8Array(12);
   crypto.getRandomValues(iv);
   const keyBytes = hexToUint8Array(encryptionKeyHex);
-  const cryptoKey = await crypto.subtle.importKey("raw", keyBytes, { name: "AES-GCM" }, false, ["encrypt"]);
+  const cryptoKey = await crypto.subtle.importKey("raw", keyBytes as BufferSource, { name: "AES-GCM" }, false, ["encrypt"]);
   const dataBytes = hexToUint8Array(dataHex);
   const encrypted = new Uint8Array(
-    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, cryptoKey, dataBytes),
+    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, cryptoKey, dataBytes as BufferSource),
   );
   const ciphertext = encrypted.slice(0, encrypted.length - 16);
   const authTag = encrypted.slice(encrypted.length - 16);
