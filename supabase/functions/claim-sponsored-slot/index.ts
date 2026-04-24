@@ -5,7 +5,7 @@ import {
   SystemProgram,
   Transaction,
 } from "https://esm.sh/@solana/web3.js@1.91.1";
-import bs58 from "npm:bs58@5.0.0";
+import bs58 from "https://esm.sh/bs58@5.0.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
