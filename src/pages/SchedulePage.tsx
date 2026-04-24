@@ -25,7 +25,8 @@ const RPC_URL = import.meta.env.VITE_SOLANA_RPC_URL;
 const connection = new Connection(RPC_URL, "confirmed");
 
 const FEE_RESERVE_SOL = 0.01;
-const MIN_CREATOR_SOL = 0.05;
+const MIN_CREATOR_SOL_PUMPFUN = 0.05;
+const MIN_CREATOR_SOL_BAGS = 0.2;
 
 type Step =
   | "idle"
@@ -108,13 +109,14 @@ const SchedulePage = () => {
   const creatorContribNum = parseFloat(form.creatorContribution);
   const minContribNum = parseFloat(form.minContribution);
   const maxAffordable = solBalance !== null ? Math.max(0, solBalance - FEE_RESERVE_SOL) : null;
+  const minCreatorSol = platform === "bags" ? MIN_CREATOR_SOL_BAGS : MIN_CREATOR_SOL_PUMPFUN;
 
   let creatorContribError: string | null = null;
   if (form.creatorContribution !== "") {
     if (isNaN(creatorContribNum)) {
       creatorContribError = "Enter a valid number";
-    } else if (creatorContribNum < MIN_CREATOR_SOL) {
-      creatorContribError = `Minimum ${MIN_CREATOR_SOL} SOL`;
+    } else if (creatorContribNum < minCreatorSol) {
+      creatorContribError = `Minimum ${minCreatorSol} SOL${platform === "bags" ? " (required by Bags.fm)" : ""}`;
     } else if (maxAffordable !== null && creatorContribNum > maxAffordable) {
       creatorContribError = `Insufficient balance. Max ${maxAffordable.toFixed(4)} SOL (after ${FEE_RESERVE_SOL} SOL fee reserve)`;
     } else if (!isNaN(minContribNum) && creatorContribNum < minContribNum) {
@@ -225,6 +227,16 @@ const SchedulePage = () => {
     }
     if (creatorContribError || form.creatorContribution === "") {
       toast({ title: "Invalid contribution", description: creatorContribError || "Enter your contribution amount.", variant: "destructive" });
+      return;
+    }
+
+    // Hard guard: Bags.fm requires at least 0.2 SOL initial buy
+    if (platform === "bags" && parseFloat(form.creatorContribution) < MIN_CREATOR_SOL_BAGS) {
+      toast({
+        title: "Minimum 0.2 SOL required",
+        description: "Bags.fm requires at least 0.2 SOL as the creator's seed contribution.",
+        variant: "destructive",
+      });
       return;
     }
 
@@ -561,7 +573,7 @@ const SchedulePage = () => {
             <Input
               type="number"
               step="0.01"
-              min={MIN_CREATOR_SOL}
+              min={minCreatorSol}
               value={form.creatorContribution}
               onChange={(e) => update("creatorContribution", e.target.value)}
               placeholder="0.1"
@@ -569,7 +581,7 @@ const SchedulePage = () => {
               required
             />
             <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-              <span>Minimum {MIN_CREATOR_SOL} SOL</span>
+              <span>Minimum {minCreatorSol} SOL{platform === "bags" ? " (Bags.fm)" : ""}</span>
               {solBalance !== null && (
                 <span className="font-mono">Balance: {solBalance.toFixed(4)} SOL</span>
               )}
