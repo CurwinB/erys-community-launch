@@ -191,12 +191,16 @@ export async function executeBagsLaunch(
         await setFailed(launch.id, `fee-share tx ${i + 1} failed: ${err.message}`);
         return;
       }
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 2_000));
     }
 
     await storeFeeShareConfig(launch.id, returnedConfigKey, claimersArray.length);
     configKey = returnedConfigKey;
   }
+
+  // Wait for Bags to index the fee-share config on-chain before proceeding
+  console.log("Waiting 10 seconds for fee-share config to settle on-chain...");
+  await new Promise((r) => setTimeout(r, 10_000));
 
   // Step 2: create-launch-transaction
   console.log("Calling create-launch-transaction");

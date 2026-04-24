@@ -1,72 +1,34 @@
-# Add Priority Fee Buffer to ATA Reserve Calculation
+## Add timing delays for Bags fee-share config indexing
 
-## Problem
-The current ATA reserve calculation in both executor files does not account for the ComputeBudgetProgram.setComputeUnitPrice instruction added to each distribution transaction, which costs additional lamports per transfer.
+### Problem
+The `create-launch-transaction` step at Bags fails repeatedly because the fee-share config account isn't yet indexed by Bags' backend when we call it. The current 500ms gap between fee-share transactions is too tight, and there is zero delay between the last fee-share tx and `create-launch-transaction`.
 
-## Solution
-Add a priority fee buffer constant (10,000 lamports per contributor) to the ATA reserve calculation in both executor files.
+### Changes (one file: `executor/src/executeBags.ts`)
 
-## Changes Required
+**1. Increase per-fee-share-tx delay from 500ms → 2000ms** (line 194)
 
-### Fix 1: executor/src/executeBags.ts
-
-**Location:** Lines 73-78 (reserve calculation section)
-
-**Current code:**
-```typescript
-  // Calculate reserves
-  const ATA_COST = 2_039_280n;
-  const TX_FEE = 5_000n;
-  const BASE_TX_FEES = 20_000n;
-  const LOOKUP_TABLE_RENT = 2_550_000n;
-  const contributorCount = BigInt(contributions.length);
-  const ataReserve = contributorCount * (ATA_COST + TX_FEE);
+Find:
+```ts
+await new Promise((r) => setTimeout(r, 500));
+```
+Replace with:
+```ts
+await new Promise((r) => setTimeout(r, 2_000));
 ```
 
-**Replace with:**
-```typescript
-  // Calculate reserves
-  const ATA_COST = 2_039_280n;
-  const TX_FEE = 5_000n;
-  const PRIORITY_FEE_PER_CONTRIBUTOR = 10_000n; // buffer for ComputeBudgetProgram priority fee per distribution tx
-  const BASE_TX_FEES = 20_000n;
-  const LOOKUP_TABLE_RENT = 2_550_000n;
-  const contributorCount = BigInt(contributions.length);
-  const ataReserve = contributorCount * (ATA_COST + TX_FEE + PRIORITY_FEE_PER_CONTRIBUTOR);
+**2. Add a 10-second settle wait after fee-share completes**, before the `// Step 2: create-launch-transaction` block (around line 200, after `configKey = returnedConfigKey;` and the closing of the `else` branch).
+
+Insert immediately before `// Step 2: create-launch-transaction`:
+```ts
+  // Wait for Bags to index the fee-share config on-chain before proceeding
+  console.log("Waiting 10 seconds for fee-share config to settle on-chain...");
+  await new Promise((r) => setTimeout(r, 10_000));
 ```
 
-### Fix 2: executor/src/executePumpfun.ts
+Note: The wait runs on every execution (including the retry path that reuses `launch.fee_share_config_key`). This is intentional and safe — if the config has already been indexed from a previous attempt, the extra 10s is harmless; if a retry happens immediately after a fresh fee-share submission that didn't quite complete, the buffer protects us.
 
-**Location:** Lines 48-53 (reserve calculation section)
-
-**Current code:**
-```typescript
-  // Calculate reserves
-  const ATA_COST = 2_039_280n;
-  const TX_FEE = 5_000n;
-  const PRIORITY_FEE = 50_000n;
-  const contributorCount = BigInt(contributions.length);
-  const ataReserve = contributorCount * (ATA_COST + TX_FEE);
-```
-
-**Replace with:**
-```typescript
-  // Calculate reserves
-  const ATA_COST = 2_039_280n;
-  const TX_FEE = 5_000n;
-  const PRIORITY_FEE = 10_000n; // buffer for ComputeBudgetProgram priority fee per distribution tx
-  const PRIORITY_FEE = 50_000n;
-  const contributorCount = BigInt(contributions.length);
-  const ataReserve = contributorCount * (ATA_COST + TX_FEE + PRIORITY_FEE);
-```
-
-**Note:** The first PRIORITY_FEE (10_000n) is for per-contributor distribution transactions. The second PRIORITY_FEE (50_000n) is the existing priority fee for the main launch transaction. Consider renaming one for clarity.
-
-## Files Edited
-- executor/src/executeBags.ts
-- executor/src/executePumpfun.ts
-
-## Impact
-- Ensures sufficient lamports are reserved for priority fees on each contributor's distribution transaction
-- Prevents "Insufficient SOL" errors during launch execution when priority fees are applied
-- No schema changes or environment variable changes required
+### Out of scope
+- No DB schema changes
+- No env var changes
+- No other files touched
+- No changes to `executePumpfun.ts`
