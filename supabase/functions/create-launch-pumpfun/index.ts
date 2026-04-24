@@ -16,6 +16,11 @@ Deno.serve(async (req) => {
   );
 
   const ESCROW_ENCRYPTION_KEY = Deno.env.get("ESCROW_ENCRYPTION_KEY")!;
+  const PINATA_JWT = Deno.env.get("PINATA_JWT")!;
+
+  if (!PINATA_JWT) {
+    return errorResponse("PINATA_JWT secret is not configured", 500);
+  }
 
   try {
     const body = await req.json();
@@ -37,51 +42,76 @@ Deno.serve(async (req) => {
       return errorResponse("Missing required fields", 400);
     }
 
-    // Step 1: Build metadata JSON and upload to token-metadata bucket
+    // Step 1: If image_url is a Supabase storage URL (or any non-IPFS URL),
+    // re-upload it to Pinata so the metadata references an ipfs:// gateway URL.
+    let finalImageUrl = image_url || "";
+    if (finalImageUrl && !finalImageUrl.includes("ipfs")) {
+      try {
+        const imgRes = await fetch(finalImageUrl);
+        if (!imgRes.ok) {
+          return errorResponse(`Failed to fetch image for IPFS upload: ${imgRes.status}`, 500);
+        }
+        const imgBlob = await imgRes.blob();
+        const imgContentType = imgRes.headers.get("content-type") || "image/png";
+        const ext = imgContentType.split("/")[1]?.split(";")[0] || "png";
+        const imgFileName = `${crypto.randomUUID()}.${ext}`;
+
+        const imgForm = new FormData();
+        imgForm.append("file", imgBlob, imgFileName);
+        imgForm.append("pinataMetadata", JSON.stringify({ name: imgFileName }));
+
+        const imgPinRes = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${PINATA_JWT}` },
+          body: imgForm,
+        });
+
+        if (!imgPinRes.ok) {
+          const errText = await imgPinRes.text();
+          return errorResponse(`Pinata image upload failed: ${errText}`, 500);
+        }
+
+        const imgPinData = await imgPinRes.json();
+        finalImageUrl = `https://gateway.pinata.cloud/ipfs/${imgPinData.IpfsHash}`;
+      } catch (err: any) {
+        return errorResponse(`Image IPFS upload failed: ${err.message}`, 500);
+      }
+    }
+
+    // Step 2: Build metadata JSON and pin to Pinata IPFS
     const metadataObj = {
       name: token_name,
       symbol: token_symbol.toUpperCase(),
       description: description || "",
-      image: image_url || "",
+      image: finalImageUrl,
       twitter: twitter_url || "",
       telegram: telegram_url || "",
       website: website_url || "",
     };
 
-    const metadataFileName = `${crypto.randomUUID()}.json`;
-    const metadataBytes = new TextEncoder().encode(JSON.stringify(metadataObj));
-
-    const { error: uploadErr } = await supabase.storage
-      .from("token-metadata")
-      .upload(metadataFileName, metadataBytes, {
-        contentType: "application/json",
-        upsert: false,
+    let ipfsMetadataUrl: string;
+    try {
+      const metaPinRes = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${PINATA_JWT}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          pinataContent: metadataObj,
+          pinataMetadata: { name: `${token_symbol.toUpperCase()}-metadata.json` },
+        }),
       });
 
-    if (uploadErr) {
-      console.error("metadata upload failed:", uploadErr);
-      return errorResponse(`Failed to upload metadata: ${uploadErr.message}`, 500);
-    }
-
-    const { data: urlData } = supabase.storage
-      .from("token-metadata")
-      .getPublicUrl(metadataFileName);
-    const ipfsMetadataUrl = urlData.publicUrl;
-
-    // Verify metadata URL is publicly accessible (PumpPortal must fetch it at launch time)
-    try {
-      const verifyRes = await fetch(ipfsMetadataUrl, { method: "HEAD" });
-      if (!verifyRes.ok) {
-        return errorResponse(
-          `Metadata URL is not publicly accessible: ${ipfsMetadataUrl}`,
-          500
-        );
+      if (!metaPinRes.ok) {
+        const errText = await metaPinRes.text();
+        return errorResponse(`Pinata metadata upload failed: ${errText}`, 500);
       }
+
+      const metaPinData = await metaPinRes.json();
+      ipfsMetadataUrl = `https://gateway.pinata.cloud/ipfs/${metaPinData.IpfsHash}`;
     } catch (err: any) {
-      return errorResponse(
-        `Failed to verify metadata URL accessibility: ${err.message}`,
-        500
-      );
+      return errorResponse(`Metadata IPFS upload failed: ${err.message}`, 500);
     }
 
     // Step 2: Generate two Ed25519 keypairs (escrow + mint)
