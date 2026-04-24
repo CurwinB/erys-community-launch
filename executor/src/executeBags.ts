@@ -177,7 +177,9 @@ export async function executeBagsLaunch(
     const feeShareTxs = feeShareData.response?.transactions || [];
 
     if (!returnedConfigKey) {
-      await setFailed(launch.id, "fee-share/config returned no configKey");
+      const errText = JSON.stringify(feeShareData);
+      console.error(`fee-share/config returned no configKey: ${errText}`);
+      await setFailed(launch.id, `fee-share/config returned no configKey: ${errText}`);
       return;
     }
 
@@ -204,6 +206,22 @@ export async function executeBagsLaunch(
 
   // Step 2: create-launch-transaction
   console.log("Calling create-launch-transaction");
+
+  // Convert IPFS gateway URL to ipfs:// URI if needed
+  // Bags create-launch-transaction expects ipfs:// format
+  const ipfsUri = launch.ipfs_metadata_url?.includes("ipfs.io/ipfs/")
+    ? launch.ipfs_metadata_url.replace("https://ipfs.io/ipfs/", "ipfs://")
+    : launch.ipfs_metadata_url;
+  console.log(`IPFS URI for create-launch-transaction: ${ipfsUri}`);
+
+  const createLaunchBody = {
+    ipfs: ipfsUri,
+    tokenMint: launch.token_mint_address,
+    wallet: launch.escrow_wallet_public_key,
+    initialBuyLamports: Number(netBuyLamports),
+    configKey,
+  };
+
   const createTxController = new AbortController();
   const createTxTimeout = setTimeout(() => createTxController.abort(), 30_000);
   let createTxRes: any;
@@ -216,13 +234,7 @@ export async function executeBagsLaunch(
           "Content-Type": "application/json",
           "x-api-key": BAGS_API_KEY,
         },
-        body: JSON.stringify({
-          ipfs: launch.ipfs_metadata_url,
-          tokenMint: launch.token_mint_address,
-          wallet: launch.escrow_wallet_public_key,
-          initialBuyLamports: Number(netBuyLamports),
-          configKey,
-        }),
+        body: JSON.stringify(createLaunchBody),
         signal: createTxController.signal,
       }
     );
@@ -244,18 +256,31 @@ export async function executeBagsLaunch(
   }
 
   if (!createTxRes.ok) {
-    await setFailed(
-      launch.id,
-      `create-launch-transaction failed: ${await createTxRes.text()}`
+    const errText = await createTxRes.text();
+    console.error(
+      `create-launch-transaction HTTP ${createTxRes.status}: ${errText}`
     );
+    console.error(
+      `Request body was: ${JSON.stringify(createLaunchBody)}`
+    );
+    await setFailed(launch.id, `create-launch-transaction failed: ${errText}`);
     return;
   }
 
   const createTxData = (await createTxRes.json()) as any;
+  console.log(
+    `create-launch-transaction response:`,
+    JSON.stringify(createTxData)
+  );
   const launchTx = createTxData.response;
 
   if (!launchTx) {
-    await setFailed(launch.id, "create-launch-transaction returned no transaction");
+    const errText = JSON.stringify(createTxData);
+    console.error(`create-launch-transaction returned no transaction: ${errText}`);
+    await setFailed(
+      launch.id,
+      `create-launch-transaction returned no transaction: ${errText}`
+    );
     return;
   }
 
