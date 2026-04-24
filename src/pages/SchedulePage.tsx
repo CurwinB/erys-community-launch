@@ -25,8 +25,11 @@ const RPC_URL = import.meta.env.VITE_SOLANA_RPC_URL;
 const connection = new Connection(RPC_URL, "confirmed");
 
 const FEE_RESERVE_SOL = 0.01;
-const MIN_CREATOR_SOL_PUMPFUN = 0.2;
-const MIN_CREATOR_SOL_BAGS = 0.2;
+// Bags/Pump.fun both require the NET initialBuyLamports (after our ATA + tx-fee
+// reserves) to be at least 0.2 SOL. We add a small buffer so reserves don't push
+// the actual buy below their threshold and trigger HTTP 500.
+const MIN_CREATOR_SOL_PUMPFUN = 0.21;
+const MIN_CREATOR_SOL_BAGS = 0.21;
 
 type Step =
   | "idle"
