@@ -72,22 +72,28 @@ Deno.serve(async (req) => {
         }
 
         const imgPinData = await imgPinRes.json();
-        finalImageUrl = `https://gateway.pinata.cloud/ipfs/${imgPinData.IpfsHash}`;
+        // Use ipfs:// URI scheme — required by Pump.fun metadata validation
+        finalImageUrl = `ipfs://${imgPinData.IpfsHash}`;
       } catch (err: any) {
         return errorResponse(`Image IPFS upload failed: ${err.message}`, 500);
       }
     }
 
     // Step 2: Build metadata JSON and pin to Pinata IPFS
-    const metadataObj = {
+    // Schema must match Pump.fun's expected format:
+    //   - image must be ipfs:// URI
+    //   - showName: true and createdOn are required for validation to pass
+    const metadataObj: Record<string, unknown> = {
       name: token_name,
       symbol: token_symbol.toUpperCase(),
       description: description || "",
       image: finalImageUrl,
-      twitter: twitter_url || "",
-      telegram: telegram_url || "",
-      website: website_url || "",
+      showName: true,
+      createdOn: "https://pump.fun",
     };
+    if (twitter_url) metadataObj.twitter = twitter_url;
+    if (telegram_url) metadataObj.telegram = telegram_url;
+    if (website_url) metadataObj.website = website_url;
 
     let ipfsMetadataUrl: string;
     try {
@@ -109,7 +115,8 @@ Deno.serve(async (req) => {
       }
 
       const metaPinData = await metaPinRes.json();
-      ipfsMetadataUrl = `https://gateway.pinata.cloud/ipfs/${metaPinData.IpfsHash}`;
+      // Pump.fun expects the canonical ipfs.io gateway for metadata URI
+      ipfsMetadataUrl = `https://ipfs.io/ipfs/${metaPinData.IpfsHash}`;
     } catch (err: any) {
       return errorResponse(`Metadata IPFS upload failed: ${err.message}`, 500);
     }

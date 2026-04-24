@@ -106,7 +106,20 @@ export async function executePumpfunLaunch(
   }
 
   if (!pumpRes.ok) {
-    await setFailed(launch.id, `PumpPortal create failed: ${await pumpRes.text()}`);
+    const errBody = await pumpRes.text();
+    console.error(`PumpPortal create failed [${pumpRes.status}]:`, errBody);
+    console.error("Request payload was:", {
+      publicKey: launch.escrow_wallet_public_key,
+      mint: launch.token_mint_address,
+      uri: launch.ipfs_metadata_url,
+      name: launch.token_name,
+      symbol: launch.token_symbol.toUpperCase(),
+      amountSol: Number(initialBuyLamports) / 1e9,
+    });
+    await setFailed(
+      launch.id,
+      `PumpPortal create failed (${pumpRes.status}): ${errBody.slice(0, 500)}`
+    );
     return;
   }
 
