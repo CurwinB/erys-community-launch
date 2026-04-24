@@ -1,6 +1,7 @@
 import { Keypair, Transaction, VersionedTransaction } from "@solana/web3.js";
 import bs58 from "bs58";
 import fetch from "node-fetch";
+import FormData from "form-data";
 import { decryptEscrowKey } from "./decrypt";
 import {
   Launch,
@@ -76,7 +77,10 @@ export async function executeBagsLaunch(
       `${BAGS_API_BASE}/token-launch/create-token-info`,
       {
         method: "POST",
-        headers: { "x-api-key": BAGS_API_KEY },
+        headers: {
+          "x-api-key": BAGS_API_KEY,
+          ...tokenInfoForm.getHeaders(),
+        },
         body: tokenInfoForm as any,
       }
     );
