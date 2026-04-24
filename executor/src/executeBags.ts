@@ -165,10 +165,21 @@ export async function executeBagsLaunch(
     }
 
     if (!feeShareRes.ok) {
-      await setFailed(
-        launch.id,
-        `fee-share/config failed: ${await feeShareRes.text()}`
+      const errText = await feeShareRes.text();
+      console.error(
+        `fee-share/config HTTP ${feeShareRes.status}: ${errText}`
       );
+      console.error(
+        `Request body was: ${JSON.stringify({
+          payer: launch.escrow_wallet_public_key,
+          baseMint: launch.token_mint_address,
+          claimersArray,
+          basisPointsArray,
+          partner: BAGS_PARTNER_WALLET,
+          partnerConfig: BAGS_PARTNER_CONFIG,
+        })}`
+      );
+      await setFailed(launch.id, `fee-share/config failed: ${errText}`);
       return;
     }
 
