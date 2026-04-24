@@ -13,7 +13,12 @@ export interface Launch {
   id: string;
   token_name: string;
   token_symbol: string;
-  token_mint_address: string;
+  token_mint_address: string | null;
+  description: string | null;
+  image_url: string | null;
+  twitter_url: string | null;
+  telegram_url: string | null;
+  website_url: string | null;
   escrow_wallet_public_key: string;
   escrow_wallet_encrypted_private_key: string;
   platform: string;
