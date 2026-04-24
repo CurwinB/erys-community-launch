@@ -48,9 +48,10 @@ export async function executePumpfunLaunch(
   // Calculate reserves
   const ATA_COST = 2_039_280n;
   const TX_FEE = 5_000n;
-  const PRIORITY_FEE = 50_000n;
+  const PRIORITY_FEE = 50_000n; // priority fee for the main launch tx
+  const PRIORITY_FEE_PER_CONTRIBUTOR = 10_000n; // buffer for ComputeBudgetProgram priority fee per distribution tx
   const contributorCount = BigInt(contributions.length);
-  const ataReserve = contributorCount * (ATA_COST + TX_FEE);
+  const ataReserve = contributorCount * (ATA_COST + TX_FEE + PRIORITY_FEE_PER_CONTRIBUTOR);
   const initialBuyLamports = totalLamports - ataReserve - PRIORITY_FEE;
 
   if (initialBuyLamports < 10_000_000n) {
