@@ -19,7 +19,7 @@ import { solToLamports, lamportsToSol } from "@/lib/constants";
 import { useToast } from "@/hooks/use-toast";
 import { useWallet } from "@/hooks/useWallet";
 import { Upload, Copy, ExternalLink, Check, Loader2, AlertCircle } from "lucide-react";
-import { DynamicWidget } from "@dynamic-labs/sdk-react-core";
+import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 
 const RPC_URL = import.meta.env.VITE_SOLANA_RPC_URL;
 const connection = new Connection(RPC_URL, "confirmed");
@@ -40,6 +40,7 @@ const SchedulePage = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { connected, publicKey, wallet } = useWallet();
+  const { setShowAuthFlow } = useDynamicContext();
 
   const [platform, setPlatform] = useState<"bags" | "pumpfun">("bags");
   const [form, setForm] = useState({
@@ -123,10 +124,8 @@ const SchedulePage = () => {
 
   const isBusy = step !== "idle" && step !== "error";
   const canSubmit =
-    connected &&
     !isBusy &&
-    form.creatorContribution !== "" &&
-    !creatorContribError;
+    (!connected || (form.creatorContribution !== "" && !creatorContribError));
 
   const performContribution = async (launchId: string, escrowWallet: string) => {
     if (!wallet || !isSolanaWallet(wallet) || !publicKey) {
@@ -221,7 +220,7 @@ const SchedulePage = () => {
     e.preventDefault();
 
     if (!connected || !publicKey) {
-      toast({ title: "Connect Wallet", description: "Please connect your wallet to schedule a launch.", variant: "destructive" });
+      setShowAuthFlow(true);
       return;
     }
     if (creatorContribError || form.creatorContribution === "") {
@@ -408,7 +407,7 @@ const SchedulePage = () => {
   }
 
   const submitLabel = (() => {
-    if (!connected) return "Connect Wallet to Schedule";
+    if (!connected) return "Log in to Schedule";
     switch (step) {
       case "creating":
         return "Creating launch…";
@@ -467,13 +466,6 @@ const SchedulePage = () => {
               : "Contributors receive tokens at the earliest possible entry price. Higher liquidity and trading volume."}
           </p>
         </div>
-
-        {!connected && (
-          <div className="mt-6 border border-primary/30 bg-card p-6 text-center space-y-4">
-            <p className="text-sm text-muted-foreground">Connect your wallet to schedule a launch.</p>
-            <DynamicWidget />
-          </div>
-        )}
 
         <form onSubmit={handleSubmit} className="mt-8 space-y-6">
           <div className="space-y-4 border border-border bg-card p-6">
