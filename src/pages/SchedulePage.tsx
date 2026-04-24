@@ -467,13 +467,6 @@ const SchedulePage = () => {
           </p>
         </div>
 
-        {!connected && (
-          <div className="mt-6 border border-primary/30 bg-card p-6 text-center space-y-4">
-            <p className="text-sm text-muted-foreground">Connect your wallet to schedule a launch.</p>
-            <DynamicWidget />
-          </div>
-        )}
-
         <form onSubmit={handleSubmit} className="mt-8 space-y-6">
           <div className="space-y-4 border border-border bg-card p-6">
             <div className="space-y-2">
