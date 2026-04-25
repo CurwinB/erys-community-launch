@@ -1,9 +1,20 @@
-import { Connection, PublicKey, SystemProgram, Transaction, Keypair, LAMPORTS_PER_SOL, VersionedTransaction } from "@solana/web3.js";
+import {
+  Connection,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  Keypair,
+  LAMPORTS_PER_SOL,
+} from "@solana/web3.js";
+import bs58 from "bs58";
 import { decryptEscrowKey } from "./decrypt";
 import { Launch, getPumpfunLaunchesForFeeClaim, updatePumpfunFeesClaimed } from "./db";
 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
 const ERYS_PLATFORM_WALLET = process.env.BAGS_PARTNER_WALLET!;
+const PUMPPORTAL_API_KEY = process.env.PUMPPORTAL_API_KEY;
+const PUMPPORTAL_CUSTODIAL_PRIVATE_KEY = process.env.PUMPPORTAL_CUSTODIAL_PRIVATE_KEY;
+const PUMPPORTAL_CUSTODIAL_WALLET = process.env.PUMPPORTAL_CUSTODIAL_WALLET;
 
 // Erys takes 50% of Pump.fun creator fees
 const PLATFORM_SHARE = 0.5;
@@ -11,8 +22,43 @@ const PLATFORM_SHARE = 0.5;
 // Reserve for the two outgoing SystemProgram.transfer txs (~5000 lamports each)
 const TX_FEE_RESERVE = 10_000;
 
+// Floor we leave in the custodial wallet so it stays rent-exempt and ready
+// for the next launch / next fee-claim cycle. Mirrors executor constant.
+const CUSTODIAL_SOL_FLOOR_LAMPORTS = 2_000_000n; // 0.002 SOL
+
+let cachedCustodialKeypair: Keypair | null = null;
+function getCustodialKeypair(): Keypair {
+  if (cachedCustodialKeypair) return cachedCustodialKeypair;
+  if (!PUMPPORTAL_CUSTODIAL_PRIVATE_KEY) {
+    throw new Error("PUMPPORTAL_CUSTODIAL_PRIVATE_KEY env var is not set");
+  }
+  const secret = bs58.decode(PUMPPORTAL_CUSTODIAL_PRIVATE_KEY);
+  if (secret.length !== 64) {
+    throw new Error(
+      `PUMPPORTAL_CUSTODIAL_PRIVATE_KEY decoded to ${secret.length} bytes, expected 64`
+    );
+  }
+  cachedCustodialKeypair = Keypair.fromSecretKey(new Uint8Array(secret));
+  if (
+    PUMPPORTAL_CUSTODIAL_WALLET &&
+    cachedCustodialKeypair.publicKey.toBase58() !== PUMPPORTAL_CUSTODIAL_WALLET
+  ) {
+    throw new Error(
+      `PUMPPORTAL_CUSTODIAL_PRIVATE_KEY pubkey mismatch with PUMPPORTAL_CUSTODIAL_WALLET`
+    );
+  }
+  return cachedCustodialKeypair;
+}
+
 export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
   console.log(`\nChecking Pump.fun fees for launch ${launch.id} (${launch.token_name})`);
+
+  if (!PUMPPORTAL_API_KEY) {
+    console.error(
+      `PUMPPORTAL_API_KEY not set; skipping fee claim for launch ${launch.id}`
+    );
+    return;
+  }
 
   const connection = new Connection(SOLANA_RPC_URL, "confirmed");
 
@@ -26,98 +72,162 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     return;
   }
 
-  // Read pre-claim balance for delta math only. Do NOT gate on this — the
-  // escrow may hold dust SOL unrelated to unclaimed creator fees, and Pump.fun
-  // fees may exist even when escrow balance is low. Always attempt the claim
-  // and let the post-claim delta tell us whether anything was actually claimed.
-  let escrowBalanceBefore: number;
+  // Custodial wallet = on-chain creator since launch was executed via Lightning.
+  // Read its pre-claim balance so we can measure how much was actually claimed.
+  let custodialKeypair: Keypair;
   try {
-    escrowBalanceBefore = await connection.getBalance(escrowKeypair.publicKey, "confirmed");
-    console.log(`Escrow wallet balance (pre-claim): ${escrowBalanceBefore / LAMPORTS_PER_SOL} SOL`);
+    custodialKeypair = getCustodialKeypair();
   } catch (err: any) {
-    console.error(`Failed to get escrow balance for launch ${launch.id}:`, err.message);
+    console.error(
+      `Custodial wallet not configured for launch ${launch.id}:`,
+      err?.message ?? err
+    );
     return;
   }
 
-  // Call PumpPortal collectCreatorFee endpoint
-  // This generates a claim transaction for all unclaimed creator fees
-  console.log(`Claiming creator fees via PumpPortal for ${launch.token_mint_address}`);
-
-  let claimTxBytes: Uint8Array;
+  let custodialBalanceBefore: number;
   try {
-    const response = await fetch("https://pumpportal.fun/api/trade-local", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        publicKey: escrowKeypair.publicKey.toBase58(),
-        action: "collectCreatorFee",
-        priorityFee: 0.00005,
-        pool: "pump",
-      }),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`PumpPortal collectCreatorFee failed for launch ${launch.id}:`, errText);
-      return;
-    }
-
-    const txData = await response.arrayBuffer();
-    claimTxBytes = new Uint8Array(txData);
-  } catch (err: any) {
-    console.error(`Failed to get claim transaction for launch ${launch.id}:`, err.message);
-    return;
-  }
-
-  // Sign and submit the claim transaction
-  let claimedLamports = 0;
-  try {
-    const tx = VersionedTransaction.deserialize(claimTxBytes);
-    tx.sign([escrowKeypair]);
-
-    const claimBlockhash = tx.message.recentBlockhash;
-    const currentBlockHeight = await connection.getBlockHeight("confirmed");
-    // PumpPortal blockhashes have ~150 block validity (~60s). Use a conservative
-    // 150-block window from current height as the expiry cutoff so confirmation
-    // can't hang indefinitely if the blockhash was already partially aged.
-    const claimLastValidBlockHeight = currentBlockHeight + 150;
-
-    const serialized = tx.serialize();
-    const signature = await connection.sendRawTransaction(serialized, {
-      preflightCommitment: "confirmed",
-    });
-    await connection.confirmTransaction(
-      {
-        signature,
-        blockhash: claimBlockhash,
-        lastValidBlockHeight: claimLastValidBlockHeight,
-      },
+    custodialBalanceBefore = await connection.getBalance(
+      custodialKeypair.publicKey,
       "confirmed"
     );
+    console.log(
+      `Custodial wallet balance (pre-claim): ${custodialBalanceBefore / LAMPORTS_PER_SOL} SOL`
+    );
+  } catch (err: any) {
+    console.error(
+      `Failed to get custodial balance for launch ${launch.id}:`,
+      err.message
+    );
+    return;
+  }
 
-    console.log(`Creator fee claim confirmed: ${signature}`);
-    console.log(`Solscan: https://solscan.io/tx/${signature}`);
+  // Call PumpPortal Lightning collectCreatorFee. PumpPortal signs + submits
+  // with the custodial wallet (now the on-chain creator) and sweeps fees
+  // into that same wallet.
+  console.log(
+    `Claiming creator fees via Lightning for ${launch.token_mint_address}`
+  );
+  let claimedLamports = 0;
+  try {
+    const response = await fetch(
+      `https://pumpportal.fun/api/trade?api-key=${encodeURIComponent(
+        PUMPPORTAL_API_KEY
+      )}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "collectCreatorFee",
+          mint: launch.token_mint_address,
+          priorityFee: 0.00005,
+          pool: "pump",
+        }),
+      }
+    );
 
-    // Get new balance after claim to calculate how much was claimed
-    const newBalance = await connection.getBalance(escrowKeypair.publicKey, "confirmed");
-    claimedLamports = newBalance - escrowBalanceBefore;
+    const json: any = await response.json().catch(() => ({}));
+    if (!response.ok || json?.errors) {
+      const summary =
+        json?.errors?.join(" | ") ||
+        JSON.stringify(json).slice(0, 300) ||
+        response.statusText;
+      console.error(
+        `Lightning collectCreatorFee failed for launch ${launch.id} [${response.status}]: ${summary}`
+      );
+      return;
+    }
+    const claimSignature: string | undefined = json?.signature;
+    if (claimSignature) {
+      console.log(`Creator fee claim submitted: ${claimSignature}`);
+      console.log(`Solscan: https://solscan.io/tx/${claimSignature}`);
+      try {
+        const { blockhash, lastValidBlockHeight } =
+          await connection.getLatestBlockhash("confirmed");
+        await connection.confirmTransaction(
+          { signature: claimSignature, blockhash, lastValidBlockHeight },
+          "confirmed"
+        );
+      } catch (confErr: any) {
+        console.warn(
+          `confirmTransaction warning: ${confErr?.message ?? confErr}`
+        );
+      }
+    }
 
+    // Re-read custodial balance to compute the actual claimed amount.
+    const newCustodialBalance = await connection.getBalance(
+      custodialKeypair.publicKey,
+      "confirmed"
+    );
+    claimedLamports = newCustodialBalance - custodialBalanceBefore;
     if (claimedLamports <= 0) {
       // No real claim happened — do NOT stamp the timestamp, otherwise this
       // launch is locked out of the next 24h of poll cycles for no reason.
       console.log(`No fees were actually claimed for launch ${launch.id}`);
       return;
     }
-
     console.log(`Claimed ${claimedLamports / LAMPORTS_PER_SOL} SOL in creator fees`);
   } catch (err: any) {
-    console.error(`Failed to submit claim transaction for launch ${launch.id}:`, err.message);
+    console.error(
+      `Lightning collectCreatorFee threw for launch ${launch.id}:`,
+      err?.message ?? err
+    );
+    return;
+  }
+
+  // Sweep the claimed SOL from custodial → escrow. Leave the rent-exempt
+  // floor behind. This is what makes the rest of this function (escrow-based
+  // 50/50 split) work unchanged.
+  let sweptToEscrowLamports = 0;
+  try {
+    const custodialNow = BigInt(
+      await connection.getBalance(custodialKeypair.publicKey, "confirmed")
+    );
+    const sweepTxFee = 5_000n;
+    if (custodialNow <= CUSTODIAL_SOL_FLOOR_LAMPORTS + sweepTxFee) {
+      console.error(
+        `Custodial balance below sweep threshold for launch ${launch.id}, cannot move claimed fees to escrow`
+      );
+      return;
+    }
+    const sweepAmount = custodialNow - CUSTODIAL_SOL_FLOOR_LAMPORTS - sweepTxFee;
+    const tx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: custodialKeypair.publicKey,
+        toPubkey: escrowKeypair.publicKey,
+        lamports: Number(sweepAmount),
+      })
+    );
+    tx.feePayer = custodialKeypair.publicKey;
+    const { blockhash, lastValidBlockHeight } =
+      await connection.getLatestBlockhash("confirmed");
+    tx.recentBlockhash = blockhash;
+    tx.sign(custodialKeypair);
+    const sweepSig = await connection.sendRawTransaction(tx.serialize(), {
+      preflightCommitment: "confirmed",
+    });
+    await connection.confirmTransaction(
+      { signature: sweepSig, blockhash, lastValidBlockHeight },
+      "confirmed"
+    );
+    console.log(
+      `Swept ${Number(sweepAmount) / LAMPORTS_PER_SOL} SOL from custodial to escrow: ${sweepSig}`
+    );
+    sweptToEscrowLamports = Number(sweepAmount);
+  } catch (err: any) {
+    console.error(
+      `Failed to sweep custodial fees to escrow for launch ${launch.id}:`,
+      err?.message ?? err
+    );
     return;
   }
 
   // Reserve ~5000 lamports per outgoing transfer so the second tx doesn't
   // run out of funds after the first transfer's fee is deducted.
-  const distributableLamports = claimedLamports - TX_FEE_RESERVE;
+  // Use the actually-swept amount (slightly less than claimedLamports due to
+  // sweep tx fee) so we never try to send more than escrow received.
+  const distributableLamports = sweptToEscrowLamports - TX_FEE_RESERVE;
   if (distributableLamports <= 0) {
     console.log(
       `Claimed amount too small to distribute after tx fees for launch ${launch.id}. Fees will accumulate and be claimed next cycle.`
