@@ -60,6 +60,7 @@ const SchedulePage = () => {
     maxContribution: "",
     enableMaxContribution: false,
     creatorContribution: "",
+    creatorDeliveryWallet: "",
   });
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -209,12 +210,23 @@ const SchedulePage = () => {
     signature: string,
     lamports: number
   ) => {
+    const trimmedDelivery = form.creatorDeliveryWallet.trim();
+    if (trimmedDelivery !== "") {
+      if (
+        trimmedDelivery.length < 32 ||
+        trimmedDelivery.length > 44 ||
+        !/^[1-9A-HJ-NP-Za-km-z]+$/.test(trimmedDelivery)
+      ) {
+        throw new Error("Token delivery wallet must be a valid Solana address.");
+      }
+    }
     const { data, error } = await supabase.functions.invoke("contribute", {
       body: {
         launch_id: launchId,
         wallet_address: publicKey!,
         amount_lamports: lamports,
         tx_signature: signature,
+        token_delivery_wallet: trimmedDelivery || null,
       },
     });
     if (error) throw error;
@@ -595,6 +607,23 @@ const SchedulePage = () => {
                 <span>{creatorContribError}</span>
               </p>
             )}
+
+            <div className="space-y-1 pt-2">
+              <Label className="text-xs text-muted-foreground">
+                Receive your tokens at a different wallet? (optional)
+              </Label>
+              <Input
+                placeholder="Enter Solana wallet address"
+                value={form.creatorDeliveryWallet}
+                onChange={(e) => update("creatorDeliveryWallet", e.target.value)}
+                className="font-mono text-xs"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                {platform === "pumpfun"
+                  ? "Enter your Pump.fun wallet to trade immediately after launch."
+                  : "Enter your Bags wallet to claim fees and trade immediately after launch."}
+              </p>
+            </div>
           </div>
 
           <div className="border-l-2 border-primary bg-muted p-4">
