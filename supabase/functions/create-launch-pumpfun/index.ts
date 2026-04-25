@@ -309,3 +309,38 @@ function errorResponse(msg: string, status: number) {
     }
   );
 }
+
+// Poll public IPFS gateways until the CID is retrievable, or timeout.
+// Pump.fun validates the metadata URI inline and rejects launches whose
+// JSON hasn't propagated yet, so we want at least one gateway to serve it
+// before we hand the URL to PumpPortal.
+async function waitForIpfsPropagation(cid: string, timeoutMs: number): Promise<boolean> {
+  const gateways = [
+    `https://ipfs.io/ipfs/${cid}`,
+    `https://cloudflare-ipfs.com/ipfs/${cid}`,
+    `https://gateway.pinata.cloud/ipfs/${cid}`,
+  ];
+  const deadline = Date.now() + timeoutMs;
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    for (const url of gateways) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 3_000);
+        const res = await fetch(url, { method: "GET", signal: ctrl.signal });
+        clearTimeout(t);
+        if (res.ok) {
+          // Drain to avoid leaking the response body
+          await res.text().catch(() => undefined);
+          console.log(`IPFS propagation confirmed via ${url} (attempt ${attempt + 1})`);
+          return true;
+        }
+      } catch {
+        // try next gateway
+      }
+    }
+    attempt++;
+    await new Promise((r) => setTimeout(r, 1_500));
+  }
+  return false;
+}
