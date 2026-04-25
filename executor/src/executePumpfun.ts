@@ -68,6 +68,41 @@ export async function executePumpfunLaunch(
     await storeBasisPoints(c.id, bps);
   }
 
+  // Pre-flight health probe: hit PumpPortal with a deliberately invalid
+  // payload. A healthy server returns a 4xx with a validation message in
+  // `statusText`. If we get 5xx or a `toBuffer` / undefined-property style
+  // crash, the endpoint is broken — abort BEFORE committing contributor
+  // funds so the launch can be retried instead of marked failed.
+  try {
+    const probeController = new AbortController();
+    const probeTimeout = setTimeout(() => probeController.abort(), 10_000);
+    const probeRes = await fetch("https://pumpportal.fun/api/trade-local", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "create" }), // intentionally minimal
+      signal: probeController.signal,
+    });
+    clearTimeout(probeTimeout);
+    const probeStatusText = probeRes.statusText || "";
+    if (probeRes.status >= 500 || /toBuffer|undefined/i.test(probeStatusText)) {
+      const probeBody = await probeRes.text().catch(() => "");
+      await setFailed(
+        launch.id,
+        `PumpPortal health probe failed (${probeRes.status} ${probeStatusText}). Endpoint appears broken; aborting before committing funds. Body: ${probeBody.slice(0, 300)}`
+      );
+      return;
+    }
+    console.log(
+      `PumpPortal health probe OK (${probeRes.status} ${probeStatusText})`
+    );
+  } catch (probeErr: any) {
+    await setFailed(
+      launch.id,
+      `PumpPortal health probe threw: ${probeErr?.message ?? probeErr}`
+    );
+    return;
+  }
+
   // Call PumpPortal
   console.log("Calling PumpPortal create");
   const pumpController = new AbortController();
