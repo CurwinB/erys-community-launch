@@ -107,7 +107,19 @@ export async function executePumpfunLaunch(
 
   if (!pumpRes.ok) {
     const errBody = await pumpRes.text();
-    console.error(`PumpPortal create failed [${pumpRes.status}]:`, errBody);
+    // PumpPortal returns its real diagnostic in `statusText` (HTTP reason
+    // phrase), e.g. "Cannot read properties of undefined (reading 'toBuffer')".
+    // The body is often just "Bad Request" which is useless for debugging.
+    const statusText = pumpRes.statusText || "";
+    const headerSnapshot: Record<string, string> = {};
+    pumpRes.headers.forEach((v, k) => {
+      headerSnapshot[k] = v;
+    });
+    console.error(
+      `PumpPortal create failed [${pumpRes.status} ${statusText}]:`,
+      errBody
+    );
+    console.error("PumpPortal response headers:", headerSnapshot);
     console.error("Request payload was:", {
       publicKey: launch.escrow_wallet_public_key,
       mint: launch.token_mint_address,
@@ -116,9 +128,12 @@ export async function executePumpfunLaunch(
       symbol: launch.token_symbol.toUpperCase(),
       amountSol: Number(initialBuyLamports) / 1e9,
     });
+    const reason =
+      [statusText, errBody].filter(Boolean).join(" | ").slice(0, 800) ||
+      "no error body";
     await setFailed(
       launch.id,
-      `PumpPortal create failed (${pumpRes.status}): ${errBody.slice(0, 500)}`
+      `PumpPortal create failed (${pumpRes.status}): ${reason}`
     );
     return;
   }
