@@ -1,6 +1,6 @@
 import { claimNextExecutingLaunch, getContributions, releaseLaunchLock } from "./db";
 import { executeBagsLaunch } from "./executeBags";
-import { executePumpfunLaunch } from "./executePumpfun";
+import { executePumpfunLightningLaunch } from "./executePumpfunLightning";
 
 export async function executeAllPendingLaunches(workerId: string): Promise<void> {
   try {
@@ -22,7 +22,7 @@ export async function executeAllPendingLaunches(workerId: string): Promise<void>
           }
 
           if (launch.platform === "pumpfun") {
-            await executePumpfunLaunch(launch, contributions);
+            await executePumpfunLightningLaunch(launch, contributions);
           } else {
             await executeBagsLaunch(launch, contributions);
           }
