@@ -16,9 +16,12 @@ import {
   getCustodialPublicKey,
   lamportsToSol,
 } from "./pumpportalCustodial";
+import { withCustodialLock } from "./custodialLock";
 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
 const PUMPPORTAL_API_KEY = process.env.PUMPPORTAL_API_KEY!;
+const WORKER_ID =
+  process.env.WORKER_ID || process.env.RAILWAY_REPLICA_ID || "executor-default";
 
 // Buffer of SOL we ship to PumpPortal on top of the dev-buy amount, to cover
 // the on-chain create + buy tx fees, ATA rent for their token account, and
@@ -111,6 +114,45 @@ export async function executePumpfunLightningLaunch(
 
   const connection = new Connection(SOLANA_RPC_URL, "confirmed");
 
+  // ============================================================
+  // CRITICAL SECTION: serialize all custodial-wallet operations.
+  // Lock key = custodial wallet pubkey, so future per-wallet pools
+  // (Option 3) get free isolation by passing different keys.
+  // ============================================================
+  const lockKey = custodialPubkey.toBase58();
+  try {
+    await withCustodialLock(lockKey, WORKER_ID, async () => {
+      await runCustodialCriticalSection(
+        launch,
+        connection,
+        escrowKeypair,
+        mintKeypair,
+        custodialPubkey,
+        initialBuyLamports
+      );
+    });
+  } catch (lockErr: any) {
+    // Lock-acquire timeout. Don't fail the launch — just log so the next
+    // poll can pick it up. The worker_locked_at row lock is released by the
+    // caller's finally block in executeLaunch.ts.
+    console.error(
+      `Could not acquire custodial lock for launch ${launch.id}: ${
+        lockErr?.message ?? lockErr
+      }. Will retry on next poll.`
+    );
+  }
+}
+
+// Everything in here runs while we hold the custodial lock. Splitting it out
+// keeps the lock scope obvious and makes early-return error paths clean.
+async function runCustodialCriticalSection(
+  launch: Launch,
+  connection: Connection,
+  escrowKeypair: Keypair,
+  mintKeypair: Keypair,
+  custodialPubkey: PublicKey,
+  initialBuyLamports: bigint
+): Promise<void> {
   // ---- Step 1: Fund the custodial wallet from escrow ----
   const fundingAmount = initialBuyLamports + CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
   console.log(

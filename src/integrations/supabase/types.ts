@@ -91,6 +91,24 @@ export type Database = {
           },
         ]
       }
+      custodial_wallet_locks: {
+        Row: {
+          lock_key: string
+          locked_at: string
+          locked_by: string
+        }
+        Insert: {
+          lock_key: string
+          locked_at?: string
+          locked_by: string
+        }
+        Update: {
+          lock_key?: string
+          locked_at?: string
+          locked_by?: string
+        }
+        Relationships: []
+      }
       launches: {
         Row: {
           claimer_count: number | null
@@ -426,6 +444,16 @@ export type Database = {
         Returns: undefined
       }
       is_admin_wallet: { Args: { p_wallet: string }; Returns: boolean }
+      release_custodial_lock: { Args: { p_key: string }; Returns: boolean }
+      release_custodial_row_lock: {
+        Args: { p_key: string; p_worker: string }
+        Returns: boolean
+      }
+      try_acquire_custodial_lock: { Args: { p_key: string }; Returns: boolean }
+      try_acquire_custodial_row_lock: {
+        Args: { p_key: string; p_ttl_seconds?: number; p_worker: string }
+        Returns: boolean
+      }
     }
     Enums: {
       launch_status:
