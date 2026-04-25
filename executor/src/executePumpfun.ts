@@ -147,7 +147,7 @@ export async function executePumpfunLaunch(
     // The body is often just "Bad Request" which is useless for debugging.
     const statusText = pumpRes.statusText || "";
     const headerSnapshot: Record<string, string> = {};
-    pumpRes.headers.forEach((v, k) => {
+    pumpRes.headers.forEach((v: string, k: string) => {
       headerSnapshot[k] = v;
     });
     console.error(
