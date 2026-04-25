@@ -19,6 +19,7 @@ import HowItWorks from "@/components/launch/HowItWorks";
 const LaunchPage = () => {
   const { id } = useParams<{ id: string }>();
   const [solAmount, setSolAmount] = useState("");
+  const [tokenDeliveryWallet, setTokenDeliveryWallet] = useState("");
   const [isContributing, setIsContributing] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [copied, setCopied] = useState(false);
@@ -81,6 +82,22 @@ const LaunchPage = () => {
 
     const lamports = solToLamports(sol);
 
+    const trimmedDelivery = tokenDeliveryWallet.trim();
+    if (trimmedDelivery !== "") {
+      if (
+        trimmedDelivery.length < 32 ||
+        trimmedDelivery.length > 44 ||
+        !/^[1-9A-HJ-NP-Za-km-z]+$/.test(trimmedDelivery)
+      ) {
+        toast({
+          title: "Invalid wallet address",
+          description: "Token delivery wallet must be a valid Solana address.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     setIsContributing(true);
     try {
       const { Connection, PublicKey, SystemProgram, Transaction } = await import("@solana/web3.js");
@@ -110,6 +127,7 @@ const LaunchPage = () => {
           wallet_address: publicKey,
           amount_lamports: lamports,
           tx_signature: typeof txSignature === "string" ? txSignature : (txSignature as any).signature || txSignature,
+          token_delivery_wallet: trimmedDelivery || null,
         },
       });
 
@@ -117,6 +135,7 @@ const LaunchPage = () => {
 
       toast({ title: "Contribution Recorded!", description: `${sol} SOL contributed successfully.` });
       setSolAmount("");
+      setTokenDeliveryWallet("");
       queryClient.invalidateQueries({ queryKey: ["contributions", id] });
     } catch (err: any) {
       console.error("Contribution error:", err);
