@@ -21,3 +21,4 @@ Alchemy RPC: SOLANA_RPC_URL (Supabase secret) + VITE_SOLANA_RPC_URL (frontend .e
 - [Escrow encryption](mem://features/escrow-encryption) — AES-256-GCM spec for private keys
 - [Fee share config](mem://features/fee-share-config) — Exact API structure, basis points calc, 100 claimer limit
 - [Claim flow](mem://features/claim-flow) — Partial signing rule, dashboard claim UX, automated platform claiming
+- [Custodial wallet locking](mem://features/custodial-wallet-locking) — withCustodialLock serializes shared PumpPortal wallet ops across executor + distributor
