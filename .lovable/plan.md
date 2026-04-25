@@ -1,94 +1,68 @@
-# Option 1: Serialize Custodial Wallet Operations with Postgres Advisory Lock
 
-## Problem (recap)
-The PumpPortal Lightning custodial wallet is shared across all Pump.fun launches and fee claims. Today's code reads `getBalance(custodial)` and sweeps "everything above the floor" — if two operations interleave, sweep A can drain SOL that belongs to launch B (and same for creator-fee claims). Nonce/blockhash contention also silently kills parallel sweeps.
+# Verify Pump.fun Creator Fee Behavior for Our Launches
 
-## Fix Strategy
-Wrap every custodial-wallet code path in a **Postgres advisory lock** keyed by the custodial wallet's public key. This forces all PumpPortal launches and fee claims (across any number of executor and distributor replicas) to take turns touching the wallet. SPL token sweeps are isolated by mint and don't strictly need the lock, but it's simpler and safer to hold the lock for the full launch lifecycle so the SOL accounting stays consistent.
+## Why this plan exists
+I confidently claimed every token we launch via Pump.fun earns creator fees automatically. The user correctly pushed back: the legacy Pump.fun model paid creators **nothing during bonding** (0%–99.9% progress) — only post-graduation LP fees. Pump.fun has since added "creator revenue sharing" but I don't have verified confirmation that:
+1. Our launch flow opts into / qualifies for it
+2. PumpPortal Lightning's `pool: "pump"` default enables it
+3. `collectCreatorFee` actually returns SOL for our launched tokens during bonding
 
-Token sweeps for *different* mints are technically safe in parallel, but holding the lock through them costs nothing because the executor is already throughput-bounded by Lightning create latency (~5–15 s per launch).
+Before assuming `claimPumpfunFees.ts` will ever produce non-zero claims for pre-graduation tokens, we need to verify against current docs and on-chain reality.
 
-## Scope of Changes
+## Investigation steps
 
-### 1. New SQL helper functions (migration)
-Add two SECURITY DEFINER functions exposing `pg_try_advisory_lock` / `pg_advisory_unlock` over a stable bigint derived from a text key. Service role only.
+### 1. Read current PumpPortal Lightning `create` documentation
+Fetch https://pumpportal.fun/creation/?api=lightning and the trading docs to confirm:
+- Whether the `create` action has any creator-fee related parameters
+- Whether `pool: "pump"` defaults enable creator fees
+- Whether there's a separate config (e.g., `creatorFeeBps`) we should be passing
 
-```sql
-create or replace function public.try_acquire_custodial_lock(p_key text)
-returns boolean language sql security definer set search_path = public as $$
-  select pg_try_advisory_lock(hashtextextended(p_key, 0));
-$$;
+### 2. Read current PumpPortal `collectCreatorFee` documentation
+Fetch the relevant page to confirm:
+- What conditions must be met for a mint to have collectible fees (graduated only? bonding too?)
+- What the response looks like when fees = 0
+- Whether the API errors or silently succeeds with 0 lamports moved
 
-create or replace function public.release_custodial_lock(p_key text)
-returns boolean language sql security definer set search_path = public as $$
-  select pg_advisory_unlock(hashtextextended(p_key, 0));
-$$;
-```
+### 3. Read Pump.fun's own creator-rewards docs / changelog
+Web-search "pump.fun creator rewards bonding curve" and "pump.fun creator revenue sharing 2025" to confirm the current program rules — specifically whether bonding-phase fees go to creators by default for tokens launched in 2025.
 
-Notes:
-- `hashtextextended` returns a deterministic bigint, suitable for advisory-lock keys.
-- Advisory locks are session-scoped. Because supabase-js uses PgBouncer (transaction pooling), we MUST acquire + release in the same call chain and never rely on connection identity. We achieve this by wrapping each lock attempt in a tight retry loop and always calling release at the end of the critical section, with a TTL fallback (see #3).
+### 4. Query our DB for ground truth
+Run a read-only query against `launches` joined with whatever table tracks claimed fees:
+- How many `pumpfun` launches are in `launched` status?
+- Of those, how many have `pumpfun_fees_claimed_total > 0`?
+- What's the distribution — is it always 0, or do some have non-zero claims?
 
-### 2. New executor helper: `executor/src/custodialLock.ts`
-Small utility around the SQL functions:
-- `acquireCustodialLock(timeoutMs, pollMs)` — polls `try_acquire_custodial_lock` until it returns true or `timeoutMs` elapses. Throws on timeout.
-- `releaseCustodialLock()` — best-effort release; logs but never throws.
-- `withCustodialLock(fn, opts)` — acquires, runs `fn`, always releases in `finally`.
-- Lock key is the custodial wallet pubkey string so future per-wallet pools (Option 3) get free isolation by reusing the same primitive with a different key.
+This tells us empirically whether our current pipeline ever sees fees, regardless of what the docs say.
 
-Same helper duplicated into `distributor/src/custodialLock.ts` (separate codebase, can't share).
+### 5. Inspect our `create` call vs. PumpPortal docs
+Diff the body we send in `executePumpfunLightning.ts` against the documented Lightning `create` schema. Identify any missing fields that would enable / configure creator fees.
 
-### 3. TTL safety net
-Because PgBouncer can route the release to a different backend than the acquire, advisory locks could theoretically leak. Mitigations:
-- Default acquire timeout: 90 s (longer than the worst-case Lightning create + sweeps).
-- Add a `custodial_wallet_locks` table as a belt-and-braces TTL fallback used in addition to the advisory lock:
-  ```sql
-  create table public.custodial_wallet_locks (
-    lock_key text primary key,
-    locked_by text not null,
-    locked_at timestamptz not null default now()
-  );
-  ```
-  Acquire = `INSERT … ON CONFLICT DO NOTHING` only when existing row is older than 120 s. Release = `DELETE WHERE locked_by = $worker_id`. Combined with the advisory lock, this guarantees self-healing if an executor crashes mid-launch.
+## Possible outcomes & follow-up plans
 
-### 4. Wire the lock into the Lightning executor
-File: `executor/src/executePumpfunLightning.ts`
-Wrap the entire critical section — funding → Lightning create → token sweep retries → SOL sweep — in `withCustodialLock`. The lock is held from the moment we transfer SOL into the custodial wallet until we've swept residual SOL back out. This eliminates SOL collision and serializes all PumpPortal API calls per worker fleet.
+After investigation, one of these is true:
 
-The pre-flight checks (decrypting keys, computing splits, persisting basis points) happen BEFORE acquiring the lock so we don't block other launches while doing CPU work that doesn't touch the custodial wallet.
+**A. Creator fees ARE enabled by default for `pool: "pump"` and our setup is correct.**
+- Action: Update memory with the verified facts. No code changes. Document expected fee accrual timing (bonding vs. post-graduation).
 
-### 5. Wire the lock into the fee claimer
-File: `distributor/src/claimPumpfunFees.ts`
-Wrap the entire `claimPumpfunFeesForLaunch` body from "read pre-claim balance" through "sweep custodial → escrow" in `withCustodialLock`. The 50/50 escrow→platform/creator split runs OUTSIDE the lock since by then funds are in the per-launch escrow and are no longer shared.
+**B. Creator fees require an explicit field we're not passing.**
+- Action: Plan a code change to `executePumpfunLightning.ts` to pass the correct field. Also plan a backfill discussion for existing live tokens (likely no remediation possible — they were created without it).
 
-### 6. Fail-fast on lock timeout
-- Executor: if `acquireCustodialLock` times out, **release the worker lock on `launches`** so another worker (or the same worker on the next poll) can retry. Do NOT mark the launch failed — it never started.
-- Fee claimer: if it times out, just log and skip; the next 10-min cycle will pick the launch up again automatically.
+**C. Creator fees only apply post-graduation.**
+- Action: Update memory. Modify `claim-pumpfun-fees` cron / `claimPumpfunFees.ts` to skip pre-graduation tokens (or accept that they'll be no-ops for weeks/months). Update user-facing dashboard messaging if it implies fees flow during bonding.
 
-## Files Touched
-- `supabase/migrations/<timestamp>_custodial_advisory_lock.sql` — new SQL functions + TTL table
-- `executor/src/custodialLock.ts` — new helper
-- `executor/src/executePumpfunLightning.ts` — wrap critical section
-- `executor/src/db.ts` — minor: factor a no-op release path on timeout
-- `distributor/src/custodialLock.ts` — new helper (duplicate of executor's)
-- `distributor/src/claimPumpfunFees.ts` — wrap critical section
+**D. Mixed model (e.g., small % during bonding, larger post-graduation).**
+- Action: Document the split. Tune dashboard expectations.
 
-No frontend changes. No new secrets. No env-var changes. Bags launches (`executeBags.ts`) untouched — they don't share custodial state.
+## Files likely touched (depending on outcome)
+- `.lovable/memory/features/` — new or updated memory file with verified facts
+- `executor/src/executePumpfunLightning.ts` — only if outcome B
+- `distributor/src/claimPumpfunFees.ts` — only if outcome C requires gating
+- Dashboard copy in `src/pages/DashboardPage.tsx` or related — only if user-facing claims need correction
 
-## Throughput After This Change
-- ~1 Pump.fun launch in flight at a time globally (~15–25 s each end-to-end). Realistic ceiling: **~2–4 Pump.fun launches per minute**. Plenty for current load; if it ever becomes a bottleneck, Option 3 (wallet pool) drops in cleanly using the same `withCustodialLock(key=walletPubkey, ...)` primitive.
-- Bags launches: **unchanged, fully parallel**.
-- Fee claims: **serialized for Pump.fun launches only**, sequential per launch (already the case in `claimAllPumpfunFees` which iterates with a 1 s delay).
+## What I will NOT do in this investigation
+- Make code changes blindly based on assumed Pump.fun behavior
+- Assert anything about creator fees without a doc/DB citation
+- Touch the locking work we just shipped — that work is correct regardless of the fee-eligibility question
 
-## What This Does NOT Fix
-- PumpPortal API outages (still a single dependency)
-- Per-API-key rate limits (single key)
-- Custodial wallet running out of SOL float (operator concern)
-Each of those is addressed by Option 3 or 4 in the earlier discussion.
-
-## Rollout
-1. Run migration (creates SQL functions + TTL table).
-2. Redeploy executor and distributor to Railway with the new code.
-3. Verify in logs: first Pump.fun launch should log `Acquired custodial lock`; a concurrent second one (if any) should log `Waiting for custodial lock`.
-
-No data backfill required. Safe to roll back by removing the `withCustodialLock` wrappers.
+## Deliverable
+A clear, cited answer to: "When a token launches through Erys via PumpPortal Lightning today, does the custodial wallet earn SOL fees during bonding, only after graduation, or never — and is our `collectCreatorFee` cron meaningful for our current launch population?"
