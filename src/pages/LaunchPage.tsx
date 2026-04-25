@@ -331,6 +331,24 @@ const LaunchPage = () => {
                 </div>
               </div>
 
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">
+                  Receive tokens at a different wallet? (optional)
+                </label>
+                <Input
+                  placeholder="Enter Solana wallet address"
+                  value={tokenDeliveryWallet}
+                  onChange={(e) => setTokenDeliveryWallet(e.target.value)}
+                  className="font-mono text-xs"
+                  disabled={!canContribute}
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  {isPumpfun
+                    ? "Enter your Pump.fun wallet to trade immediately after launch."
+                    : "Enter your Bags wallet to claim fees and trade immediately after launch."}
+                </p>
+              </div>
+
               <Button
                 className="w-full gap-2"
                 disabled={!canContribute || isContributing}
@@ -358,7 +376,7 @@ const LaunchPage = () => {
 
               <p className="text-[10px] leading-relaxed text-muted-foreground">
                 {isPumpfun
-                  ? "Your SOL is held in escrow until launch. You will receive tokens at the earliest possible entry price proportional to your contribution. If this launch is cancelled your SOL is refunded automatically."
+                  ? "Your SOL is held in escrow until launch. You will receive tokens at the earliest possible entry price proportional to your contribution. A small platform fee covers infrastructure costs. If this launch is cancelled your SOL is refunded automatically."
                   : "Your SOL is held in escrow until launch. You will receive tokens AND be registered as a permanent Bags fee share recipient proportional to your contribution. If this launch is cancelled your SOL is refunded automatically."}
               </p>
             </div>
