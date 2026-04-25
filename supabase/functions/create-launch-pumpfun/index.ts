@@ -42,6 +42,18 @@ Deno.serve(async (req) => {
       return errorResponse("Missing required fields", 400);
     }
 
+    // Pump.fun validation: symbol must be alphanumeric, max 10 chars; name max 32 chars
+    const symbolUpper = token_symbol.toUpperCase();
+    if (!/^[A-Z0-9]{1,10}$/.test(symbolUpper)) {
+      return errorResponse(
+        "Token symbol must be 1-10 alphanumeric characters (A-Z, 0-9 only)",
+        400
+      );
+    }
+    if (token_name.length > 32) {
+      return errorResponse("Token name must be 32 characters or fewer", 400);
+    }
+
     // Step 1: If image_url is a Supabase storage URL (or any non-IPFS URL),
     // re-upload it to Pinata so the metadata references an ipfs:// gateway URL.
     let finalImageUrl = image_url || "";
@@ -56,11 +68,12 @@ Deno.serve(async (req) => {
         const ext = imgContentType.split("/")[1]?.split(";")[0] || "png";
         const imgFileName = `${crypto.randomUUID()}.${ext}`;
 
+        // Use Pinata v3 Files API (per official Pump.fun integration examples)
         const imgForm = new FormData();
         imgForm.append("file", imgBlob, imgFileName);
-        imgForm.append("pinataMetadata", JSON.stringify({ name: imgFileName }));
+        imgForm.append("network", "public");
 
-        const imgPinRes = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+        const imgPinRes = await fetch("https://uploads.pinata.cloud/v3/files", {
           method: "POST",
           headers: { Authorization: `Bearer ${PINATA_JWT}` },
           body: imgForm,
@@ -68,12 +81,16 @@ Deno.serve(async (req) => {
 
         if (!imgPinRes.ok) {
           const errText = await imgPinRes.text();
-          return errorResponse(`Pinata image upload failed: ${errText}`, 500);
+          return errorResponse(`Pinata image upload failed (${imgPinRes.status}): ${errText}`, 500);
         }
 
         const imgPinData = await imgPinRes.json();
+        const imgCid = imgPinData?.data?.cid || imgPinData?.IpfsHash;
+        if (!imgCid) {
+          return errorResponse(`Pinata image upload returned no CID: ${JSON.stringify(imgPinData)}`, 500);
+        }
         // Use ipfs:// URI scheme — required by Pump.fun metadata validation
-        finalImageUrl = `ipfs://${imgPinData.IpfsHash}`;
+        finalImageUrl = `ipfs://${imgCid}`;
       } catch (err: any) {
         return errorResponse(`Image IPFS upload failed: ${err.message}`, 500);
       }
@@ -85,7 +102,7 @@ Deno.serve(async (req) => {
     //   - showName: true and createdOn are required for validation to pass
     const metadataObj: Record<string, unknown> = {
       name: token_name,
-      symbol: token_symbol.toUpperCase(),
+      symbol: symbolUpper,
       description: description || "",
       image: finalImageUrl,
       showName: true,
@@ -96,29 +113,42 @@ Deno.serve(async (req) => {
     if (website_url) metadataObj.website = website_url;
 
     let ipfsMetadataUrl: string;
+    let metadataCid: string;
     try {
-      const metaPinRes = await fetch("https://api.pinata.cloud/pinning/pinJSONToIPFS", {
+      // Pinata v3 Files API: upload JSON as a file in one call
+      const metaBlob = new Blob([JSON.stringify(metadataObj)], { type: "application/json" });
+      const metaForm = new FormData();
+      metaForm.append("file", metaBlob, `${symbolUpper}-metadata.json`);
+      metaForm.append("network", "public");
+
+      const metaPinRes = await fetch("https://uploads.pinata.cloud/v3/files", {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${PINATA_JWT}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          pinataContent: metadataObj,
-          pinataMetadata: { name: `${token_symbol.toUpperCase()}-metadata.json` },
-        }),
+        headers: { Authorization: `Bearer ${PINATA_JWT}` },
+        body: metaForm,
       });
 
       if (!metaPinRes.ok) {
         const errText = await metaPinRes.text();
-        return errorResponse(`Pinata metadata upload failed: ${errText}`, 500);
+        return errorResponse(`Pinata metadata upload failed (${metaPinRes.status}): ${errText}`, 500);
       }
 
       const metaPinData = await metaPinRes.json();
+      metadataCid = metaPinData?.data?.cid || metaPinData?.IpfsHash;
+      if (!metadataCid) {
+        return errorResponse(`Pinata metadata upload returned no CID: ${JSON.stringify(metaPinData)}`, 500);
+      }
       // Pump.fun expects the canonical ipfs.io gateway for metadata URI
-      ipfsMetadataUrl = `https://ipfs.io/ipfs/${metaPinData.IpfsHash}`;
+      ipfsMetadataUrl = `https://ipfs.io/ipfs/${metadataCid}`;
     } catch (err: any) {
       return errorResponse(`Metadata IPFS upload failed: ${err.message}`, 500);
+    }
+
+    // Step 2b: Wait for IPFS gateway propagation. PumpPortal validates the URI
+    // immediately and rejects launches whose metadata isn't yet retrievable.
+    // Poll a few gateways for up to ~15s before giving up.
+    const propagated = await waitForIpfsPropagation(metadataCid, 15_000);
+    if (!propagated) {
+      console.warn(`Metadata CID ${metadataCid} not propagated within timeout — proceeding anyway`);
     }
 
     // Step 2: Generate two Ed25519 keypairs (escrow + mint)
@@ -138,7 +168,7 @@ Deno.serve(async (req) => {
     // Step 4: Insert into launches table
     const { data, error } = await supabase.from("launches").insert({
       token_name,
-      token_symbol: token_symbol.toUpperCase(),
+      token_symbol: symbolUpper,
       description: description || null,
       image_url: image_url || null,
       twitter_url: twitter_url || null,
@@ -278,4 +308,39 @@ function errorResponse(msg: string, status: number) {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     }
   );
+}
+
+// Poll public IPFS gateways until the CID is retrievable, or timeout.
+// Pump.fun validates the metadata URI inline and rejects launches whose
+// JSON hasn't propagated yet, so we want at least one gateway to serve it
+// before we hand the URL to PumpPortal.
+async function waitForIpfsPropagation(cid: string, timeoutMs: number): Promise<boolean> {
+  const gateways = [
+    `https://ipfs.io/ipfs/${cid}`,
+    `https://cloudflare-ipfs.com/ipfs/${cid}`,
+    `https://gateway.pinata.cloud/ipfs/${cid}`,
+  ];
+  const deadline = Date.now() + timeoutMs;
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    for (const url of gateways) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 3_000);
+        const res = await fetch(url, { method: "GET", signal: ctrl.signal });
+        clearTimeout(t);
+        if (res.ok) {
+          // Drain to avoid leaking the response body
+          await res.text().catch(() => undefined);
+          console.log(`IPFS propagation confirmed via ${url} (attempt ${attempt + 1})`);
+          return true;
+        }
+      } catch {
+        // try next gateway
+      }
+    }
+    attempt++;
+    await new Promise((r) => setTimeout(r, 1_500));
+  }
+  return false;
 }
