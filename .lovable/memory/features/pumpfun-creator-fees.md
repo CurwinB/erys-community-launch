@@ -40,6 +40,7 @@ Per https://pumpportal.fun/creator-fee/:
 2. `collectCreatorFee` will return non-zero fees as soon as **any** of our launched coins sees trading volume — it batches across all our coins in one call.
 3. Our `pumpfun_fees_claimed_total = 0` for all rows is NOT a fee-eligibility bug. As of 2026-04-25, every Pump.fun launch in the DB is in `execution_failed` status, so there is no live coin generating fees yet. Fix the launch failures first; fee accrual will start automatically once a token actually mints.
 4. After graduation, the same `collectCreatorFee(pool: "pump")` call continues to work for the now-canonical PumpSwap pool. No code change needed at graduation boundary.
+5. **Platform fee split (as of 2026-04-25):** Erys takes **100%** of claimed Pump.fun creator fees. The previous 50/50 platform/creator split was removed in `distributor/src/claimPumpfunFees.ts`. Creators are not paid out a share of these fees anymore; the launch page copy reflects this as "a small platform fee covers infrastructure costs."
 
 ## What this does NOT cover
 

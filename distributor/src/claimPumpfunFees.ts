@@ -19,11 +19,9 @@ const PUMPPORTAL_CUSTODIAL_WALLET = process.env.PUMPPORTAL_CUSTODIAL_WALLET;
 const WORKER_ID =
   process.env.WORKER_ID || process.env.RAILWAY_REPLICA_ID || "distributor-default";
 
-// Erys takes 50% of Pump.fun creator fees
-const PLATFORM_SHARE = 0.5;
-
-// Reserve for the two outgoing SystemProgram.transfer txs (~5000 lamports each)
-const TX_FEE_RESERVE = 10_000;
+// Erys takes 100% of Pump.fun creator fees
+// Reserve for the single outgoing SystemProgram.transfer tx (~5000 lamports)
+const TX_FEE_RESERVE = 5_000;
 
 // Floor we leave in the custodial wallet so it stays rent-exempt and ready
 // for the next launch / next fee-claim cycle. Mirrors executor constant.
@@ -126,8 +124,7 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     return;
   }
 
-  // Reserve ~5000 lamports per outgoing transfer so the second tx doesn't
-  // run out of funds after the first transfer's fee is deducted.
+  // Reserve ~5000 lamports for the single outgoing platform transfer fee.
   const distributableLamports = sweptToEscrowLamports - TX_FEE_RESERVE;
   if (distributableLamports <= 0) {
     console.log(
@@ -136,15 +133,13 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     return;
   }
 
-  // Split distributable amount: 50% to Erys platform, 50% to creator
-  const platformShareLamports = Math.floor(distributableLamports * PLATFORM_SHARE);
-  const creatorShareLamports = distributableLamports - platformShareLamports;
-
-  console.log(`Platform share: ${platformShareLamports / LAMPORTS_PER_SOL} SOL`);
-  console.log(`Creator share: ${creatorShareLamports / LAMPORTS_PER_SOL} SOL`);
+  // Platform claims 100% of creator fees.
+  const platformShareLamports = distributableLamports;
+  console.log(
+    `Platform claiming 100% of creator fees: ${platformShareLamports / LAMPORTS_PER_SOL} SOL`
+  );
 
   let platformSent = false;
-  let creatorSent = false;
 
   // Send platform share to Erys platform wallet
   try {
@@ -173,39 +168,12 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     console.error(`Failed to send platform share for launch ${launch.id}:`, err.message);
   }
 
-  // Send creator share to token creator wallet
-  try {
-    const creatorTx = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: escrowKeypair.publicKey,
-        toPubkey: new PublicKey(launch.created_by_wallet),
-        lamports: creatorShareLamports,
-      })
-    );
-    creatorTx.feePayer = escrowKeypair.publicKey;
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-    creatorTx.recentBlockhash = blockhash;
-    creatorTx.sign(escrowKeypair);
-
-    const creatorSig = await connection.sendRawTransaction(creatorTx.serialize(), {
-      preflightCommitment: "confirmed",
-    });
-    await connection.confirmTransaction(
-      { signature: creatorSig, blockhash, lastValidBlockHeight },
-      "confirmed"
-    );
-    console.log(`Creator fee sent: https://solscan.io/tx/${creatorSig}`);
-    creatorSent = true;
-  } catch (err: any) {
-    console.error(`Failed to send creator share for launch ${launch.id}:`, err.message);
-  }
-
-  if (platformSent && creatorSent) {
+  if (platformSent) {
     await updatePumpfunFeesClaimed(launch.id, claimedLamports);
     console.log(`Fee claim complete for launch ${launch.id}`);
   } else {
     console.error(
-      `Fee claim incomplete for launch ${launch.id}. Platform sent: ${platformSent}, Creator sent: ${creatorSent}. Will retry next cycle.`
+      `Fee claim failed for launch ${launch.id}. Platform transfer did not land. Will retry next cycle.`
     );
   }
 }

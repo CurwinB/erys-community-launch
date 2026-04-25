@@ -37,6 +37,7 @@ export interface Contribution {
   distribution_tx_signature: string | null;
   distribution_error: string | null;
   basis_points: number | null;
+  token_delivery_wallet: string | null;
 }
 
 /** @deprecated Use claimNextDistribution for atomic worker-safe claiming. */

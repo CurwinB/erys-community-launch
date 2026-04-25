@@ -240,7 +240,17 @@ export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
       continue;
     }
 
-    console.log(`Sending ${tokenAmount.toString()} tokens to ${contribution.wallet_address}`);
+    const recipientWallet =
+      contribution.token_delivery_wallet || contribution.wallet_address;
+    if (recipientWallet !== contribution.wallet_address) {
+      console.log(
+        `Sending ${tokenAmount.toString()} tokens to ${recipientWallet} (delivery override; contributor: ${contribution.wallet_address})`
+      );
+    } else {
+      console.log(
+        `Sending ${tokenAmount.toString()} tokens to ${recipientWallet}`
+      );
+    }
 
     try {
       const txSignature = await sendTokensToContributor(
@@ -248,7 +258,7 @@ export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
         escrowKeypair,
         escrowAta,
         mintPubkey,
-        contribution.wallet_address,
+        recipientWallet,
         tokenAmount
       );
       console.log(`Success: ${txSignature}`);

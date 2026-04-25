@@ -77,7 +77,7 @@ function buildFeeClaimers(
   }
 
   return capped.map((c, idx) => ({
-    user: new PublicKey(c.wallet_address),
+    user: new PublicKey(c.token_delivery_wallet || c.wallet_address),
     userBps: allocations[idx],
   }));
 }

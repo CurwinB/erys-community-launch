@@ -45,6 +45,7 @@ export type Database = {
           refund_shortfall_lamports: number | null
           refund_tx_signature: string | null
           token_amount: number | null
+          token_delivery_wallet: string | null
           tokens_distributed: boolean | null
           tx_signature: string
           wallet_address: string
@@ -61,6 +62,7 @@ export type Database = {
           refund_shortfall_lamports?: number | null
           refund_tx_signature?: string | null
           token_amount?: number | null
+          token_delivery_wallet?: string | null
           tokens_distributed?: boolean | null
           tx_signature: string
           wallet_address: string
@@ -77,6 +79,7 @@ export type Database = {
           refund_shortfall_lamports?: number | null
           refund_tx_signature?: string | null
           token_amount?: number | null
+          token_delivery_wallet?: string | null
           tokens_distributed?: boolean | null
           tx_signature?: string
           wallet_address?: string
