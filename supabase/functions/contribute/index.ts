@@ -20,10 +20,27 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json();
     const { launch_id, wallet_address, amount_lamports, tx_signature } = body;
+    let { token_delivery_wallet } = body;
 
     // 1. Validate required fields
     if (!launch_id || !wallet_address || !amount_lamports || !tx_signature) {
       return errorResponse("Missing required fields: launch_id, wallet_address, amount_lamports, tx_signature", 400);
+    }
+
+    // Optional token_delivery_wallet — if provided, must be a plausible base58 Solana pubkey.
+    if (token_delivery_wallet !== undefined && token_delivery_wallet !== null && token_delivery_wallet !== "") {
+      if (typeof token_delivery_wallet !== "string") {
+        return errorResponse("token_delivery_wallet must be a string", 400);
+      }
+      token_delivery_wallet = token_delivery_wallet.trim();
+      if (token_delivery_wallet.length < 32 || token_delivery_wallet.length > 44) {
+        return errorResponse("token_delivery_wallet must be a valid Solana wallet address", 400);
+      }
+      if (!/^[1-9A-HJ-NP-Za-km-z]+$/.test(token_delivery_wallet)) {
+        return errorResponse("token_delivery_wallet contains invalid characters", 400);
+      }
+    } else {
+      token_delivery_wallet = null;
     }
 
     // 2. Verify launch exists, is scheduled, and contribution window is open
@@ -183,6 +200,7 @@ Deno.serve(async (req) => {
         wallet_address,
         amount_lamports: amount,
         tx_signature,
+        token_delivery_wallet,
       })
       .select("id")
       .single();

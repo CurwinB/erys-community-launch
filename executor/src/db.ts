@@ -44,6 +44,7 @@ export interface Contribution {
   amount_lamports: string;
   basis_points: number | null;
   tokens_distributed: boolean;
+  token_delivery_wallet: string | null;
 }
 
 export async function getExecutingLaunches(): Promise<Launch[]> {
