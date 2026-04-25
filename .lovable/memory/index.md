@@ -22,3 +22,4 @@ Alchemy RPC: SOLANA_RPC_URL (Supabase secret) + VITE_SOLANA_RPC_URL (frontend .e
 - [Fee share config](mem://features/fee-share-config) — Exact API structure, basis points calc, 100 claimer limit
 - [Claim flow](mem://features/claim-flow) — Partial signing rule, dashboard claim UX, automated platform claiming
 - [Custodial wallet locking](mem://features/custodial-wallet-locking) — withCustodialLock serializes shared PumpPortal wallet ops across executor + distributor
+- [Pump.fun creator fees](mem://features/pumpfun-creator-fees) — Verified: 0.30% creator fee on bonding curve since May 12 2025; custodial wallet IS the on-chain creator; collectCreatorFee batches all coins per API key
