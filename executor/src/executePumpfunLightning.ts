@@ -251,10 +251,16 @@ async function runCustodialCriticalSection(
     return;
   }
 
-  if (!lightningRes.ok || lightningJson?.errors) {
+  // PumpPortal Lightning returns `errors: []` (empty array — TRUTHY in JS) on
+  // success, so we must check the array length, not just existence.
+  const lightningErrors: string[] = Array.isArray(lightningJson?.errors)
+    ? lightningJson.errors
+    : [];
+  if (!lightningRes.ok || lightningErrors.length > 0) {
     const errSummary =
-      lightningJson?.errors?.join(" | ") ||
-      JSON.stringify(lightningJson).slice(0, 500);
+      lightningErrors.length > 0
+        ? lightningErrors.join(" | ")
+        : JSON.stringify(lightningJson).slice(0, 500);
     console.error(
       `Lightning create failed [${lightningRes.status}]:`,
       lightningJson
