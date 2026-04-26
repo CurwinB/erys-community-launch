@@ -3,12 +3,11 @@ dotenv.config();
 
 import {
   claimNextDistribution,
-  claimNextPumpfunFeeClaim,
   releaseLaunchLock,
   resetStaleExecutingLaunches,
 } from "./db";
 import { distributeTokensForLaunch } from "./distribute";
-import { claimPumpfunFeesForLaunch } from "./claimPumpfunFees";
+import { claimPumpfunFeesBatch } from "./claimPumpfunFeesBatch";
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "30000");
 
@@ -57,21 +56,16 @@ async function pollAndDistribute(): Promise<void> {
 
 async function pollAndClaimFees(): Promise<void> {
   try {
-    // Process Pump.fun fee claims sequentially per worker — each escrow wallet
-    // can only handle one claim tx at a time, and SKIP LOCKED ensures other
-    // replicas pick up different launches in parallel.
-    while (true) {
-      const launch = await claimNextPumpfunFeeClaim(WORKER_ID);
-      if (!launch) break;
-
-      console.log(`Worker ${WORKER_ID} claimed launch ${launch.id} for fee claiming`);
-      try {
-        await claimPumpfunFeesForLaunch(launch);
-      } catch (err: any) {
-        console.error(`Fee claim error for ${launch.id}:`, err.message);
-      } finally {
-        await releaseLaunchLock(launch.id);
-      }
+    // Batched fee claiming: one custodial-lock acquisition per cycle,
+    // up to N launches processed inside it, then parallel escrow→treasury
+    // sweeps. See claimPumpfunFeesBatch.ts for the full strategy.
+    // Loop in case there are more eligible launches than fit in one batch.
+    let safetyHops = 0;
+    while (safetyHops++ < 5) {
+      const before = Date.now();
+      await claimPumpfunFeesBatch();
+      // If a batch took <1s it likely returned no work — exit.
+      if (Date.now() - before < 1_000) break;
     }
   } catch (err: any) {
     console.error("Error in pollAndClaimFees:", err.message);

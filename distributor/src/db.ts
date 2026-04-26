@@ -89,6 +89,43 @@ export async function claimNextPumpfunFeeClaim(workerId: string): Promise<Launch
   return (data?.[0] as Launch) || null;
 }
 
+// Atomically claim a BATCH of Pump.fun launches needing a fee claim for this
+// worker. Skips locked rows so multiple replicas can grab disjoint batches.
+// Single round-trip — much cheaper than calling claimNextPumpfunFeeClaim N times.
+export async function claimPumpfunFeeBatchForWorker(
+  workerId: string,
+  limit: number
+): Promise<Launch[]> {
+  const { data, error } = await supabase.rpc(
+    "claim_pumpfun_launches_batch_for_worker",
+    {
+      p_worker_id: workerId,
+      p_limit: limit,
+      p_lock_expiry_seconds: 300,
+    }
+  );
+  if (error) {
+    console.error("Error claiming Pump.fun batch for worker:", error.message);
+    return [];
+  }
+  return (data as Launch[]) || [];
+}
+
+// Record a successful claim that returned ZERO lamports (creator vault was
+// empty). Bumps the empty-claim counter; after 3 consecutive empties the SQL
+// function pushes the next attempt out by 1 hour.
+export async function recordPumpfunEmptyClaim(launchId: string): Promise<void> {
+  const { error } = await supabase.rpc("record_pumpfun_empty_claim", {
+    p_launch_id: launchId,
+  });
+  if (error) {
+    console.error(
+      `Error recording empty Pump.fun claim for launch ${launchId}:`,
+      error.message
+    );
+  }
+}
+
 // Release a worker lock. Always called in a finally so crashed workers don't
 // hold rows hostage; the SQL claim functions also self-heal locks older than
 // the expiry window as a backstop.

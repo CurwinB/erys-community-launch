@@ -46,3 +46,19 @@ Per https://pumpportal.fun/creator-fee/:
 
 - Coins that ever migrate to Raydium (instead of PumpSwap canonical pool) stop earning creator fees — out of Pump.fun's control. Pump.fun's normal graduation path is to PumpSwap, so this is rare.
 - "Non-canonical" PumpSwap pools (created by anyone, not via Pump's `migrate`) pay 0% creator fee. Not relevant to our launch path.
+
+## Distributor batching architecture (added 2026-04-26)
+
+Because `collectCreatorFee` with `pool: "pump"` sweeps ALL of our wallet's creator vaults in ONE on-chain tx, the distributor uses a single batched cycle per 10 minutes:
+
+1. `claim_pumpfun_launches_batch_for_worker` grabs up to 50 eligible launches in one round-trip (`FOR UPDATE SKIP LOCKED`).
+2. `withCustodialLock` is acquired ONCE for the whole batch (was: once per launch — that was the real throughput cap).
+3. Wallet-health budget gate: aborts the cycle if custodial SOL < (1 priority fee + N/10 fan-out tx fees + 0.002 SOL floor).
+4. ONE `collectCreatorFee` call. The custodial-wallet balance delta is the gross claim total.
+5. Equal-share attribution across the batched launches (we can't tell per-launch shares from the batched API; platform takes 100% so this only affects the `pumpfun_fees_claimed_total` accounting column).
+6. Fan out custodial → escrows in multi-instruction txs (≤10 transfers per tx).
+7. Lock released. Per-launch escrow → platform-wallet transfers run in parallel.
+
+**Empty-vault throttle:** `record_pumpfun_empty_claim` bumps `pumpfun_consecutive_empty_claims`; after 3 in a row, `pumpfun_low_volume_throttle_until` pushes the next attempt out by 1 hour. Resets on any non-zero claim.
+
+**Why this fixes the "one wallet" bottleneck:** lock contention (not signing speed) was the limiter. One lock acquisition + one priority fee per cycle scales to hundreds of launches without changing infrastructure. A multi-wallet pool is still possible later but no longer urgent.
