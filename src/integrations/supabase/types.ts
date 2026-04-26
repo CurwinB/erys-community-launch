@@ -430,6 +430,58 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      claim_sweep_recovery_launch_for_worker: {
+        Args: { p_lock_expiry_seconds?: number; p_worker_id: string }
+        Returns: {
+          claimer_count: number | null
+          created_at: string
+          created_by_wallet: string
+          description: string | null
+          distribution_completed: boolean | null
+          distribution_completed_at: string | null
+          escrow_wallet_encrypted_private_key: string
+          escrow_wallet_public_key: string
+          excluded_contributors: number | null
+          execution_attempts: number
+          execution_error: string | null
+          fee_share_config_key: string | null
+          id: string
+          image_url: string | null
+          ipfs_metadata_url: string | null
+          is_sponsored: boolean | null
+          launch_datetime: string
+          max_contribution_lamports: number | null
+          min_contribution_lamports: number
+          platform: string
+          pumpfun_creator_fees_distributed: number | null
+          pumpfun_fees_claimed_total: number | null
+          pumpfun_fees_last_claimed_at: string | null
+          pumpfun_launch_signature: string | null
+          pumpfun_mint_keypair_encrypted: string | null
+          sponsor_link_claimed_at: string | null
+          sponsor_link_expires_at: string | null
+          sponsor_link_token: string | null
+          sponsored_amount_lamports: number | null
+          sponsored_by: string | null
+          sponsored_tx_signature: string | null
+          status: Database["public"]["Enums"]["launch_status"]
+          telegram_url: string | null
+          token_mint_address: string | null
+          token_name: string
+          token_symbol: string
+          total_tokens_distributed: number | null
+          twitter_url: string | null
+          website_url: string | null
+          worker_id: string | null
+          worker_locked_at: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "launches"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       get_sponsor_slot_by_token: {
         Args: { p_token: string }
         Returns: {
@@ -466,6 +518,7 @@ export type Database = {
         | "execution_failed"
         | "cancelled"
         | "sponsor_pending"
+        | "sweep_recovery"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -600,6 +653,7 @@ export const Constants = {
         "execution_failed",
         "cancelled",
         "sponsor_pending",
+        "sweep_recovery",
       ],
     },
   },
