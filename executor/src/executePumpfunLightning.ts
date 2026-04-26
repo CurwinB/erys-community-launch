@@ -24,9 +24,17 @@ const WORKER_ID =
   process.env.WORKER_ID || process.env.RAILWAY_REPLICA_ID || "executor-default";
 
 // Buffer of SOL we ship to PumpPortal on top of the dev-buy amount, to cover
-// the on-chain create + buy tx fees, ATA rent for their token account, and
-// PumpPortal's cut. 0.01 SOL is generous; leftovers are swept back to escrow.
-const CUSTODIAL_FUNDING_BUFFER_LAMPORTS = 10_000_000n; // 0.01 SOL
+// the on-chain create + buy tx in a single transaction. Must cover:
+//   - 2x ATA rent (~0.00408 SOL: mint metadata + custodial token account)
+//   - Pump.fun 1% protocol fee on the initial buy (up to ~0.005 on a 0.5 SOL buy)
+//   - Pump.fun 0.30% creator fee (negligible on small buys)
+//   - Compute + priority fees (~0.001 SOL)
+//   - PumpPortal tx fee (~0.001 SOL)
+//   - Safety margin (~0.013 SOL)
+// 0.01 SOL was empirically too small (custodial wallet ran 0.0027 SOL short
+// during the Buy CPI). 0.025 SOL gives comfortable headroom; leftovers are
+// swept back to escrow on success.
+const CUSTODIAL_FUNDING_BUFFER_LAMPORTS = 25_000_000n; // 0.025 SOL
 
 export async function executePumpfunLightningLaunch(
   launch: Launch,
