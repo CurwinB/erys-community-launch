@@ -380,11 +380,17 @@ async function runCustodialCriticalSection(
     // for many concurrent launches). Mark the launch failed but DO NOT
     // refund — the tokens are still in the custodial wallet and recoverable
     // by an admin running the sweep manually.
-    await setFailed(
+    // At this point Pump.fun create+buy already succeeded on-chain, so the
+    // SOL has been spent into the bonding curve. Triggering refunds would
+    // just produce partial/short payouts and leave tokens stranded. Persist
+    // the launch signature so admins can audit and run a manual sweep.
+    await setFailedNoRefund(
       launch.id,
       `Lightning create succeeded (${launchSignature}) but token sweep failed after retries: ${
         lastSweepErr?.message ?? lastSweepErr
       }. Tokens remain in custodial wallet ${custodialPubkey.toBase58()} and can be recovered manually.`
+      ,
+      launchSignature
     );
     return;
   }
