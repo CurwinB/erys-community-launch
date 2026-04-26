@@ -139,6 +139,44 @@ export async function setFailed(launchId: string, reason: string): Promise<void>
   }
 }
 
+// Mark a launch failed AND persist its on-chain signature, then auto-refund.
+// Use this when we have a Pump.fun launch signature but the tx either
+// reverted on-chain or never landed within our polling window. In both cases
+// the SOL has NOT been spent into a bonding curve, so refunds are correct.
+// We still save the signature for audit / manual lookup so future operators
+// can verify the on-chain state of the attempted mint.
+export async function setFailedWithSignature(
+  launchId: string,
+  reason: string,
+  signature: string,
+): Promise<void> {
+  console.error(`Launch ${launchId} failed (signature ${signature}): ${reason}`);
+  const { error } = await supabase
+    .from("launches")
+    .update({
+      status: "execution_failed",
+      execution_error: reason,
+      pumpfun_launch_signature: signature,
+    })
+    .eq("id", launchId);
+
+  if (error)
+    console.error(
+      `Error marking launch ${launchId} failed-with-signature:`,
+      error.message,
+    );
+
+  try {
+    const { refundFailedLaunch } = await import("./refundFailedLaunch");
+    await refundFailedLaunch(launchId);
+  } catch (refundErr: any) {
+    console.error(
+      `Auto-refund failed for launch ${launchId}:`,
+      refundErr?.message ?? refundErr,
+    );
+  }
+}
+
 // Mark a launch failed WITHOUT triggering auto-refund. Use this when the
 // on-chain launch already happened (e.g. Pump.fun create succeeded, signature
 // is final on-chain) but a downstream step like the token sweep failed.
