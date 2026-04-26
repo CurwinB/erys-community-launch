@@ -25,10 +25,11 @@ const RPC_URL = import.meta.env.VITE_SOLANA_RPC_URL;
 const connection = new Connection(RPC_URL, "confirmed");
 
 const FEE_RESERVE_SOL = 0.01;
-// Bags/Pump.fun both require the NET initialBuyLamports (after our ATA + tx-fee
-// reserves) to be at least 0.2 SOL. We add a small buffer so reserves don't push
-// the actual buy below their threshold and trigger HTTP 500.
-const MIN_CREATOR_SOL_PUMPFUN = 0.21;
+// Bags.fm requires the NET initialBuyLamports (after our ATA + tx-fee reserves)
+// to be at least 0.2 SOL — we add a small buffer to stay above their threshold.
+// Pump.fun's executor floor is only 0.01 SOL net buy, so the UI minimum here is
+// a product choice (not a protocol limit) to ensure a meaningful initial buy.
+const MIN_CREATOR_SOL_PUMPFUN = 0.1;
 const MIN_CREATOR_SOL_BAGS = 0.21;
 
 type Step =
