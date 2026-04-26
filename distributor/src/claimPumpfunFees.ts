@@ -246,6 +246,10 @@ async function runFeeClaimCriticalSection(
       `Failed to get custodial balance for launch ${launch.id}:`,
       err.message
     );
+    await recordPumpfunFeeClaimFailure(
+      launch.id,
+      `Failed to get custodial balance: ${err?.message ?? err}`
+    );
     return null;
   }
 
@@ -281,6 +285,10 @@ async function runFeeClaimCriticalSection(
         response.statusText;
       console.error(
         `Lightning collectCreatorFee failed for launch ${launch.id} [${response.status}]: ${summary}`
+      );
+      await recordPumpfunFeeClaimFailure(
+        launch.id,
+        `PumpPortal collectCreatorFee HTTP ${response.status}: ${summary}`
       );
       return null;
     }
@@ -330,6 +338,10 @@ async function runFeeClaimCriticalSection(
       `Lightning collectCreatorFee threw for launch ${launch.id}:`,
       err?.message ?? err
     );
+    await recordPumpfunFeeClaimFailure(
+      launch.id,
+      `PumpPortal collectCreatorFee threw: ${err?.message ?? err}`
+    );
     return null;
   }
 
@@ -345,6 +357,10 @@ async function runFeeClaimCriticalSection(
     if (custodialNow <= CUSTODIAL_SOL_FLOOR_LAMPORTS + sweepTxFee) {
       console.error(
         `Custodial balance below sweep threshold for launch ${launch.id}, cannot move claimed fees to escrow`
+      );
+      await recordPumpfunFeeClaimFailure(
+        launch.id,
+        `Custodial balance ${custodialNow} below sweep threshold (floor ${CUSTODIAL_SOL_FLOOR_LAMPORTS} + fee ${sweepTxFee}); top up the custodial wallet`
       );
       return null;
     }
@@ -376,6 +392,10 @@ async function runFeeClaimCriticalSection(
     console.error(
       `Failed to sweep custodial fees to escrow for launch ${launch.id}:`,
       err?.message ?? err
+    );
+    await recordPumpfunFeeClaimFailure(
+      launch.id,
+      `Failed to sweep custodial → escrow: ${err?.message ?? err}`
     );
     return null;
   }
