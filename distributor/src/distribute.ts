@@ -244,6 +244,28 @@ export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
     launch.created_by_wallet
   );
 
+  // Invariant guard: if the creator is among contributors, their final
+  // share must be >= 5% of the original total. If this fails, something in
+  // the math regressed — abort the entire distribution before sending so we
+  // can fix it instead of silently shorting the creator. The lock is
+  // released by the outer finally and the launch will be retried.
+  const creatorContrib = contributions.find(
+    (c) => c.wallet_address === launch.created_by_wallet
+  );
+  if (creatorContrib) {
+    const creatorMin = (originalTotalBalance * CREATOR_MIN_BPS) / TOTAL_BPS;
+    const creatorShare = shares.get(creatorContrib.id) ?? 0n;
+    if (creatorShare < creatorMin) {
+      throw new Error(
+        `Creator share invariant violated for launch ${launch.id}: ` +
+          `got ${creatorShare}, need >= ${creatorMin} (5% of ${originalTotalBalance}). Aborting distribution.`
+      );
+    }
+    console.log(
+      `Creator share OK: ${creatorShare} (>= 5% floor ${creatorMin})`
+    );
+  }
+
   for (const contribution of contributions) {
     const share = shares.get(contribution.id) || 0n;
     await supabase
