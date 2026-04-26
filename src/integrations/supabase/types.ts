@@ -499,6 +499,10 @@ export type Database = {
         Returns: undefined
       }
       is_admin_wallet: { Args: { p_wallet: string }; Returns: boolean }
+      mark_pumpfun_fee_claim_attempt: {
+        Args: { p_launch_id: string }
+        Returns: undefined
+      }
       release_custodial_lock: { Args: { p_key: string }; Returns: boolean }
       release_custodial_row_lock: {
         Args: { p_key: string; p_worker: string }
