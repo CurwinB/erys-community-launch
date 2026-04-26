@@ -22,3 +22,9 @@ The PumpPortal Lightning custodial wallet is shared across all Pump.fun launches
 **Throughput ceiling:** ~2–4 Pump.fun launches/min globally. Bags launches unaffected (different code path).
 
 **Worker ID:** `process.env.WORKER_ID || process.env.RAILWAY_REPLICA_ID || "<service>-default"`.
+
+## Pump.fun Lightning gotchas (verified on-chain Apr 2026)
+
+- **Funding buffer:** `CUSTODIAL_FUNDING_BUFFER_LAMPORTS = 0.025 SOL` in `executePumpfunLightning.ts`. Must cover 2× ATA rent (~0.00408), Pump.fun 1% protocol fee, 0.30% creator fee, compute/priority, tx fee, plus margin. 0.01 SOL was empirically too small — Buy CPI ran 0.0027 SOL short. Leftovers are swept back to escrow on success.
+- **Empty `errors: []` is success.** PumpPortal Lightning returns `{signature, errors: []}` on success. The empty array is truthy in JS — must check `Array.isArray(errors) && errors.length > 0`.
+- **Lightning returns 200 + signature even when the tx reverts on-chain.** After `confirmTransaction`, ALWAYS call `getSignatureStatuses([sig], {searchTransactionHistory: true})` and check `status.err`. If non-null, mark failed AND `trySweepSolBack` so custodial SOL isn't stranded.

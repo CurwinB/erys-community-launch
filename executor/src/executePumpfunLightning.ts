@@ -24,9 +24,17 @@ const WORKER_ID =
   process.env.WORKER_ID || process.env.RAILWAY_REPLICA_ID || "executor-default";
 
 // Buffer of SOL we ship to PumpPortal on top of the dev-buy amount, to cover
-// the on-chain create + buy tx fees, ATA rent for their token account, and
-// PumpPortal's cut. 0.01 SOL is generous; leftovers are swept back to escrow.
-const CUSTODIAL_FUNDING_BUFFER_LAMPORTS = 10_000_000n; // 0.01 SOL
+// the on-chain create + buy tx in a single transaction. Must cover:
+//   - 2x ATA rent (~0.00408 SOL: mint metadata + custodial token account)
+//   - Pump.fun 1% protocol fee on the initial buy (up to ~0.005 on a 0.5 SOL buy)
+//   - Pump.fun 0.30% creator fee (negligible on small buys)
+//   - Compute + priority fees (~0.001 SOL)
+//   - PumpPortal tx fee (~0.001 SOL)
+//   - Safety margin (~0.013 SOL)
+// 0.01 SOL was empirically too small (custodial wallet ran 0.0027 SOL short
+// during the Buy CPI). 0.025 SOL gives comfortable headroom; leftovers are
+// swept back to escrow on success.
+const CUSTODIAL_FUNDING_BUFFER_LAMPORTS = 25_000_000n; // 0.025 SOL
 
 export async function executePumpfunLightningLaunch(
   launch: Launch,
@@ -243,10 +251,16 @@ async function runCustodialCriticalSection(
     return;
   }
 
-  if (!lightningRes.ok || lightningJson?.errors) {
+  // PumpPortal Lightning returns `errors: []` (empty array — TRUTHY in JS) on
+  // success, so we must check the array length, not just existence.
+  const lightningErrors: string[] = Array.isArray(lightningJson?.errors)
+    ? lightningJson.errors
+    : [];
+  if (!lightningRes.ok || lightningErrors.length > 0) {
     const errSummary =
-      lightningJson?.errors?.join(" | ") ||
-      JSON.stringify(lightningJson).slice(0, 500);
+      lightningErrors.length > 0
+        ? lightningErrors.join(" | ")
+        : JSON.stringify(lightningJson).slice(0, 500);
     console.error(
       `Lightning create failed [${lightningRes.status}]:`,
       lightningJson
@@ -291,6 +305,48 @@ async function runCustodialCriticalSection(
     console.warn(
       `confirmTransaction warning for ${launchSignature}:`,
       confErr?.message ?? confErr
+    );
+  }
+
+  // ---- Step 3b: Verify on-chain status. Lightning returns 200+signature
+  // even when the tx reverts on-chain (e.g. insufficient lamports during the
+  // Buy CPI). Without this check we'd race ahead to the token sweep and
+  // surface a confusing "no token balance" error.
+  try {
+    const statusRes = await connection.getSignatureStatuses([launchSignature], {
+      searchTransactionHistory: true,
+    });
+    const status = statusRes?.value?.[0];
+    if (status?.err) {
+      const errStr =
+        typeof status.err === "string"
+          ? status.err
+          : JSON.stringify(status.err);
+      console.error(
+        `Pump.fun launch tx ${launchSignature} reverted on-chain:`,
+        errStr
+      );
+      // Refund custodial SOL to escrow so it isn't stranded.
+      await trySweepSolBack(connection, escrowKeypair.publicKey).catch(() => {});
+      await setFailed(
+        launch.id,
+        `Pump.fun launch tx reverted on-chain (${launchSignature}): ${errStr}. ` +
+          `Common cause: custodial funding buffer too small for the buy + ATA rent + protocol fees.`
+      );
+      return;
+    }
+    if (!status) {
+      // Status not yet available — log but continue. Token sweep retry loop
+      // will catch it if the tx genuinely never landed.
+      console.warn(
+        `getSignatureStatuses returned no status yet for ${launchSignature}; proceeding to token sweep`
+      );
+    }
+  } catch (statusErr: any) {
+    console.warn(
+      `Could not read on-chain status for ${launchSignature} (non-fatal): ${
+        statusErr?.message ?? statusErr
+      }`
     );
   }
 
