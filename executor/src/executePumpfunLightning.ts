@@ -9,7 +9,7 @@ import {
   setLaunched,
   storeBasisPoints,
 } from "./db";
-import { setFailedNoRefund } from "./db";
+import { setFailedNoRefund, setFailedWithSignature } from "./db";
 import {
   fundCustodialWallet,
   sweepSolToWallet,
@@ -289,67 +289,52 @@ async function runCustodialCriticalSection(
   console.log(`Lightning create submitted: ${launchSignature}`);
   console.log(`Solscan: https://solscan.io/tx/${launchSignature}`);
 
-  // ---- Step 3: Wait for Pump.fun create to land + tokens to settle in custodial wallet ----
-  // Lightning returns the signature pre-confirmation. Confirm it on-chain
-  // before we attempt to sweep tokens.
-  try {
-    const { blockhash, lastValidBlockHeight } =
-      await connection.getLatestBlockhash("confirmed");
-    await connection.confirmTransaction(
-      { signature: launchSignature, blockhash, lastValidBlockHeight },
-      "confirmed"
+  // ---- Step 3: Determine on-chain landing status via HTTP polling ----
+  // Lightning returns the signature pre-confirmation. We must poll because:
+  //   - "succeeded" → mint exists on-chain, SOL is in bonding curve, do NOT refund
+  //   - "reverted"  → tx exists but failed; no mint, no SOL spent, refunds OK
+  //   - "not_landed" → tx never landed within window; no mint, no SOL spent, refunds OK
+  // In every case below, the launch signature is persisted on the row so the
+  // mint event (if any) is permanently traceable.
+  const landed = await pollLandedStatus(connection, launchSignature, {
+    timeoutMs: 60_000,
+    intervalMs: 2_000,
+  });
+  console.log(
+    `On-chain status for ${launchSignature}: ${landed.status}` +
+      (landed.err ? ` (err=${JSON.stringify(landed.err)})` : "")
+  );
+  console.log(
+    `Token mint ${launch.token_mint_address} created: ${
+      landed.status === "succeeded" ? "yes" : "no"
+    }`
+  );
+
+  if (landed.status === "reverted") {
+    const errStr =
+      typeof landed.err === "string" ? landed.err : JSON.stringify(landed.err);
+    await trySweepSolBack(connection, escrowKeypair.publicKey).catch(() => {});
+    await setFailedWithSignature(
+      launch.id,
+      `Pump.fun launch tx reverted on-chain (${launchSignature}): ${errStr}. ` +
+        `Common cause: custodial funding buffer too small for the buy + ATA rent + protocol fees.`,
+      launchSignature
     );
-  } catch (confErr: any) {
-    // Even if confirmTransaction times out, the tx may still have landed.
-    // Don't fail outright — proceed to sweep step which will surface the
-    // real state via SPL balance read.
-    console.warn(
-      `confirmTransaction warning for ${launchSignature}:`,
-      confErr?.message ?? confErr
-    );
+    return;
   }
 
-  // ---- Step 3b: Verify on-chain status. Lightning returns 200+signature
-  // even when the tx reverts on-chain (e.g. insufficient lamports during the
-  // Buy CPI). Without this check we'd race ahead to the token sweep and
-  // surface a confusing "no token balance" error.
-  try {
-    const statusRes = await connection.getSignatureStatuses([launchSignature], {
-      searchTransactionHistory: true,
-    });
-    const status = statusRes?.value?.[0];
-    if (status?.err) {
-      const errStr =
-        typeof status.err === "string"
-          ? status.err
-          : JSON.stringify(status.err);
-      console.error(
-        `Pump.fun launch tx ${launchSignature} reverted on-chain:`,
-        errStr
-      );
-      // Refund custodial SOL to escrow so it isn't stranded.
-      await trySweepSolBack(connection, escrowKeypair.publicKey).catch(() => {});
-      await setFailed(
-        launch.id,
-        `Pump.fun launch tx reverted on-chain (${launchSignature}): ${errStr}. ` +
-          `Common cause: custodial funding buffer too small for the buy + ATA rent + protocol fees.`
-      );
-      return;
-    }
-    if (!status) {
-      // Status not yet available — log but continue. Token sweep retry loop
-      // will catch it if the tx genuinely never landed.
-      console.warn(
-        `getSignatureStatuses returned no status yet for ${launchSignature}; proceeding to token sweep`
-      );
-    }
-  } catch (statusErr: any) {
-    console.warn(
-      `Could not read on-chain status for ${launchSignature} (non-fatal): ${
-        statusErr?.message ?? statusErr
-      }`
+  if (landed.status === "not_landed") {
+    await trySweepSolBack(connection, escrowKeypair.publicKey).catch(() => {});
+    await setFailedWithSignature(
+      launch.id,
+      `Pump.fun launch tx ${launchSignature} did not land within 60s polling window. ` +
+        `Mint not created on-chain. Contributors will be refunded.`,
+      launchSignature
     );
+    return;
   }
+
+  // landed.status === "succeeded" — mint exists, proceed to token sweep
 
   // ---- Step 4: Sweep tokens custodial → escrow ATA ----
   // Retry a few times because the create tx can be confirmed before
@@ -422,6 +407,47 @@ async function runCustodialCriticalSection(
 
   await setLaunched(launch.id, launchSignature);
   console.log(`Pump.fun (Lightning) launch ${launch.id} complete`);
+}
+
+// Poll on-chain status of a signature via HTTP getSignatureStatuses.
+// Returns:
+//   - "succeeded": tx landed and confirmed/finalized with no err
+//   - "reverted":  tx landed but failed (status.err is set)
+//   - "not_landed": no status returned within timeout window
+// Uses HTTP (not WebSocket) so it works on any RPC tier and avoids
+// signatureSubscribe log spam on Alchemy.
+type LandedStatus = "succeeded" | "reverted" | "not_landed";
+async function pollLandedStatus(
+  connection: Connection,
+  signature: string,
+  opts: { timeoutMs?: number; intervalMs?: number } = {}
+): Promise<{ status: LandedStatus; err: any | null }> {
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+  const intervalMs = opts.intervalMs ?? 2_000;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: true,
+      });
+      const s = res?.value?.[0];
+      if (s) {
+        if (s.err) return { status: "reverted", err: s.err };
+        const conf = s.confirmationStatus;
+        if (conf === "confirmed" || conf === "finalized") {
+          return { status: "succeeded", err: null };
+        }
+      }
+    } catch (err: any) {
+      console.warn(
+        `getSignatureStatuses poll error for ${signature} (will retry): ${
+          err?.message ?? err
+        }`
+      );
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return { status: "not_landed", err: null };
 }
 
 // Best-effort SOL sweep used when create fails after we've already funded the
