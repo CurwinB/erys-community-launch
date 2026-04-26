@@ -38,6 +38,17 @@ export const CUSTODIAL_SOL_FLOOR_LAMPORTS = 2_000_000n; // 0.002 SOL
 // Generous priority fee for sweeps so they land quickly even under load.
 const SWEEP_PRIORITY_MICROLAMPORTS = 50_000;
 
+// HTTP-polling confirmation tunables. We deliberately avoid web3.js's
+// confirmTransaction because it tries `signatureSubscribe` over WebSocket
+// first; on RPC tiers without WS (e.g. Helius/Alchemy basic), it errors out
+// with -32601 and the slow fallback often misses the ~60–90s blockhash
+// expiry window. Polling getSignatureStatuses + rebroadcasting the signed
+// tx is universally supported and idempotent.
+const POLL_INTERVAL_MS = 2_000;
+const REBROADCAST_EVERY_MS = 5_000;
+const PER_ATTEMPT_TIMEOUT_MS = 90_000;
+const MAX_BLOCKHASH_REFRESH_ATTEMPTS = 3;
+
 let cachedKeypair: Keypair | null = null;
 
 export function getCustodialKeypair(): Keypair {
@@ -70,6 +81,129 @@ export function getCustodialPublicKey(): PublicKey {
 }
 
 /**
+ * Build → sign → send → confirm a transaction with HTTP polling and
+ * automatic blockhash-refresh retries. Use this anywhere we'd otherwise
+ * call `connection.confirmTransaction`, which is fragile on RPC tiers
+ * without WebSocket support.
+ *
+ * @param buildTx receives a fresh blockhash and must return a SIGNED Transaction.
+ *                Called once per blockhash-refresh attempt.
+ * @param label   human-readable op name for error messages.
+ */
+async function sendAndConfirmWithRetry(
+  connection: Connection,
+  buildTx: (blockhash: string) => Transaction,
+  label: string
+): Promise<string> {
+  let lastSignature: string | null = null;
+  let lastErr: any = null;
+
+  for (let attempt = 1; attempt <= MAX_BLOCKHASH_REFRESH_ATTEMPTS; attempt++) {
+    const { blockhash } = await connection.getLatestBlockhash("confirmed");
+    const tx = buildTx(blockhash);
+    const rawTx = tx.serialize();
+
+    let signature: string;
+    try {
+      signature = await connection.sendRawTransaction(rawTx, {
+        preflightCommitment: "confirmed",
+        skipPreflight: false,
+      });
+    } catch (sendErr: any) {
+      lastErr = sendErr;
+      console.warn(
+        `[${label}] sendRawTransaction attempt ${attempt} failed: ${
+          sendErr?.message ?? sendErr
+        }`
+      );
+      continue;
+    }
+    lastSignature = signature;
+    console.log(`[${label}] submitted ${signature} (attempt ${attempt})`);
+
+    const start = Date.now();
+    let lastRebroadcast = start;
+    while (Date.now() - start < PER_ATTEMPT_TIMEOUT_MS) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+
+      // Poll status via HTTP — works on every RPC tier.
+      try {
+        const statuses = await connection.getSignatureStatuses([signature], {
+          searchTransactionHistory: false,
+        });
+        const status = statuses?.value?.[0];
+        if (status) {
+          if (status.err) {
+            throw new Error(
+              `tx ${signature} on-chain error: ${JSON.stringify(status.err)}`
+            );
+          }
+          if (
+            status.confirmationStatus === "confirmed" ||
+            status.confirmationStatus === "finalized"
+          ) {
+            return signature;
+          }
+        }
+      } catch (pollErr: any) {
+        // Permanent on-chain failure — don't retry with a new blockhash.
+        if (/on-chain error/.test(pollErr?.message ?? "")) {
+          throw pollErr;
+        }
+        console.warn(
+          `[${label}] getSignatureStatuses transient error: ${
+            pollErr?.message ?? pollErr
+          }`
+        );
+      }
+
+      // Cheap rebroadcast — Solana dedupes, costs us nothing extra.
+      if (Date.now() - lastRebroadcast >= REBROADCAST_EVERY_MS) {
+        lastRebroadcast = Date.now();
+        try {
+          await connection.sendRawTransaction(rawTx, {
+            preflightCommitment: "confirmed",
+            skipPreflight: true,
+          });
+        } catch {
+          /* ignore — leader may already have it */
+        }
+      }
+    }
+
+    // Timed out for this blockhash. One last status check before giving up
+    // on this attempt — the tx may have landed in the final tick.
+    try {
+      const finalStatuses = await connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: true,
+      });
+      const finalStatus = finalStatuses?.value?.[0];
+      if (
+        finalStatus &&
+        !finalStatus.err &&
+        (finalStatus.confirmationStatus === "confirmed" ||
+          finalStatus.confirmationStatus === "finalized")
+      ) {
+        return signature;
+      }
+    } catch {
+      /* ignore and fall through to retry */
+    }
+
+    lastErr = new Error(
+      `tx ${signature} not confirmed within ${PER_ATTEMPT_TIMEOUT_MS}ms; retrying with fresh blockhash`
+    );
+    console.warn(`[${label}] ${(lastErr as Error).message}`);
+  }
+
+  throw new Error(
+    `[${label}] failed after ${MAX_BLOCKHASH_REFRESH_ATTEMPTS} blockhash-refresh attempts. Last signature: ${
+      lastSignature ?? "<none>"
+    }. Last error: ${lastErr?.message ?? lastErr}`
+  );
+}
+
+/**
  * Send SOL from the per-launch escrow wallet into the PumpPortal custodial
  * wallet to fund the upcoming Lightning create call. PumpPortal will spend
  * this SOL on the dev buy + on-chain tx fees. We add a small buffer for the
@@ -80,31 +214,27 @@ export async function fundCustodialWallet(
   escrowKeypair: Keypair,
   lamports: bigint
 ): Promise<string> {
-  const ix = SystemProgram.transfer({
-    fromPubkey: escrowKeypair.publicKey,
-    toPubkey: getCustodialPublicKey(),
-    lamports: Number(lamports),
-  });
-  const tx = new Transaction().add(
-    ComputeBudgetProgram.setComputeUnitPrice({
-      microLamports: SWEEP_PRIORITY_MICROLAMPORTS,
-    }),
-    ix
+  const custodialPubkey = getCustodialPublicKey();
+  return sendAndConfirmWithRetry(
+    connection,
+    (blockhash) => {
+      const tx = new Transaction().add(
+        ComputeBudgetProgram.setComputeUnitPrice({
+          microLamports: SWEEP_PRIORITY_MICROLAMPORTS,
+        }),
+        SystemProgram.transfer({
+          fromPubkey: escrowKeypair.publicKey,
+          toPubkey: custodialPubkey,
+          lamports: Number(lamports),
+        })
+      );
+      tx.feePayer = escrowKeypair.publicKey;
+      tx.recentBlockhash = blockhash;
+      tx.sign(escrowKeypair);
+      return tx;
+    },
+    "fundCustodialWallet"
   );
-  tx.feePayer = escrowKeypair.publicKey;
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(
-    "confirmed"
-  );
-  tx.recentBlockhash = blockhash;
-  tx.sign(escrowKeypair);
-  const sig = await connection.sendRawTransaction(tx.serialize(), {
-    preflightCommitment: "confirmed",
-  });
-  await connection.confirmTransaction(
-    { signature: sig, blockhash, lastValidBlockHeight },
-    "confirmed"
-  );
-  return sig;
 }
 
 /**
@@ -145,48 +275,46 @@ export async function sweepTokensToWallet(
     );
   }
 
-  const tx = new Transaction();
-  tx.add(
-    ComputeBudgetProgram.setComputeUnitPrice({
-      microLamports: SWEEP_PRIORITY_MICROLAMPORTS,
-    })
-  );
+  // Check destination ATA existence ONCE outside the retry loop. If it
+  // exists at first attempt, we shouldn't keep re-checking on each retry
+  // because creating it twice fails the second time.
+  const destAtaExists = !!(await connection.getAccountInfo(destAta));
 
-  const destAtaInfo = await connection.getAccountInfo(destAta);
-  if (!destAtaInfo) {
-    tx.add(
-      createAssociatedTokenAccountInstruction(
-        custodial.publicKey,
-        destAta,
-        destinationOwner,
-        mintPubkey
-      )
-    );
-  }
-
-  tx.add(
-    createTransferInstruction(
-      sourceAta,
-      destAta,
-      custodial.publicKey,
-      amount,
-      [],
-      TOKEN_PROGRAM_ID
-    )
-  );
-
-  tx.feePayer = custodial.publicKey;
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(
-    "confirmed"
-  );
-  tx.recentBlockhash = blockhash;
-  tx.sign(custodial);
-  const signature = await connection.sendRawTransaction(tx.serialize(), {
-    preflightCommitment: "confirmed",
-  });
-  await connection.confirmTransaction(
-    { signature, blockhash, lastValidBlockHeight },
-    "confirmed"
+  const signature = await sendAndConfirmWithRetry(
+    connection,
+    (blockhash) => {
+      const tx = new Transaction();
+      tx.add(
+        ComputeBudgetProgram.setComputeUnitPrice({
+          microLamports: SWEEP_PRIORITY_MICROLAMPORTS,
+        })
+      );
+      if (!destAtaExists) {
+        tx.add(
+          createAssociatedTokenAccountInstruction(
+            custodial.publicKey,
+            destAta,
+            destinationOwner,
+            mintPubkey
+          )
+        );
+      }
+      tx.add(
+        createTransferInstruction(
+          sourceAta,
+          destAta,
+          custodial.publicKey,
+          amount,
+          [],
+          TOKEN_PROGRAM_ID
+        )
+      );
+      tx.feePayer = custodial.publicKey;
+      tx.recentBlockhash = blockhash;
+      tx.sign(custodial);
+      return tx;
+    },
+    "sweepTokensToWallet"
   );
   return { signature, amount };
 }
@@ -213,28 +341,25 @@ export async function sweepSolToWallet(
   }
   const sweepAmount = balance - CUSTODIAL_SOL_FLOOR_LAMPORTS - txFee;
 
-  const tx = new Transaction().add(
-    ComputeBudgetProgram.setComputeUnitPrice({
-      microLamports: SWEEP_PRIORITY_MICROLAMPORTS,
-    }),
-    SystemProgram.transfer({
-      fromPubkey: custodial.publicKey,
-      toPubkey: destination,
-      lamports: Number(sweepAmount),
-    })
-  );
-  tx.feePayer = custodial.publicKey;
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(
-    "confirmed"
-  );
-  tx.recentBlockhash = blockhash;
-  tx.sign(custodial);
-  const signature = await connection.sendRawTransaction(tx.serialize(), {
-    preflightCommitment: "confirmed",
-  });
-  await connection.confirmTransaction(
-    { signature, blockhash, lastValidBlockHeight },
-    "confirmed"
+  const signature = await sendAndConfirmWithRetry(
+    connection,
+    (blockhash) => {
+      const tx = new Transaction().add(
+        ComputeBudgetProgram.setComputeUnitPrice({
+          microLamports: SWEEP_PRIORITY_MICROLAMPORTS,
+        }),
+        SystemProgram.transfer({
+          fromPubkey: custodial.publicKey,
+          toPubkey: destination,
+          lamports: Number(sweepAmount),
+        })
+      );
+      tx.feePayer = custodial.publicKey;
+      tx.recentBlockhash = blockhash;
+      tx.sign(custodial);
+      return tx;
+    },
+    "sweepSolToWallet"
   );
   return { signature, amount: sweepAmount };
 }
