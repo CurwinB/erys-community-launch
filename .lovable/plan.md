@@ -1,130 +1,77 @@
+Diagnosis
 
-## Goal
+The latest failed Pump.fun launch is `9caf31b8-af12-4feb-8f72-32539e903461` (`ETEST`, mint `JAQch38...`). The token was minted on-chain, but the tokens are still not with contributors because the launch is currently `execution_failed`, not `launched`, so the distributor never picks it up.
 
-Make the executor reliably know — and record — whether a Pump.fun token was actually minted on-chain, on **every** code path. Today the launch signature is only saved on the happy path and on the post-create sweep-failure path. Several other branches drop it, and the on-chain status check is a single non-retried call that can mis-classify a "still propagating" tx as "didn't land."
+Root causes found:
 
-## Why this matters
+1. The executor that ran this launch was still using the old sweep path and looked for a legacy SPL token account. The mint is Token-2022, so it failed with: `Custodial wallet has no token account...`.
+2. The launch row still has `pumpfun_launch_signature = null`, even though the signature is embedded in `execution_error`. That means the robust signature persistence patch had not been deployed when this launch ran.
+3. Auto-refunds already partially ran on this launch before the no-refund patch was active, so contribution rows now contain refund/shortfall records. Those must be reconciled carefully when tokens are distributed.
+4. Even after the executor patch, the distributor still only uses the legacy SPL Token program. For future Pump.fun Token-2022 launches, even if the executor sweeps tokens into escrow successfully, distribution from escrow to contributors would fail unless the distributor is updated too.
 
-Once Pump.fun's create+buy CPI lands on-chain:
-- The token mint exists forever (Token-2022 mint is created)
-- The dev-buy tokens are in the PumpPortal custodial wallet
-- The SOL has been spent into the bonding curve and **cannot** be refunded
+Plan
 
-So mis-classifying a successful mint as a failure (and triggering auto-refunds) produces partial/short refunds and strands tokens — exactly what happened with the ETEST launch.
+1. Harden the distributor for Token-2022
+   - Update `distributor/src/distribute.ts` to detect the mint owner program (`TOKEN_PROGRAM_ID` vs `TOKEN_2022_PROGRAM_ID`).
+   - Use the detected token program for:
+     - escrow ATA derivation,
+     - contributor destination ATA derivation,
+     - ATA creation,
+     - token transfers,
+     - token balance lookup.
+   - Replace the remaining `confirmTransaction` call with the same HTTP polling / rebroadcast pattern used in the executor so RPCs without WebSocket support do not cause false failures or log floods.
 
-## The two questions the executor must answer correctly
+2. Add a safe recovery path for minted-but-not-distributed Pump.fun launches
+   - Add a small recovery script/tooling path under the worker codebase that can process one launch ID.
+   - For this launch it will:
+     - parse/persist the missing Pump.fun signature from the existing error if needed,
+     - run the Token-2022-aware custodial sweep from PumpPortal custodial wallet to the launch escrow,
+     - set the launch to `launched` so the distributor can pick it up,
+     - clear stale worker locks.
+   - It will not blindly refund anyone; the source of truth after a successful mint is the token balance, not SOL refunds.
 
-1. **Did the token get minted?** → check `getSignatureStatuses` with retries
-2. **If yes, did we save the signature?** → must be persisted in *every* terminal DB write that happens after we hold a signature
+3. Reconcile the existing bad refund metadata for `ETEST`
+   - Clear the erroneous `refund_tx_signature` / `refund_shortfall_lamports` records for the affected contributions after confirming tokens are being delivered instead of SOL refunds.
+   - Preserve the original contribution amounts and token delivery wallet overrides.
+   - Keep token allocation based on the existing contributions, including the 5% creator floor and the delivery override to `F46Ai...`.
 
-## Changes
+4. Prevent this from happening again at the database/state level
+   - Add a dedicated recovery state to the launch status enum, for example `sweep_recovery`, for cases where mint succeeded but the custodial-to-escrow sweep failed.
+   - Update executor failure routing so post-mint sweep failures are not just generic `execution_failed`; they become recoverable and are excluded from automatic refund logic.
+   - Update distributor/admin recovery visibility to show these launches as token-recovery cases, not refund cases.
 
-### 1. Robust on-chain status detection — `executor/src/executePumpfunLightning.ts`
+5. Add guardrails against incorrect refunds after a mint
+   - In executor auto-refund logic and refund edge functions, check whether a Pump.fun launch has a persisted signature or an error that indicates Lightning create succeeded.
+   - If a mint likely succeeded, block SOL refunds and return an explicit message: tokens must be recovered/distributed instead.
+   - This prevents future partial refunds when SOL is already in the bonding curve.
 
-Replace the single `confirmTransaction` + single `getSignatureStatuses` block with a polling helper that returns a clear three-state result:
+6. Document the invariant
+   - Update project memory/docs to state:
+     - Pump.fun mints are Token-2022-aware end-to-end.
+     - Post-mint failures must enter recovery/no-refund handling.
+     - Distribution must not assume legacy SPL Token program.
 
-```ts
-type LandedStatus = "succeeded" | "reverted" | "not_landed";
+Technical details
 
-async function pollLandedStatus(
-  connection: Connection,
-  signature: string,
-  opts: { timeoutMs?: number; intervalMs?: number } = {}
-): Promise<{ status: LandedStatus; err: any | null }> {
-  const timeoutMs = opts.timeoutMs ?? 60_000;
-  const intervalMs = opts.intervalMs ?? 2_000;
-  const deadline = Date.now() + timeoutMs;
-  let lastStatus: any = null;
-  while (Date.now() < deadline) {
-    const res = await connection.getSignatureStatuses([signature], {
-      searchTransactionHistory: true,
-    });
-    lastStatus = res?.value?.[0];
-    if (lastStatus) {
-      if (lastStatus.err) return { status: "reverted", err: lastStatus.err };
-      const conf = lastStatus.confirmationStatus;
-      if (conf === "confirmed" || conf === "finalized") {
-        return { status: "succeeded", err: null };
-      }
-    }
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  return { status: "not_landed", err: null };
-}
+Current pipeline should become:
+
+```text
+PumpPortal create succeeds
+  -> persist launch signature
+  -> detect Token-2022 or legacy SPL mint
+  -> sweep custodial tokens to escrow using detected token program
+  -> mark launch launched
+  -> distributor detects token program again
+  -> distribute escrow tokens to contributor delivery wallets
+  -> mark distribution complete
 ```
 
-Use HTTP polling, not WebSocket — keeps Alchemy `signatureSubscribe` log spam out.
+For the stuck `ETEST` launch specifically:
 
-### 2. Per-state handling after we have a signature
-
-Once `lightningJson.signature` exists, **the signature must be persisted on every terminal path**, even on failures. Change the flow to:
-
-```
-launchSignature obtained
-  ↓
-result = pollLandedStatus(launchSignature)
-  ↓
-switch (result.status) {
-  case "succeeded": // token IS minted
-    → token sweep (with retries) — Token-2022 aware
-       ├─ success → setLaunched(launchSignature)
-       └─ fail    → setFailedNoRefund(reason, launchSignature)  // already correct
-    → SOL residual sweep (best-effort)
-
-  case "reverted": // tx exists on-chain but failed; no token, no SOL spent
-    → trySweepSolBack (refund custodial SOL to escrow)
-    → setFailedWithSignature(reason, launchSignature)  // NEW helper, refunds OK
-       (refunds are correct here — SOL was never consumed)
-
-  case "not_landed": // tx never landed within timeout
-    → trySweepSolBack
-    → setFailedWithSignature(reason, launchSignature)
-       (signature still saved for audit / manual lookup; refunds OK because
-        SOL hasn't been spent into a bonding curve that doesn't exist)
-}
+```text
+current: execution_failed + tokens in custodial + stale refund metadata
+recovery: sweep custodial -> escrow, mark launched, clear stale refund metadata
+distribution: escrow -> F46Ai... and BvpGu... according to calculated token shares
 ```
 
-### 3. New DB helper — `executor/src/db.ts`
-
-Add `setFailedWithSignature(launchId, reason, signature)`:
-- Updates `status = 'execution_failed'`, `execution_error = reason`, **`pumpfun_launch_signature = signature`**
-- Then calls `refundFailedLaunch(launchId)` (same auto-refund as `setFailed`)
-
-This is the "we have a signature but it didn't succeed and SOL hasn't been spent into a bonding curve" path. Distinct from `setFailedNoRefund` which is "SOL is gone, do not refund."
-
-Decision matrix is then:
-
-| Outcome | Helper | Saves sig? | Refunds? |
-|---|---|---|---|
-| Mint succeeded, sweep succeeded | `setLaunched` | ✅ | n/a |
-| Mint succeeded, sweep failed | `setFailedNoRefund` | ✅ | ❌ |
-| Tx reverted on-chain (no mint) | `setFailedWithSignature` | ✅ | ✅ |
-| Tx never landed (no mint) | `setFailedWithSignature` | ✅ | ✅ |
-| Pre-signature failure (funding, PumpPortal call, no signature returned) | `setFailed` | n/a | ✅ |
-
-### 4. Diagnostic logging
-
-When status resolves, log clearly:
-```
-On-chain status for <sig>: succeeded | reverted (<err>) | not_landed after 60s
-Token mint <mint> created: yes | no
-```
-Makes Railway logs unambiguous.
-
-### 5. Memory update — `.lovable/memory/features/custodial-wallet-locking.md`
-
-Document the invariant: *whenever we hold a Pump.fun launch signature, we must persist it on the launch row, regardless of overall success/failure. The signature is the source of truth for whether the mint exists on-chain.*
-
-Also document the failure-state decision matrix above so future changes don't re-introduce the gap.
-
-## Files to modify
-
-- `executor/src/executePumpfunLightning.ts` — replace confirmation block with `pollLandedStatus`, route to the right DB helper per state, persist signature everywhere
-- `executor/src/db.ts` — add `setFailedWithSignature`
-- `.lovable/memory/features/custodial-wallet-locking.md` — record the invariant + decision matrix
-
-## Out of scope (intentionally)
-
-- Manual recovery of the existing stranded ETEST tokens — separate plan, you asked about that earlier
-- Changing the `not_landed` timeout policy beyond 60s — current default is fine; can tune later if Alchemy is slow
-- Migrating away from Lightning to Local API — different effort
+After approval, I will implement the code changes and provide the exact operational steps needed to run the one-shot recovery on Railway/local worker environment for the already-stranded launch.
