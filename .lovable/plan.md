@@ -1,66 +1,58 @@
-## Good news: the 5% creator floor already exists
+## Root cause of the latest failure
 
-In `distributor/src/distribute.ts` (line 73) `calculateSharesFromBalance` already enforces:
+Launch `7545f9fe` (ETEST, 16:48 UTC) failed with:
 
-```ts
-const CREATOR_MIN = (actualBalance * 500n) / 10000n;  // 5% of token supply we bought
-const creatorEntry = rawShares.find((s) => s.wallet === creatorWallet);
-if (creatorEntry && creatorEntry.share < CREATOR_MIN) { ... }
-```
+> `Failed to fund custodial wallet: Signature 4gN6hkmU... has expired: block height exceeded`
 
-So in the **happy path** the creator already gets at least 5% of the tokens we buy.
+Two compounding issues from the Railway logs:
 
-## But there are 3 edge cases that can silently break the guarantee
+1. **Your RPC endpoint does not support `signatureSubscribe`** — the logs are flooded with `Method 'signatureSubscribe' not found` (JSON-RPC -32601). `web3.js`'s `confirmTransaction` opens a WebSocket subscription first; when that fails it falls back to slow HTTP polling and often misses the ~60–90 second blockhash window.
+2. **`fundCustodialWallet` in `executor/src/pumpportalCustodial.ts`** sends once and waits via `confirmTransaction` with a single blockhash. If the network is slow or the WS path is broken (as it is here), the tx expires before confirmation, even though it may still land. No retry.
 
-I want to fix these so "minimum 5%" is a hard invariant, not a best-effort.
+The good news: the env vars are now set, the new Lightning code path is reaching Step 1, and your earlier `PUMPPORTAL_API_KEY` issue is resolved.
 
-### Edge case 1 — Creator not in the contributor list
-If the creator never contributed (or used `token_delivery_wallet` to redirect their own share), `rawShares.find((s) => s.wallet === creatorWallet)` returns `undefined` and the floor is silently skipped. They get **0%**.
+## Plan
 
-Today this can happen because:
-- The schedule flow doesn't strictly require the creator to be a contributor row in every code path.
-- A contributor's `token_delivery_wallet` overrides `wallet_address` for delivery, but the **floor check uses `wallet_address`**, so it still works for that case — *but the creator must already exist as a contributor.*
+### 1. Add a robust send-and-confirm helper in `executor/src/pumpportalCustodial.ts`
 
-**Fix:** if no creator entry is found, log a loud warning AND if any contribution was made by `created_by_wallet` under a different identity (e.g. via the sponsor flow) we still want them protected. Concretely: if creator is missing from the contributor list, we leave shares as-is (no floor possible — there's nobody to credit) but emit a `console.error` so it's visible in Railway logs and never silently swallowed.
+Replace the three `connection.confirmTransaction(...)` call sites (`fundCustodialWallet`, `sweepTokensToWallet`, `sweepSolToWallet`) with a shared `sendAndConfirmWithRetry` helper that:
 
-### Edge case 2 — Proportional reduction can push other contributors to 0 or negative
-The current redistribution:
-```ts
-const reduction = (entry.share * deficit) / othersTotal;
-entry.share -= reduction;
-```
-If `othersTotal < deficit` (e.g. creator put in 1% and we need to bump to 5%, but the other contributors collectively only hold 4% of tokens — impossible mathematically since shares are proportional to lamports, but possible after BigInt flooring on tiny contributions), one or more entries can round to 0 or end up off by a lamport. Today the remainder is dumped onto `rawShares[0]` which **is the creator**, so the creator absorbs rounding — fine. But the per-entry reduction is not floored to ensure `entry.share >= 0n`.
+- Uses HTTP polling via `connection.getSignatureStatuses([sig])` every 2s instead of WebSocket subscriptions (works on any RPC, including Helius/Alchemy without WS tier).
+- Re-broadcasts the same signed tx every ~5 seconds while waiting (cheap, idempotent — Solana dedupes).
+- On blockhash expiry, fetches a fresh blockhash, **rebuilds and re-signs** the tx, and resubmits up to 3 times.
+- Total timeout: 90 seconds per attempt × 3 attempts.
+- Returns the confirmed signature, or throws with a clear message including the last attempted signature.
 
-**Fix:** clamp `entry.share = entry.share > reduction ? entry.share - reduction : 0n` and recompute the remainder dump on `rawShares[0]` after the loop. This guarantees no negative BigInts and the creator still ends with `>= CREATOR_MIN`.
+### 2. Apply the helper to all three custodial wallet ops
 
-### Edge case 3 — Single-contributor launch (creator is the only one)
-If only the creator contributed, they already get 100% — `othersTotal === 0n`, the `if (othersTotal > 0n)` guard prevents division-by-zero, creator share is set to `CREATOR_MIN`, but **the remaining 95% gets dumped via the remainder line** onto `rawShares[0]` (which is the creator). Net result: creator gets 100%. ✅ Already correct, but I want to add a unit-test-style comment + an explicit early-return for clarity.
+- `fundCustodialWallet` — most critical, this is what failed.
+- `sweepTokensToWallet` — same risk (current retry loop in `executePumpfunLightning.ts` only catches the missing-ATA case, not blockhash expiry).
+- `sweepSolToWallet` — already best-effort, but should still retry properly.
 
-### Edge case 4 (bonus) — Ensure the 5% floor invariant is asserted before sending
-After all share calculation, add a defensive assertion:
-```ts
-const finalCreatorShare = shares.get(creatorContribId) ?? 0n;
-if (creatorContribId && finalCreatorShare < CREATOR_MIN) {
-  throw new Error(`Creator share invariant violated: got ${finalCreatorShare}, need ${CREATOR_MIN}`);
-}
-```
-This means if any future refactor breaks the math, the distributor crashes loudly **before** sending tokens, so we can fix it instead of silently shorting the creator. The lock is released in the `finally`, so the launch will be retried.
+### 3. Add a one-shot status check before declaring failure
 
-## Files to change
+In `fundCustodialWallet`, before throwing on expiry, do a final `getSignatureStatuses` check — the tx may have actually landed despite the timeout. If confirmed, return the signature instead of throwing.
 
-- **`distributor/src/distribute.ts`** — refactor `calculateSharesFromBalance`:
-  - Track `creatorContribId` (not just wallet) so the post-calc invariant check is unambiguous.
-  - Clamp `entry.share -= reduction` to never go below `0n`.
-  - Add early-return for single-contributor case.
-  - Add the post-calculation invariant assertion in `distributeTokensForLaunch` before the per-contributor send loop.
-  - Add `console.error` (not silent skip) when creator wallet is absent from contributors.
+### 4. Update logging
 
-## What does NOT change
+Replace the noisy `web3.js`-internal WebSocket error spam by setting `Connection`'s `wsEndpoint` explicitly to a no-op or constructing the `Connection` with `disableRetryOnRateLimit: false` and a custom `commitment` config that prefers HTTP. Alternatively, document that `signatureSubscribe` errors are harmless once the polling path is in place.
 
-- The 5% number itself (`500 bps`). If you want a different floor (e.g. 7.5% to match the Bags fee-share floor), say the word.
-- The Bags fee-share floor in `executor/src/executeBags.ts` (separate concern — that's about future trading-fee BPS, not initial token supply). It's already at 7.5% and works correctly.
-- DB schema, edge functions, executor logic, frontend. Pure distributor hardening.
+### 5. Document the RPC requirement
 
-## Risk
+Add a note in `executor/.env.example` explaining the executor now uses HTTP polling for confirmations and works on any RPC tier — no WebSocket required.
 
-Low. The code path already targets this guarantee — these are belt-and-suspenders fixes that turn a best-effort behavior into a hard invariant. The invariant assertion will only ever throw if there's a real bug, in which case retrying is the right move.
+## Files modified
+
+- `executor/src/pumpportalCustodial.ts` — add helper, refactor three send/confirm sites
+- `executor/.env.example` — note about HTTP polling
+
+## Out of scope (not changing)
+
+- The PumpPortal Lightning create call itself — it's a single HTTP POST, not affected by this issue.
+- The retry-on-failure of the entire launch — the worker lock + `execution_attempts` already handles that on the next poll cycle.
+- Refunding the stranded funding tx — the SOL is in escrow; the next retry will reuse it.
+
+## What this does NOT solve
+
+- If your RPC is genuinely overloaded and txs aren't landing at all, retries won't help. But the symptom in your logs (`signatureSubscribe not found`) is purely a confirmation-path problem, not a tx-landing problem.
+- Long-term, you may want to swap to an RPC tier that supports WebSocket subs for cleaner logs, but it's not required for correctness after this fix.
