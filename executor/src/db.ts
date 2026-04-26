@@ -78,6 +78,21 @@ export async function claimNextExecutingLaunch(workerId: string): Promise<Launch
   return (data?.[0] as Launch) || null;
 }
 
+// Atomically claim the next sweep_recovery launch (mint exists on-chain
+// but custodial -> escrow token sweep failed previously). Same SKIP LOCKED
+// semantics as claim_executing_launch_for_worker.
+export async function claimNextSweepRecovery(workerId: string): Promise<Launch | null> {
+  const { data, error } = await supabase.rpc(
+    "claim_sweep_recovery_launch_for_worker",
+    { p_worker_id: workerId, p_lock_expiry_seconds: 300 }
+  );
+  if (error) {
+    console.error("Error claiming sweep_recovery launch:", error.message);
+    return null;
+  }
+  return (data?.[0] as Launch) || null;
+}
+
 // Release a worker lock. Crashed workers' locks also self-heal via the
 // expiry window in claim_executing_launch_for_worker.
 export async function releaseLaunchLock(launchId: string): Promise<void> {
@@ -201,6 +216,36 @@ export async function setFailedNoRefund(
   if (error)
     console.error(
       `Error marking launch ${launchId} failed-no-refund:`,
+      error.message,
+    );
+}
+
+// Mark a Pump.fun launch as needing custodial->escrow token sweep recovery.
+// The mint exists on-chain (signature must be persisted), but the sweep
+// failed. The next executor poll will pick this up via
+// claim_sweep_recovery_launch_for_worker and re-attempt only the sweep.
+// No refunds — contributor SOL is already in the bonding curve.
+export async function markForSweepRecovery(
+  launchId: string,
+  reason: string,
+  signature: string,
+): Promise<void> {
+  console.error(
+    `Launch ${launchId} entering sweep_recovery (signature ${signature}): ${reason}`,
+  );
+  const { error } = await supabase
+    .from("launches")
+    .update({
+      status: "sweep_recovery",
+      execution_error: reason,
+      pumpfun_launch_signature: signature,
+      worker_locked_at: null,
+      worker_id: null,
+    })
+    .eq("id", launchId);
+  if (error)
+    console.error(
+      `Error marking launch ${launchId} sweep_recovery:`,
       error.message,
     );
 }

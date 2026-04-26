@@ -7,6 +7,7 @@ import {
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   getAssociatedTokenAddress,
   createAssociatedTokenAccountInstruction,
   createTransferInstruction,
@@ -25,10 +26,33 @@ import {
 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
 
+// Resolve the SPL token program that owns this mint. Pump.fun mints are
+// Token-2022; Bags + legacy mints are the classic SPL Token program. ATA
+// derivation, getAccount, transfer instructions, and ATA creation MUST
+// all be routed through the same program ID — otherwise we look at the
+// wrong ATA address and conclude the wallet has no token account.
+async function resolveTokenProgramId(
+  connection: Connection,
+  mint: PublicKey
+): Promise<PublicKey> {
+  const info = await connection.getAccountInfo(mint);
+  if (!info) {
+    throw new Error(
+      `Mint account ${mint.toBase58()} not found on-chain — cannot determine token program`
+    );
+  }
+  if (info.owner.equals(TOKEN_2022_PROGRAM_ID)) return TOKEN_2022_PROGRAM_ID;
+  if (info.owner.equals(TOKEN_PROGRAM_ID)) return TOKEN_PROGRAM_ID;
+  throw new Error(
+    `Mint ${mint.toBase58()} owned by unsupported program ${info.owner.toBase58()}`
+  );
+}
+
 async function getTokenBalance(
   connection: Connection,
   walletPubkey: PublicKey,
   mintPubkey: PublicKey,
+  programId: PublicKey,
   retries = 5,
   delayMs = 3000
 ): Promise<bigint> {
@@ -36,7 +60,7 @@ async function getTokenBalance(
     try {
       const accounts = await connection.getParsedTokenAccountsByOwner(
         walletPubkey,
-        { mint: mintPubkey }
+        { mint: mintPubkey, programId }
       );
       if (accounts.value.length > 0) {
         const amount = accounts.value[0].account.data.parsed.info.tokenAmount.amount;
@@ -129,11 +153,17 @@ async function sendTokensToContributor(
   escrowKeypair: Keypair,
   escrowAta: PublicKey,
   mintPubkey: PublicKey,
+  tokenProgramId: PublicKey,
   contributorWallet: string,
   tokenAmount: bigint
 ): Promise<string> {
   const contributorPubkey = new PublicKey(contributorWallet);
-  const contributorAta = await getAssociatedTokenAddress(mintPubkey, contributorPubkey);
+  const contributorAta = await getAssociatedTokenAddress(
+    mintPubkey,
+    contributorPubkey,
+    false,
+    tokenProgramId
+  );
   const tx = new Transaction();
 
   // Priority fee to ensure timely landing during network congestion
@@ -148,7 +178,8 @@ async function sendTokensToContributor(
         escrowKeypair.publicKey,
         contributorAta,
         contributorPubkey,
-        mintPubkey
+        mintPubkey,
+        tokenProgramId
       )
     );
   }
@@ -160,12 +191,12 @@ async function sendTokensToContributor(
       escrowKeypair.publicKey,
       tokenAmount,
       [],
-      TOKEN_PROGRAM_ID
+      tokenProgramId
     )
   );
 
   tx.feePayer = escrowKeypair.publicKey;
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+  const { blockhash } = await connection.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;
   tx.sign(escrowKeypair);
 
@@ -173,11 +204,50 @@ async function sendTokensToContributor(
   const signature = await connection.sendRawTransaction(serialized, {
     preflightCommitment: "confirmed",
   });
-  await connection.confirmTransaction(
-    { signature, blockhash, lastValidBlockHeight },
-    "confirmed"
+
+  // HTTP polling instead of confirmTransaction so we don't depend on
+  // signatureSubscribe (Helius/Alchemy basic tiers don't support WS).
+  const deadline = Date.now() + 90_000;
+  let lastRebroadcast = Date.now();
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2_000));
+    try {
+      const statuses = await connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: false,
+      });
+      const status = statuses?.value?.[0];
+      if (status) {
+        if (status.err) {
+          throw new Error(
+            `tx ${signature} on-chain error: ${JSON.stringify(status.err)}`
+          );
+        }
+        if (
+          status.confirmationStatus === "confirmed" ||
+          status.confirmationStatus === "finalized"
+        ) {
+          return signature;
+        }
+      }
+    } catch (err: any) {
+      if (/on-chain error/.test(err?.message ?? "")) throw err;
+      // transient — keep polling
+    }
+    if (Date.now() - lastRebroadcast >= 5_000) {
+      lastRebroadcast = Date.now();
+      try {
+        await connection.sendRawTransaction(serialized, {
+          preflightCommitment: "confirmed",
+          skipPreflight: true,
+        });
+      } catch {
+        /* ignore — leader may already have it */
+      }
+    }
+  }
+  throw new Error(
+    `tx ${signature} not confirmed within 90s polling window`
   );
-  return signature;
 }
 
 export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
@@ -196,10 +266,15 @@ export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
   }
 
   const mintPubkey = new PublicKey(launch.token_mint_address);
+  const tokenProgramId = await resolveTokenProgramId(connection, mintPubkey);
+  console.log(
+    `Token program for mint ${launch.token_mint_address}: ${tokenProgramId.toBase58()}`
+  );
   const tokenBalance = await getTokenBalance(
     connection,
     escrowKeypair.publicKey,
-    mintPubkey
+    mintPubkey,
+    tokenProgramId
   );
 
   if (tokenBalance === 0n) {
@@ -276,7 +351,9 @@ export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
 
   const escrowAta = await getAssociatedTokenAddress(
     mintPubkey,
-    escrowKeypair.publicKey
+    escrowKeypair.publicKey,
+    false,
+    tokenProgramId
   );
 
   let totalDistributed = 0n;
@@ -308,6 +385,7 @@ export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
         escrowKeypair,
         escrowAta,
         mintPubkey,
+        tokenProgramId,
         recipientWallet,
         tokenAmount
       );

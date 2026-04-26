@@ -9,7 +9,11 @@ import {
   setLaunched,
   storeBasisPoints,
 } from "./db";
-import { setFailedNoRefund, setFailedWithSignature } from "./db";
+import {
+  setFailedNoRefund,
+  setFailedWithSignature,
+  markForSweepRecovery,
+} from "./db";
 import {
   fundCustodialWallet,
   sweepSolToWallet,
@@ -360,22 +364,15 @@ async function runCustodialCriticalSection(
     }
   }
   if (!tokenSweepResult) {
-    // Token sweep is the only operation we can't safely retry through the
-    // worker queue right now (the custodial wallet holds the dev-buy supply
-    // for many concurrent launches). Mark the launch failed but DO NOT
-    // refund — the tokens are still in the custodial wallet and recoverable
-    // by an admin running the sweep manually.
-    // At this point Pump.fun create+buy already succeeded on-chain, so the
-    // SOL has been spent into the bonding curve. Triggering refunds would
-    // just produce partial/short payouts and leave tokens stranded. Persist
-    // the launch signature so admins can audit and run a manual sweep.
-    await setFailedNoRefund(
+    // Mint already exists on-chain — SOL is in the bonding curve, refunds
+    // would be partial. Route into sweep_recovery so the next executor
+    // poll re-attempts only the custodial->escrow sweep automatically.
+    await markForSweepRecovery(
       launch.id,
       `Lightning create succeeded (${launchSignature}) but token sweep failed after retries: ${
         lastSweepErr?.message ?? lastSweepErr
-      }. Tokens remain in custodial wallet ${custodialPubkey.toBase58()} and can be recovered manually.`
-      ,
-      launchSignature
+      }. Tokens remain in custodial wallet ${custodialPubkey.toBase58()} and will be auto-recovered on next poll.`,
+      launchSignature,
     );
     return;
   }

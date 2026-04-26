@@ -20,12 +20,28 @@ export async function refundFailedLaunch(launchId: string): Promise<void> {
 
   const { data: launch, error: launchErr } = await supabase
     .from("launches")
-    .select("escrow_wallet_encrypted_private_key")
+    .select(
+      "escrow_wallet_encrypted_private_key, status, platform, pumpfun_launch_signature"
+    )
     .eq("id", launchId)
     .single();
 
   if (launchErr || !launch) {
     console.error(`refundFailedLaunch: launch ${launchId} not found`, launchErr?.message);
+    return;
+  }
+
+  // Hard guardrail: never auto-refund a Pump.fun launch whose mint exists
+  // on-chain. SOL is in the bonding curve; the correct payout is tokens.
+  if (
+    launch.platform === "pumpfun" &&
+    (launch.status === "launched" ||
+      launch.status === "sweep_recovery" ||
+      launch.pumpfun_launch_signature)
+  ) {
+    console.warn(
+      `refundFailedLaunch: skipping ${launchId} — Pump.fun mint exists on-chain (status=${launch.status}, sig=${launch.pumpfun_launch_signature ?? "<none>"}). Tokens will be distributed instead.`,
+    );
     return;
   }
 

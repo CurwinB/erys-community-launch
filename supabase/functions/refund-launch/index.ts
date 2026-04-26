@@ -61,6 +61,17 @@ Deno.serve(async (req) => {
       return errorResponse(`Cannot cancel launch with status '${launch.status}'`, 400);
     }
 
+    // Defensive: even though status must be 'scheduled' here, double-check
+    // that no on-chain Pump.fun mint exists for this launch. If a signature
+    // is somehow present, refuse — paying SOL refunds when tokens have
+    // already been minted would short-pay contributors.
+    if (launch.platform === "pumpfun" && launch.pumpfun_launch_signature) {
+      return errorResponse(
+        "Refund refused: Pump.fun mint signature already recorded for this launch.",
+        400,
+      );
+    }
+
     await supabase
       .from("launches")
       .update({ status: "cancelled" })

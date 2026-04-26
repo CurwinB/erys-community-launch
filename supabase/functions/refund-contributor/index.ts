@@ -70,12 +70,29 @@ Deno.serve(async (req) => {
 
     const { data: launch, error: launchErr } = await supabase
       .from("launches")
-      .select("escrow_wallet_encrypted_private_key, escrow_wallet_public_key")
+      .select(
+        "escrow_wallet_encrypted_private_key, escrow_wallet_public_key, status, platform, pumpfun_launch_signature"
+      )
       .eq("id", launch_id)
       .single();
 
     if (launchErr || !launch) {
       return errorResponse("Launch not found", 404);
+    }
+
+    // Hard guardrail: never SOL-refund a contributor when the on-chain
+    // mint succeeded. The contributor SOL is already in the bonding
+    // curve; the only correct payout is tokens via the distributor.
+    if (
+      launch.platform === "pumpfun" &&
+      (launch.status === "launched" ||
+        launch.status === "sweep_recovery" ||
+        launch.pumpfun_launch_signature)
+    ) {
+      return errorResponse(
+        "Refund refused: Pump.fun mint already exists on-chain. Contributors must be paid in tokens via the distributor, not SOL.",
+        400,
+      );
     }
 
     const escrowKeyBytes = await decryptEscrowKey(
