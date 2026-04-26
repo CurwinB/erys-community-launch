@@ -308,6 +308,48 @@ async function runCustodialCriticalSection(
     );
   }
 
+  // ---- Step 3b: Verify on-chain status. Lightning returns 200+signature
+  // even when the tx reverts on-chain (e.g. insufficient lamports during the
+  // Buy CPI). Without this check we'd race ahead to the token sweep and
+  // surface a confusing "no token balance" error.
+  try {
+    const statusRes = await connection.getSignatureStatuses([launchSignature], {
+      searchTransactionHistory: true,
+    });
+    const status = statusRes?.value?.[0];
+    if (status?.err) {
+      const errStr =
+        typeof status.err === "string"
+          ? status.err
+          : JSON.stringify(status.err);
+      console.error(
+        `Pump.fun launch tx ${launchSignature} reverted on-chain:`,
+        errStr
+      );
+      // Refund custodial SOL to escrow so it isn't stranded.
+      await trySweepSolBack(connection, escrowKeypair.publicKey).catch(() => {});
+      await setFailed(
+        launch.id,
+        `Pump.fun launch tx reverted on-chain (${launchSignature}): ${errStr}. ` +
+          `Common cause: custodial funding buffer too small for the buy + ATA rent + protocol fees.`
+      );
+      return;
+    }
+    if (!status) {
+      // Status not yet available — log but continue. Token sweep retry loop
+      // will catch it if the tx genuinely never landed.
+      console.warn(
+        `getSignatureStatuses returned no status yet for ${launchSignature}; proceeding to token sweep`
+      );
+    }
+  } catch (statusErr: any) {
+    console.warn(
+      `Could not read on-chain status for ${launchSignature} (non-fatal): ${
+        statusErr?.message ?? statusErr
+      }`
+    );
+  }
+
   // ---- Step 4: Sweep tokens custodial → escrow ATA ----
   // Retry a few times because the create tx can be confirmed before
   // the indexer view of the SPL ATA catches up.
