@@ -220,6 +220,36 @@ export async function setFailedNoRefund(
     );
 }
 
+// Mark a Pump.fun launch as needing custodial->escrow token sweep recovery.
+// The mint exists on-chain (signature must be persisted), but the sweep
+// failed. The next executor poll will pick this up via
+// claim_sweep_recovery_launch_for_worker and re-attempt only the sweep.
+// No refunds — contributor SOL is already in the bonding curve.
+export async function markForSweepRecovery(
+  launchId: string,
+  reason: string,
+  signature: string,
+): Promise<void> {
+  console.error(
+    `Launch ${launchId} entering sweep_recovery (signature ${signature}): ${reason}`,
+  );
+  const { error } = await supabase
+    .from("launches")
+    .update({
+      status: "sweep_recovery",
+      execution_error: reason,
+      pumpfun_launch_signature: signature,
+      worker_locked_at: null,
+      worker_id: null,
+    })
+    .eq("id", launchId);
+  if (error)
+    console.error(
+      `Error marking launch ${launchId} sweep_recovery:`,
+      error.message,
+    );
+}
+
 export async function storeFeeShareConfig(
   launchId: string,
   configKey: string,
