@@ -13,6 +13,7 @@ import {
   getPumpfunLaunchesForFeeClaim,
   updatePumpfunFeesClaimed,
   markPumpfunFeeClaimAttempt,
+  recordPumpfunFeeClaimFailure,
 } from "./db";
 import { withCustodialLock } from "./custodialLock";
 
@@ -63,6 +64,10 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     console.error(
       `PUMPPORTAL_API_KEY not set; skipping fee claim for launch ${launch.id}`
     );
+    await recordPumpfunFeeClaimFailure(
+      launch.id,
+      "PUMPPORTAL_API_KEY env var not set on distributor"
+    );
     return;
   }
 
@@ -75,6 +80,10 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     escrowKeypair = Keypair.fromSecretKey(new Uint8Array(decrypted));
   } catch (err: any) {
     console.error(`Failed to decrypt escrow key for launch ${launch.id}:`, err.message);
+    await recordPumpfunFeeClaimFailure(
+      launch.id,
+      `Failed to decrypt escrow key: ${err?.message ?? err}`
+    );
     return;
   }
 
@@ -87,6 +96,10 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     console.error(
       `Custodial wallet not configured for launch ${launch.id}:`,
       err?.message ?? err
+    );
+    await recordPumpfunFeeClaimFailure(
+      launch.id,
+      `Custodial wallet not configured: ${err?.message ?? err}`
     );
     return;
   }
@@ -122,6 +135,8 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
         lockErr?.message ?? lockErr
       }. Will retry next cycle.`
     );
+    // Don't stamp throttle here — lock contention is transient and we want
+    // the next poll to retry fast once another worker releases the lock.
     return;
   }
 
@@ -140,7 +155,7 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
 
   if (sweptToEscrowLamports <= 0) {
     // Nothing made it into escrow (no fees claimed or sweep skipped). The
-    // critical section already logged the reason.
+    // critical section already logged the reason and recorded the failure.
     return;
   }
 
@@ -195,6 +210,10 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
     console.error(
       `Fee claim failed for launch ${launch.id}. Platform transfer did not land. Will retry next cycle.`
     );
+    await recordPumpfunFeeClaimFailure(
+      launch.id,
+      "Platform transfer from escrow failed after successful claim+sweep"
+    );
   }
 }
 
@@ -226,6 +245,10 @@ async function runFeeClaimCriticalSection(
     console.error(
       `Failed to get custodial balance for launch ${launch.id}:`,
       err.message
+    );
+    await recordPumpfunFeeClaimFailure(
+      launch.id,
+      `Failed to get custodial balance: ${err?.message ?? err}`
     );
     return null;
   }
@@ -262,6 +285,10 @@ async function runFeeClaimCriticalSection(
         response.statusText;
       console.error(
         `Lightning collectCreatorFee failed for launch ${launch.id} [${response.status}]: ${summary}`
+      );
+      await recordPumpfunFeeClaimFailure(
+        launch.id,
+        `PumpPortal collectCreatorFee HTTP ${response.status}: ${summary}`
       );
       return null;
     }
@@ -311,6 +338,10 @@ async function runFeeClaimCriticalSection(
       `Lightning collectCreatorFee threw for launch ${launch.id}:`,
       err?.message ?? err
     );
+    await recordPumpfunFeeClaimFailure(
+      launch.id,
+      `PumpPortal collectCreatorFee threw: ${err?.message ?? err}`
+    );
     return null;
   }
 
@@ -326,6 +357,10 @@ async function runFeeClaimCriticalSection(
     if (custodialNow <= CUSTODIAL_SOL_FLOOR_LAMPORTS + sweepTxFee) {
       console.error(
         `Custodial balance below sweep threshold for launch ${launch.id}, cannot move claimed fees to escrow`
+      );
+      await recordPumpfunFeeClaimFailure(
+        launch.id,
+        `Custodial balance ${custodialNow} below sweep threshold (floor ${CUSTODIAL_SOL_FLOOR_LAMPORTS} + fee ${sweepTxFee}); top up the custodial wallet`
       );
       return null;
     }
@@ -357,6 +392,10 @@ async function runFeeClaimCriticalSection(
     console.error(
       `Failed to sweep custodial fees to escrow for launch ${launch.id}:`,
       err?.message ?? err
+    );
+    await recordPumpfunFeeClaimFailure(
+      launch.id,
+      `Failed to sweep custodial → escrow: ${err?.message ?? err}`
     );
     return null;
   }

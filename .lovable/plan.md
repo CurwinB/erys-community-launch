@@ -1,84 +1,78 @@
-# Diagnosis: Pump.fun creator fee claims for ETEST
+# Fix Plan: Pump.fun fee claims silently stuck
 
-## What I found on-chain
+## What I confirmed on-chain + in DB just now
 
-The claims **are running**. Looking at the on-chain history of our custodial wallet `8fjQrCqeJfNgc5QQRarykX1eBwL7Xt5dvFi5hA2bqGed` (which IS the registered Pump.fun `creator` for ETEST mint `JAQch38...`):
+- Custodial wallet `8fjQrCqe…2bqGed` balance: **2,045,924 lamports** (only ~46k above the 2M floor).
+- Last `collectCreatorFee` tx from the custodial wallet: **slot 415853123, ~25 minutes ago** (block time 1777234082).
+- ETEST launch row right now: `pumpfun_fees_last_claimed_at = NULL`, `worker_locked_at` refreshed **0.3 seconds ago** by `distributor-1`. So the distributor IS picking it up every cycle, but **no on-chain claim has fired in 25 min**.
 
-- **39 `collectCreatorFee` transactions** in the last ~3 hours, signed by the custodial wallet.
-- Most recent one (`5Z4FCEvHTgz...`, ~30 seconds ago):
-  - `Program log: Instruction: CollectCreatorFee`
-  - **`Program log: No creator fee to collect`**
-  - Pre-balance: 2,155,924 → Post: 2,100,924 (lost 55,000 lamports = priority + base fee)
-- Creator vault PDA `7RmCbww3Z8pYNK8LxQubqmbD2ky4hurTpvp2TMBXXVHU` balance: 890,880 lamports = exactly rent-exempt minimum = **empty**.
+Conclusion: the PumpPortal `collectCreatorFee` call is failing **before** the on-chain submit (HTTP error, rate limit, API key issue, or thrown exception). The current code returns `null` on any failure → never stamps `pumpfun_fees_last_claimed_at` → row gets re-claimed every poll → the new no-op throttle migration we just shipped doesn't help because that code path requires the call to succeed first.
 
-So the volume that did happen on the bonding curve never actually accrued meaningful fees into the vault, OR the very first claim drained whatever did accrue and every claim since has been a no-op.
+We have **zero visibility** into what PumpPortal is actually returning because errors only go to Railway stdout, not the DB.
 
-Pump.fun bonding-curve state confirms it: `real_sol_reserves: 6` lamports, `market_cap: $27.95`, `ath_market_cap: $2,523`. The token spiked momentarily then was sold back. Net fee accrual at 0.300% of swap notional is essentially zero by now.
+## Plan — three small, focused changes
 
-## What's broken in our code
+### 1. Persist the last claim error to the DB (visibility)
 
-There are **two real bugs** worth fixing:
+Migration: add two columns to `launches`:
 
-### Bug 1: No-op claims are not throttled (custodial SOL drain)
-
-In `distributor/src/claimPumpfunFees.ts`:
-
-```ts
-if (claimedLamports <= 0) {
-  console.log(`No fees were actually claimed for launch ${launch.id}`);
-  return null;  // ← does NOT stamp pumpfun_fees_last_claimed_at
-}
+```sql
+ALTER TABLE public.launches
+  ADD COLUMN pumpfun_last_claim_attempt_at timestamptz,
+  ADD COLUMN pumpfun_last_claim_error text;
 ```
 
-And the SQL RPC `claim_pumpfun_launch_for_worker` re-selects any launch where `pumpfun_fees_last_claimed_at IS NULL OR <= now() - 10 min`.
+New RPC `record_pumpfun_fee_claim_failure(p_launch_id uuid, p_error text)` that sets:
+- `pumpfun_last_claim_attempt_at = now()`
+- `pumpfun_last_claim_error = p_error` (truncated to 500 chars)
+- **Also stamps `pumpfun_fees_last_claimed_at = now()`** so the 10-min throttle in `claim_pumpfun_launch_for_worker` kicks in for failures too.
 
-Because no-op claims never set `pumpfun_fees_last_claimed_at`, ETEST is re-claimed on every distributor poll. The only thing throttling it to ~5 min cadence is the `worker_locked_at` 300-second TTL — i.e. we're paying ~55,000 lamports of priority fee every 5 minutes on a launch that has nothing to claim.
+Why stamp the throttle on hard failures: today a PumpPortal 5xx makes us re-fire the call every 30s (next distributor poll picks it up because the worker lock is released after the fn returns). Throttling failures the same as no-ops caps the blast radius at one attempt per 10 min until we actually fix the underlying issue. We sacrifice some retry agility for not draining the wallet.
 
-Over a day that's **~16,000 lamports/min × 60 × 24 ≈ 23M lamports = 0.023 SOL per launch per day**. Not catastrophic per launch, but multiplies linearly with the number of `launched` Pump.fun rows we accumulate, and silently bleeds the custodial wallet (which only has the 0.002 SOL floor reserved). It will eventually push the custodial below the sweep threshold and break real fee claims.
+Update `RECORD on-success path` in `increment_pumpfun_fees_claimed` to also clear `pumpfun_last_claim_error`.
 
-The "Why we did this" comment in the code is correct: we don't want to lock a launch out for 24h after a transient RPC failure. But "no fees in vault" is NOT a transient failure — it's the steady state for low-volume tokens.
+### 2. Wire the failure-recording into `claimPumpfunFees.ts`
 
-### Bug 2: We lose attribution if multiple launches accumulate fees
+In `distributor/src/claimPumpfunFees.ts`, replace every silent `return null` in `runFeeClaimCriticalSection` and the outer wrapper with a call to a new `markFeeClaimFailure(launchId, errorMessage)` helper that calls the new RPC.
 
-`collectCreatorFee` with `pool: "pump"` claims **all accumulated creator fees across every Pump.fun coin the custodial wallet created** in a single tx (per Pump.fun docs and our own memory `mem://features/pumpfun-creator-fees`). Right now our balance-delta logic attributes 100% of the claimed amount to whichever launch row we happened to be processing at the time — which is wrong if launch A and launch B both have fees pending.
+Specifically capture and persist:
+- `Lightning collectCreatorFee failed [HTTP ${status}]: ${summary}`
+- `Lightning collectCreatorFee threw: ${err.message}`
+- `Failed to get custodial balance: ${err.message}`
+- `Custodial balance below sweep threshold (${balance} <= floor+fee)`
+- `Failed to sweep custodial → escrow: ${err.message}`
+- `Could not acquire custodial lock`
 
-This isn't actively hurting us today (only ETEST is in `launched` state) but it will start mis-attributing as soon as we have a 2nd successful Pump.fun launch. Worth flagging now and fixing when we build the proper accounting.
+This means the next time we look at the ETEST row we will immediately see *why* it's stuck instead of having to grep Railway logs.
 
-## Fix plan
+### 3. Surface the error in the Admin UI (RecoveryTab)
 
-**Scope this to Bug 1 only** (Bug 2 needs a small design discussion before we touch attribution).
+Add a "Pump.fun fee-claim health" section to `src/components/admin/RecoveryTab.tsx` that lists every `launched` Pump.fun launch with:
+- Token symbol + mint
+- `pumpfun_fees_claimed_total`
+- `pumpfun_fees_last_claimed_at` (time-ago)
+- `pumpfun_last_claim_error` in red if set
+- Custodial wallet balance (read once via Solana RPC on mount)
+- A "Force retry now" button that calls a small new edge function `force-pumpfun-fee-claim` which clears `pumpfun_fees_last_claimed_at` and `worker_locked_at` so the next distributor cycle picks it up immediately.
 
-### 1. Stamp `pumpfun_fees_last_claimed_at` on no-op claims too
+This gives you a one-glance dashboard to diagnose any future stuckness.
 
-In `distributor/src/claimPumpfunFees.ts`, when `collectCreatorFee` succeeds on-chain (response OK, no `errors` array, signature confirmed) but `claimedLamports <= 0`, we still mark the attempt:
+## What I'm intentionally NOT doing in this round
 
-- Call a new RPC (or reuse a lightweight UPDATE) that sets `pumpfun_fees_last_claimed_at = now()` **without** incrementing `pumpfun_fees_claimed_total`.
-- Distinguish this case from a true RPC failure (network error, PumpPortal 5xx, signature never confirmed) — those should still NOT stamp the timestamp, because the next poll genuinely needs to retry.
+- **Not changing the PumpPortal call signature** (pool, priorityFee, etc.). We don't yet know what's failing — first we need the error logged. Once we see the actual response, the fix is probably one line (e.g. switch to `pool: "pump-amm"` post-graduation, or rotate the API key). Doing this blindly risks breaking the path that DID work earlier today.
+- **Not touching Bug 2** (multi-launch fee attribution). Still needs its own design pass.
+- **Not topping up the custodial wallet automatically.** That's an ops decision; I'll just surface the balance in the admin panel.
 
-This caps the per-launch claim cadence at the intended 10 minutes regardless of whether there's anything to claim, eliminating the SOL drain.
+## Files this will touch
 
-### 2. Add a no-op cooldown shortcut
+- `supabase/migrations/<new>_pumpfun_fee_claim_visibility.sql` — new columns + new RPC `record_pumpfun_fee_claim_failure`.
+- `distributor/src/db.ts` — add `recordPumpfunFeeClaimFailure(launchId, error)`.
+- `distributor/src/claimPumpfunFees.ts` — replace every `return null` with a failure-record call.
+- `supabase/functions/force-pumpfun-fee-claim/index.ts` — new edge function, admin-gated, clears throttle for one launch.
+- `src/components/admin/RecoveryTab.tsx` — new "Pump.fun fee-claim health" section.
 
-Add a small in-memory or DB-backed counter: if the last 3 consecutive claims for a launch returned 0, back off to 1 hour instead of 10 min. Optional, but useful once we have many `launched` rows that may sit idle for days between fee accruals.
+## Expected outcome after deploy
 
-### 3. ETEST itself: nothing to recover
-
-The ATH-then-dump pattern means there's no meaningful creator fee to claim right now. The fee accounting on the launch row (`pumpfun_fees_claimed_total = 0`) is therefore correct — there is genuinely nothing to distribute to creator/platform yet. If trading picks up later, the fix above ensures we still claim it on the next 10-min cycle.
-
-## Files to change
-
-- `distributor/src/claimPumpfunFees.ts` — distinguish "RPC succeeded, vault empty" from "RPC failed", and stamp the timestamp in the first case.
-- New migration adding a small RPC like `mark_pumpfun_fee_claim_attempt(p_launch_id uuid)` that updates only `pumpfun_fees_last_claimed_at` (no total increment).
-- `distributor/src/db.ts` — wrapper for the new RPC.
-
-## What I will NOT touch in this round
-
-- `claim_pumpfun_launch_for_worker` SQL — its 10-min throttle window is correct, the bug is that we never stamp the timestamp on no-op claims.
-- The escrow → platform split logic — works fine when there's actually SOL to split.
-- The fee attribution issue (Bug 2) — separate plan once we have ≥2 active Pump.fun launches.
-
-## After deploy
-
-1. Watch the custodial wallet `8fjQrCqeJfNgc5QQRarykX1eBwL7Xt5dvFi5hA2bqGed` — signature rate should drop from ~0.2/min to ~0.0017/min (1 every 10 min) for ETEST.
-2. Check Railway distributor logs for the new "claim succeeded but vault empty, stamping timestamp" log line.
-3. ETEST `pumpfun_fees_last_claimed_at` in DB should start updating every 10 min instead of staying NULL.
+1. Within ~30s of Railway picking up the new build, the ETEST row will have `pumpfun_last_claim_error` populated with the actual PumpPortal failure reason.
+2. We then make the targeted fix (likely one line, depending on what the error says).
+3. Going forward, no more silent retry storms — every failure is one attempt per 10 min and visible in the admin UI.
