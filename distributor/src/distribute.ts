@@ -52,6 +52,13 @@ async function getTokenBalance(
   return 0n;
 }
 
+// Hard invariant: the launch creator MUST receive at least 5% (500 bps) of
+// the token supply we bought at launch. Math is done in BigInt so there is
+// no float drift. After this function returns, the caller asserts the
+// invariant a second time as a belt-and-suspenders check.
+const CREATOR_MIN_BPS = 500n;
+const TOTAL_BPS = 10000n;
+
 function calculateSharesFromBalance(
   contributions: Contribution[],
   actualBalance: bigint,
@@ -70,8 +77,25 @@ function calculateSharesFromBalance(
     share: (BigInt(c.amount_lamports) * actualBalance) / totalLamports,
   }));
 
-  const CREATOR_MIN = (actualBalance * 500n) / 10000n;
+  const CREATOR_MIN = (actualBalance * CREATOR_MIN_BPS) / TOTAL_BPS;
   const creatorEntry = rawShares.find((s) => s.wallet === creatorWallet);
+
+  // Edge case: creator is not in the contributor list. We cannot enforce the
+  // floor (nobody to credit). Log loudly so it shows up in Railway and the
+  // post-calc invariant check downstream stays accurate.
+  if (!creatorEntry) {
+    console.error(
+      `Creator wallet ${creatorWallet} is not among the contributors for this launch — 5% creator floor cannot be applied.`
+    );
+  }
+
+  // Edge case: creator is the only contributor → they get 100%. Skip the
+  // proportional-redistribution loop entirely (no one else to take from).
+  if (creatorEntry && rawShares.length === 1) {
+    creatorEntry.share = actualBalance;
+    shares.set(creatorEntry.id, creatorEntry.share);
+    return shares;
+  }
 
   if (creatorEntry && creatorEntry.share < CREATOR_MIN) {
     const deficit = CREATOR_MIN - creatorEntry.share;
@@ -83,7 +107,11 @@ function calculateSharesFromBalance(
       for (const entry of rawShares) {
         if (entry.wallet === creatorWallet) continue;
         const reduction = (entry.share * deficit) / othersTotal;
-        entry.share -= reduction;
+        // Clamp to zero — never let a contributor go negative due to BigInt
+        // flooring. Any rounding leftover is absorbed by the remainder dump
+        // below, which lands on rawShares[0] (highest contributor by
+        // amount_lamports per the DB ordering — usually the creator).
+        entry.share = entry.share > reduction ? entry.share - reduction : 0n;
       }
     }
   }
@@ -215,6 +243,28 @@ export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
     originalTotalBalance,
     launch.created_by_wallet
   );
+
+  // Invariant guard: if the creator is among contributors, their final
+  // share must be >= 5% of the original total. If this fails, something in
+  // the math regressed — abort the entire distribution before sending so we
+  // can fix it instead of silently shorting the creator. The lock is
+  // released by the outer finally and the launch will be retried.
+  const creatorContrib = contributions.find(
+    (c) => c.wallet_address === launch.created_by_wallet
+  );
+  if (creatorContrib) {
+    const creatorMin = (originalTotalBalance * CREATOR_MIN_BPS) / TOTAL_BPS;
+    const creatorShare = shares.get(creatorContrib.id) ?? 0n;
+    if (creatorShare < creatorMin) {
+      throw new Error(
+        `Creator share invariant violated for launch ${launch.id}: ` +
+          `got ${creatorShare}, need >= ${creatorMin} (5% of ${originalTotalBalance}). Aborting distribution.`
+      );
+    }
+    console.log(
+      `Creator share OK: ${creatorShare} (>= 5% floor ${creatorMin})`
+    );
+  }
 
   for (const contribution of contributions) {
     const share = shares.get(contribution.id) || 0n;
