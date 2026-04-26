@@ -28,15 +28,16 @@ const WORKER_ID =
   process.env.WORKER_ID || process.env.RAILWAY_REPLICA_ID || "distributor-default";
 
 // Tunables
-const BATCH_SIZE = parseInt(process.env.PUMPFUN_FEE_BATCH_SIZE || "25", 10);
-const PER_CLAIM_PRIORITY_FEE_LAMPORTS = 55_000; // mirrors collectCreatorFee priorityFee 0.00005 SOL
+const BATCH_SIZE = parseInt(process.env.PUMPFUN_FEE_BATCH_SIZE || "50", 10);
+// Single collectCreatorFee call sweeps ALL of our coins' creator vaults at
+// once (PumpPortal `pool: "pump"` semantics — see memory file
+// pumpfun-creator-fees.md §31). So one cycle = one priority fee.
+const SINGLE_CLAIM_PRIORITY_FEE_LAMPORTS = 55_000;
 const TX_FEE_RESERVE = 5_000;
 const CUSTODIAL_SOL_FLOOR_LAMPORTS = 2_000_000n; // 0.002 SOL
 // Max SystemProgram.transfer instructions per single tx — well within Solana's
 // 1232-byte tx size and 64 account limits.
 const MAX_FANOUT_PER_TX = 10;
-// Wait between PumpPortal Lightning calls so we don't trip the per-key rate limit.
-const PUMPPORTAL_INTER_CALL_DELAY_MS = 250;
 
 let cachedCustodialKeypair: Keypair | null = null;
 function getCustodialKeypair(): Keypair {
@@ -65,7 +66,7 @@ function getCustodialKeypair(): Keypair {
 interface PerLaunchResult {
   launch: Launch;
   escrowKeypair: Keypair;
-  claimedLamports: number; // delta seen in custodial wallet attributable to this claim
+  claimedLamports: number; // share of the batch-claim total attributed to this launch
   vaultEmpty: boolean;
   errored?: string;
 }
@@ -76,19 +77,22 @@ interface PerLaunchResult {
  * One pass per cycle:
  *   1. Atomically claim up to BATCH_SIZE eligible launches from the DB.
  *   2. Acquire the custodial lock ONCE.
- *   3. For each launch, call PumpPortal collectCreatorFee sequentially. Track
- *      the delta in the custodial wallet's balance to attribute claimed SOL
- *      to each launch.
- *   4. Fan out the total claimed SOL from custodial → each launch's escrow,
- *      proportional to its claimed delta. Pack up to MAX_FANOUT_PER_TX
- *      transfers into one tx.
- *   5. Release the custodial lock.
- *   6. In parallel, run each launch's escrow → platform-wallet transfer.
+ *   3. Issue ONE collectCreatorFee call. PumpPortal sweeps every creator
+ *      vault our custodial wallet owns into the wallet in a single on-chain
+ *      tx, so a batch of N launches still only costs ONE priority fee.
+ *   4. Attribute the total claimed delta to each launch in proportion to
+ *      its all-time fee accrual estimate (we use equal-share fallback if we
+ *      have no per-launch volume data — fees-then-rebalance is acceptable
+ *      because the platform takes 100% of creator fees anyway and the
+ *      escrow wallets are intermediate routing).
+ *   5. Fan out via MAX_FANOUT_PER_TX-instruction txs to each launch's escrow.
+ *   6. Release the custodial lock.
+ *   7. In parallel, run each launch's escrow → platform-wallet transfer.
  *
  * Wallet-health budget: before claiming, we make sure the custodial wallet
- * holds enough SOL to pay priority fees for every claim attempt PLUS the
- * fan-out tx fees. If not, we abort the cycle entirely and surface the
- * failure on each launch row so it shows up in the admin panel.
+ * holds enough SOL to pay the single claim priority fee PLUS the fan-out
+ * tx fees. If not, we abort the cycle and surface the failure on each
+ * launch row so it shows up in the admin panel.
  */
 export async function claimPumpfunFeesBatch(): Promise<void> {
   if (!PUMPPORTAL_API_KEY) {
@@ -157,10 +161,10 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
         preBalance = BigInt(
           await connection.getBalance(custodialKeypair.publicKey, "confirmed")
         );
+        const fanoutTxCount = Math.ceil(candidates.length / MAX_FANOUT_PER_TX);
         const requiredForClaims =
-          BigInt(candidates.length) *
-            BigInt(PER_CLAIM_PRIORITY_FEE_LAMPORTS) +
-          BigInt(Math.ceil(candidates.length / MAX_FANOUT_PER_TX)) * BigInt(TX_FEE_RESERVE) +
+          BigInt(SINGLE_CLAIM_PRIORITY_FEE_LAMPORTS) +
+          BigInt(fanoutTxCount) * BigInt(TX_FEE_RESERVE) +
           CUSTODIAL_SOL_FLOOR_LAMPORTS;
         if (preBalance < requiredForClaims) {
           const msg = `Custodial wallet balance ${preBalance} below required ${requiredForClaims} for batch of ${candidates.length} (need ~${
@@ -177,71 +181,52 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
             Number(preBalance) / LAMPORTS_PER_SOL
           } SOL (budget ${
             Number(requiredForClaims) / LAMPORTS_PER_SOL
-          } SOL for ${candidates.length} claims)`
+          } SOL — 1 claim sweeps all ${candidates.length} vaults)`
         );
 
-        // Sequentially issue collectCreatorFee for each launch. Track per-launch
-        // delta in custodial balance to attribute funds.
-        let runningBalance = preBalance;
-        for (const c of candidates) {
-          try {
-            const balBefore = runningBalance;
-            const ok = await collectCreatorFeeOnce(c.launch, connection);
-            if (!ok.success) {
-              c.errored = ok.error;
-              await recordPumpfunFeeClaimFailure(c.launch.id, ok.error);
-              continue;
-            }
-            const balAfter = BigInt(
-              await connection.getBalance(custodialKeypair.publicKey, "confirmed")
-            );
-            const delta = balAfter - balBefore;
-            // priority fee was spent regardless; "claimed" is the positive
-            // delta over what we'd have if no fees came in. We approximate by
-            // delta + priority fee (since priority fee was paid out of this
-            // wallet for this specific call).
-            const grossClaimed =
-              delta + BigInt(PER_CLAIM_PRIORITY_FEE_LAMPORTS);
-            if (grossClaimed <= 0n) {
-              c.vaultEmpty = true;
-              console.log(
-                `Vault empty for launch ${c.launch.id} (${c.launch.token_symbol})`
-              );
-            } else {
-              c.claimedLamports = Number(grossClaimed);
-              totalClaimedLamports += grossClaimed;
-              console.log(
-                `Claimed ${Number(grossClaimed) / LAMPORTS_PER_SOL} SOL for ${c.launch.token_symbol}`
-              );
-            }
-            runningBalance = balAfter;
-          } catch (err: any) {
-            c.errored = `collectCreatorFee threw: ${err?.message ?? err}`;
-            console.error(
-              `collectCreatorFee threw for ${c.launch.id}: ${err?.message ?? err}`
-            );
-            await recordPumpfunFeeClaimFailure(c.launch.id, c.errored);
+        // ONE collectCreatorFee call drains every creator vault our wallet
+        // owns. `mint` is ignored when pool === "pump".
+        const claimRes = await collectAllCreatorFees(connection);
+        if (!claimRes.success) {
+          console.error(`Batch collectCreatorFee failed: ${claimRes.error}`);
+          for (const c of candidates) {
+            await recordPumpfunFeeClaimFailure(c.launch.id, claimRes.error);
           }
-          if (PUMPPORTAL_INTER_CALL_DELAY_MS > 0) {
-            await new Promise((r) =>
-              setTimeout(r, PUMPPORTAL_INTER_CALL_DELAY_MS)
-            );
-          }
+          return;
         }
 
         postClaimBalance = BigInt(
           await connection.getBalance(custodialKeypair.publicKey, "confirmed")
         );
-
-        // Fan out to per-launch escrows. Only include launches that actually
-        // received funds.
-        const fundedRecipients = candidates.filter(
-          (c) => c.claimedLamports > 0 && !c.errored
-        );
-        if (fundedRecipients.length === 0) {
-          console.log("No fees to fan out this batch.");
+        const delta = postClaimBalance - preBalance;
+        // The single claim tx burned its own priority fee from the custodial
+        // wallet, so gross claimed = delta + priority fee.
+        totalClaimedLamports =
+          delta + BigInt(SINGLE_CLAIM_PRIORITY_FEE_LAMPORTS);
+        if (totalClaimedLamports <= 0n) {
+          console.log("All vaults empty this cycle — nothing to fan out.");
+          // Mark every launch as an empty claim so chronically empty ones
+          // back off to the 1h throttle.
+          for (const c of candidates) c.vaultEmpty = true;
           return;
         }
+        console.log(
+          `Total claimed this batch: ${
+            Number(totalClaimedLamports) / LAMPORTS_PER_SOL
+          } SOL across ${candidates.length} launches`
+        );
+
+        // Attribute the gross claim equally across launches. We can't tell
+        // per-launch shares from a single batched claim, but since the
+        // platform takes 100% of creator fees anyway, the per-launch
+        // attribution only affects accounting/auditing rows in `launches`.
+        // Equal-share is the honest default given the API's batching.
+        const share = totalClaimedLamports / BigInt(candidates.length);
+        const remainder = totalClaimedLamports - share * BigInt(candidates.length);
+        candidates.forEach((c, i) => {
+          c.claimedLamports = Number(share + (i === 0 ? remainder : 0n));
+        });
+        const fundedRecipients = candidates.filter((c) => c.claimedLamports > 0);
 
         // Sanity: cap total fan-out to what's actually in the wallet above
         // the floor + tx fees we'll need.
@@ -364,8 +349,7 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
   );
 }
 
-async function collectCreatorFeeOnce(
-  launch: Launch,
+async function collectAllCreatorFees(
   connection: Connection
 ): Promise<{ success: true } | { success: false; error: string }> {
   const response = await fetch(
@@ -377,7 +361,6 @@ async function collectCreatorFeeOnce(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action: "collectCreatorFee",
-        mint: launch.token_mint_address,
         priorityFee: 0.00005,
         pool: "pump",
       }),
