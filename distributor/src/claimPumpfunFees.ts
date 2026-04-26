@@ -8,7 +8,12 @@ import {
 } from "@solana/web3.js";
 import bs58 from "bs58";
 import { decryptEscrowKey } from "./decrypt";
-import { Launch, getPumpfunLaunchesForFeeClaim, updatePumpfunFeesClaimed } from "./db";
+import {
+  Launch,
+  getPumpfunLaunchesForFeeClaim,
+  updatePumpfunFeesClaimed,
+  markPumpfunFeeClaimAttempt,
+} from "./db";
 import { withCustodialLock } from "./custodialLock";
 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
@@ -96,6 +101,7 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
   const lockKey = custodialKeypair.publicKey.toBase58();
   let claimedLamports = 0;
   let sweptToEscrowLamports = 0;
+  let claimSucceededButVaultEmpty = false;
   try {
     await withCustodialLock(lockKey, WORKER_ID, async () => {
       const result = await runFeeClaimCriticalSection(
@@ -107,6 +113,7 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
       if (result) {
         claimedLamports = result.claimedLamports;
         sweptToEscrowLamports = result.sweptToEscrowLamports;
+        claimSucceededButVaultEmpty = result.vaultEmpty;
       }
     });
   } catch (lockErr: any) {
@@ -114,6 +121,19 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
       `Could not acquire custodial lock for fee claim ${launch.id}: ${
         lockErr?.message ?? lockErr
       }. Will retry next cycle.`
+    );
+    return;
+  }
+
+  // Vault was empty — the on-chain CollectCreatorFee call ran successfully but
+  // returned "No creator fee to collect". Stamp the timestamp so the SQL
+  // claim function won't re-pick this launch for another 10 minutes. Without
+  // this, every poll cycle re-fires the no-op claim and burns ~55k lamports
+  // of priority fee out of the custodial wallet.
+  if (claimSucceededButVaultEmpty) {
+    await markPumpfunFeeClaimAttempt(launch.id);
+    console.log(
+      `Stamped no-op fee-claim attempt for launch ${launch.id}; next attempt in 10m`
     );
     return;
   }
@@ -179,14 +199,20 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
 }
 
 // Holds the custodial lock for the duration. Returns null on any non-fatal
-// early exit (no fees, sweep failed, etc.). On success returns the amounts
-// so the caller can run the escrow→platform/creator split outside the lock.
+// early exit (RPC failure, sweep failed, etc.). On success returns the
+// amounts so the caller can run the escrow→platform split outside the lock.
+// `vaultEmpty=true` means the on-chain claim succeeded but the creator vault
+// had nothing to pay out — caller should stamp the throttle timestamp.
 async function runFeeClaimCriticalSection(
   launch: Launch,
   connection: Connection,
   escrowKeypair: Keypair,
   custodialKeypair: Keypair
-): Promise<{ claimedLamports: number; sweptToEscrowLamports: number } | null> {
+): Promise<{
+  claimedLamports: number;
+  sweptToEscrowLamports: number;
+  vaultEmpty: boolean;
+} | null> {
   let custodialBalanceBefore: number;
   try {
     custodialBalanceBefore = await connection.getBalance(
@@ -264,10 +290,20 @@ async function runFeeClaimCriticalSection(
     );
     claimedLamports = newCustodialBalance - custodialBalanceBefore;
     if (claimedLamports <= 0) {
-      // No real claim happened — do NOT stamp the timestamp, otherwise this
-      // launch is locked out of the next 24h of poll cycles for no reason.
-      console.log(`No fees were actually claimed for launch ${launch.id}`);
-      return null;
+      // The on-chain CollectCreatorFee call succeeded (we have a confirmed
+      // signature, no PumpPortal errors) but the creator vault was empty —
+      // i.e. "No creator fee to collect". This is the normal steady state
+      // for any low/zero-volume launch. Signal to the caller that we should
+      // stamp pumpfun_fees_last_claimed_at to throttle the next attempt to
+      // 10 minutes from now (rather than re-firing every poll cycle).
+      console.log(
+        `Claim succeeded but creator vault was empty for launch ${launch.id} (no fees accrued since last claim)`
+      );
+      return {
+        claimedLamports: 0,
+        sweptToEscrowLamports: 0,
+        vaultEmpty: true,
+      };
     }
     console.log(`Claimed ${claimedLamports / LAMPORTS_PER_SOL} SOL in creator fees`);
   } catch (err: any) {
@@ -325,7 +361,7 @@ async function runFeeClaimCriticalSection(
     return null;
   }
 
-  return { claimedLamports, sweptToEscrowLamports };
+  return { claimedLamports, sweptToEscrowLamports, vaultEmpty: false };
 }
 
 export async function claimAllPumpfunFees(): Promise<void> {

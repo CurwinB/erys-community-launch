@@ -1,84 +1,84 @@
-# Why metadata isn't showing in the wallet dropdown
+# Diagnosis: Pump.fun creator fee claims for ETEST
 
-## What I confirmed in the database
+## What I found on-chain
 
-Wallet `BvpGuDSLDafZXSDeokapirQqiPshocaMFHG5N46c9rxV` **did receive its tokens**:
+The claims **are running**. Looking at the on-chain history of our custodial wallet `8fjQrCqeJfNgc5QQRarykX1eBwL7Xt5dvFi5hA2bqGed` (which IS the registered Pump.fun `creator` for ETEST mint `JAQch38...`):
 
-| Field | Value |
-|---|---|
-| Launch | ETEST (`9caf31b8…`) — status `launched`, `distribution_completed = true` |
-| Mint | `JAQch38sjEK752q98NVMWMbmNuuZsjoENHVYc9b8Ceay` (Token-2022) |
-| Tokens distributed to BvpGuD… | `3,038,710,024,059` base units |
-| Distribution tx | `4sS6gknmh7T8Y7jWbNfQdAGARKmd6kJKkXid45zn1tHdsk1BGXX3ou2mLsYtdv4sqnuhNjLrrcnNMvDJe4m5vWjn` |
+- **39 `collectCreatorFee` transactions** in the last ~3 hours, signed by the custodial wallet.
+- Most recent one (`5Z4FCEvHTgz...`, ~30 seconds ago):
+  - `Program log: Instruction: CollectCreatorFee`
+  - **`Program log: No creator fee to collect`**
+  - Pre-balance: 2,155,924 → Post: 2,100,924 (lost 55,000 lamports = priority + base fee)
+- Creator vault PDA `7RmCbww3Z8pYNK8LxQubqmbD2ky4hurTpvp2TMBXXVHU` balance: 890,880 lamports = exactly rent-exempt minimum = **empty**.
 
-The IPFS metadata is also fine — `https://ipfs.io/ipfs/bafkreiao…` returns the proper `{ name, symbol, image, description }` JSON, and Pump.fun set the on-chain Token-2022 metadata extension to point at it. External wallets (Phantom, Solflare) will display the name + image once their indexers pick it up.
+So the volume that did happen on the bonding curve never actually accrued meaningful fees into the vault, OR the very first claim drained whatever did accrue and every claim since has been a no-op.
 
-## The actual bug — `src/components/WalletDropdown.tsx`
+Pump.fun bonding-curve state confirms it: `real_sol_reserves: 6` lamports, `market_cap: $27.95`, `ath_market_cap: $2,523`. The token spiked momentarily then was sold back. Net fee accrual at 0.300% of swap notional is essentially zero by now.
 
-Pump.fun mints are owned by the **Token-2022 program**, not the legacy SPL Token program. Token-2022 ATAs are derived with the Token-2022 program id as part of the seed, which produces a **different address** from the legacy ATA.
+## What's broken in our code
 
-`WalletDropdown.tsx` hardcodes the legacy program everywhere it touches a token:
+There are **two real bugs** worth fixing:
 
-- **Line 133** — `getAssociatedTokenAddress(mintPubkey, walletPubkey)` defaults to `TOKEN_PROGRAM_ID`. For ETEST this returns the wrong ATA, `getAccountInfo` returns `null`, the balance stays `0n`, and the token gets filtered out by `tokens.filter(t => t.balance > 0n)` → **"No Erys tokens yet"** even though the user owns 3T base units.
-- **Lines 260–261** — same wrong derivation in `handleSendToken` for `fromAta`/`toAta`.
-- **Line 294** — `createTransferInstruction(..., TOKEN_PROGRAM_ID)` hardcodes legacy. A Token-2022 transfer must use the Token-2022 program id; otherwise the instruction errors out at preflight.
-- **Line 374** — same wrong derivation in the recipient-ATA-exists check (recipient would always look "missing", and even if ATA creation ran it'd create the wrong one).
+### Bug 1: No-op claims are not throttled (custodial SOL drain)
 
-This is the same Token-2022 vs. legacy SPL bug we already fixed in the executor (`pumpportalCustodial.ts`) and distributor (`distributor/src/distribute.ts`). The frontend was missed.
-
-## Plan
-
-### 1. Token-2022-aware helper in `WalletDropdown.tsx`
-
-Add a small helper that fetches the mint account once and resolves the right token program:
+In `distributor/src/claimPumpfunFees.ts`:
 
 ```ts
-import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, ... } from "@solana/spl-token";
-
-async function getMintTokenProgram(mint: PublicKey): Promise<PublicKey> {
-  const info = await connection.getAccountInfo(mint);
-  if (!info) throw new Error(`Mint ${mint.toBase58()} not found`);
-  if (info.owner.equals(TOKEN_2022_PROGRAM_ID)) return TOKEN_2022_PROGRAM_ID;
-  if (info.owner.equals(TOKEN_PROGRAM_ID)) return TOKEN_PROGRAM_ID;
-  throw new Error(`Unsupported token program ${info.owner.toBase58()}`);
+if (claimedLamports <= 0) {
+  console.log(`No fees were actually claimed for launch ${launch.id}`);
+  return null;  // ← does NOT stamp pumpfun_fees_last_claimed_at
 }
 ```
 
-Cache the result per mint inside `loadBalances` so we don't re-fetch on every render.
+And the SQL RPC `claim_pumpfun_launch_for_worker` re-selects any launch where `pumpfun_fees_last_claimed_at IS NULL OR <= now() - 10 min`.
 
-### 2. Fix `loadBalances` (line 129–147)
+Because no-op claims never set `pumpfun_fees_last_claimed_at`, ETEST is re-claimed on every distributor poll. The only thing throttling it to ~5 min cadence is the `worker_locked_at` 300-second TTL — i.e. we're paying ~55,000 lamports of priority fee every 5 minutes on a launch that has nothing to claim.
 
-For each token, look up the program id, then:
-- `getAssociatedTokenAddress(mint, owner, false, programId)`
-- `getParsedAccountInfo(ata)` — the parser already understands Token-2022 accounts, so balance + decimals continue to work.
+Over a day that's **~16,000 lamports/min × 60 × 24 ≈ 23M lamports = 0.023 SOL per launch per day**. Not catastrophic per launch, but multiplies linearly with the number of `launched` Pump.fun rows we accumulate, and silently bleeds the custodial wallet (which only has the 0.002 SOL floor reserved). It will eventually push the custodial below the sweep threshold and break real fee claims.
 
-Also store `programId` on the `ErysToken` shape so the send flow can reuse it.
+The "Why we did this" comment in the code is correct: we don't want to lock a launch out for 24h after a transient RPC failure. But "no fees in vault" is NOT a transient failure — it's the steady state for low-volume tokens.
 
-### 3. Fix `handleSendToken` (lines 234–341)
+### Bug 2: We lose attribution if multiple launches accumulate fees
 
-- Use the stored `programId` (or re-derive) for both `fromAta` and `toAta`.
-- Pass `programId` as the 4th arg to `getAssociatedTokenAddress`.
-- Pass `programId` to `createAssociatedTokenAccountInstruction` (5th arg).
-- Pass `programId` to `createTransferInstruction` (last arg) — replacing the hardcoded `TOKEN_PROGRAM_ID` on line 294.
+`collectCreatorFee` with `pool: "pump"` claims **all accumulated creator fees across every Pump.fun coin the custodial wallet created** in a single tx (per Pump.fun docs and our own memory `mem://features/pumpfun-creator-fees`). Right now our balance-delta logic attributes 100% of the claimed amount to whichever launch row we happened to be processing at the time — which is wrong if launch A and launch B both have fees pending.
 
-Note: amount math should switch to passing the `bigint` directly (current code does `Number(amount)` which loses precision above 2^53). Out of scope for this bug, but worth flagging — happy to fix in the same change if you want.
+This isn't actively hurting us today (only ETEST is in `launched` state) but it will start mis-attributing as soon as we have a 2nd successful Pump.fun launch. Worth flagging now and fixing when we build the proper accounting.
 
-### 4. Fix the recipient-ATA preview check (lines 364–383)
+## Fix plan
 
-Same fix: derive ATA using the mint's program id before `getAccountInfo`.
+**Scope this to Bug 1 only** (Bug 2 needs a small design discussion before we touch attribution).
 
-### 5. No backend / RPC changes needed
+### 1. Stamp `pumpfun_fees_last_claimed_at` on no-op claims too
 
-The data is already correct on-chain and in the DB. This is a pure frontend display + send-flow fix.
+In `distributor/src/claimPumpfunFees.ts`, when `collectCreatorFee` succeeds on-chain (response OK, no `errors` array, signature confirmed) but `claimedLamports <= 0`, we still mark the attempt:
 
-## Files touched
-- `src/components/WalletDropdown.tsx` (single file)
+- Call a new RPC (or reuse a lightweight UPDATE) that sets `pumpfun_fees_last_claimed_at = now()` **without** incrementing `pumpfun_fees_claimed_total`.
+- Distinguish this case from a true RPC failure (network error, PumpPortal 5xx, signature never confirmed) — those should still NOT stamp the timestamp, because the next poll genuinely needs to retry.
 
-## What the user will see after the fix
-- Reopening the wallet dropdown shows **Erys test (ETEST)** with the correct balance and the IPFS image (because we already store `image_url` on the launch row and pass it through).
-- "Send" works for the ETEST token (and any future Pump.fun-launched token).
-- Bags-launched tokens, which are legacy SPL, continue to work because the helper falls through to `TOKEN_PROGRAM_ID`.
+This caps the per-launch claim cadence at the intended 10 minutes regardless of whether there's anything to claim, eliminating the SOL drain.
 
-## Out of scope (separate concerns)
-- External wallets (Phantom/Solflare) showing the token name+image is **not our code path** — that's their indexer reading the Token-2022 metadata extension, which is already set correctly by Pump.fun. Usually appears within minutes; can take longer for fresh mints. No action on our side.
-- The `Number(amount)` precision issue in send — not blocking the reported bug; can be folded in if you want.
+### 2. Add a no-op cooldown shortcut
+
+Add a small in-memory or DB-backed counter: if the last 3 consecutive claims for a launch returned 0, back off to 1 hour instead of 10 min. Optional, but useful once we have many `launched` rows that may sit idle for days between fee accruals.
+
+### 3. ETEST itself: nothing to recover
+
+The ATH-then-dump pattern means there's no meaningful creator fee to claim right now. The fee accounting on the launch row (`pumpfun_fees_claimed_total = 0`) is therefore correct — there is genuinely nothing to distribute to creator/platform yet. If trading picks up later, the fix above ensures we still claim it on the next 10-min cycle.
+
+## Files to change
+
+- `distributor/src/claimPumpfunFees.ts` — distinguish "RPC succeeded, vault empty" from "RPC failed", and stamp the timestamp in the first case.
+- New migration adding a small RPC like `mark_pumpfun_fee_claim_attempt(p_launch_id uuid)` that updates only `pumpfun_fees_last_claimed_at` (no total increment).
+- `distributor/src/db.ts` — wrapper for the new RPC.
+
+## What I will NOT touch in this round
+
+- `claim_pumpfun_launch_for_worker` SQL — its 10-min throttle window is correct, the bug is that we never stamp the timestamp on no-op claims.
+- The escrow → platform split logic — works fine when there's actually SOL to split.
+- The fee attribution issue (Bug 2) — separate plan once we have ≥2 active Pump.fun launches.
+
+## After deploy
+
+1. Watch the custodial wallet `8fjQrCqeJfNgc5QQRarykX1eBwL7Xt5dvFi5hA2bqGed` — signature rate should drop from ~0.2/min to ~0.0017/min (1 every 10 min) for ETEST.
+2. Check Railway distributor logs for the new "claim succeeded but vault empty, stamping timestamp" log line.
+3. ETEST `pumpfun_fees_last_claimed_at` in DB should start updating every 10 min instead of staying NULL.
