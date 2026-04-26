@@ -1,77 +1,68 @@
-Diagnosis
+## Root cause
 
-The latest failed Pump.fun launch is `9caf31b8-af12-4feb-8f72-32539e903461` (`ETEST`, mint `JAQch38...`). The token was minted on-chain, but the tokens are still not with contributors because the launch is currently `execution_failed`, not `launched`, so the distributor never picks it up.
+The previous batch wrote three migration **files** into `supabase/migrations/` but they were never executed against the live database. Verified directly:
 
-Root causes found:
+- `launch_status` enum currently contains: `scheduled, executing, launched, execution_failed, cancelled, sponsor_pending` — **no `sweep_recovery`**.
+- `public.claim_sweep_recovery_launch_for_worker` does **not** exist (hence the Railway errors).
+- ETEST launch `9caf31b8-af12-4feb-8f72-32539e903461` is still `status=execution_failed` with `pumpfun_launch_signature=NULL` — reconcile never ran.
 
-1. The executor that ran this launch was still using the old sweep path and looked for a legacy SPL token account. The mint is Token-2022, so it failed with: `Custodial wallet has no token account...`.
-2. The launch row still has `pumpfun_launch_signature = null`, even though the signature is embedded in `execution_error`. That means the robust signature persistence patch had not been deployed when this launch ran.
-3. Auto-refunds already partially ran on this launch before the no-refund patch was active, so contribution rows now contain refund/shortfall records. Those must be reconciled carefully when tokens are distributed.
-4. Even after the executor patch, the distributor still only uses the legacy SPL Token program. For future Pump.fun Token-2022 launches, even if the executor sweeps tokens into escrow successfully, distribution from escrow to contributors would fail unless the distributor is updated too.
+The redeployed executor is calling an RPC and looking for an enum value that don't exist, against un-reconciled data. Distribution will never trigger.
 
-Plan
+## Fix — re-run the 3 migrations as one consolidated migration
 
-1. Harden the distributor for Token-2022
-   - Update `distributor/src/distribute.ts` to detect the mint owner program (`TOKEN_PROGRAM_ID` vs `TOKEN_2022_PROGRAM_ID`).
-   - Use the detected token program for:
-     - escrow ATA derivation,
-     - contributor destination ATA derivation,
-     - ATA creation,
-     - token transfers,
-     - token balance lookup.
-   - Replace the remaining `confirmTransaction` call with the same HTTP polling / rebroadcast pattern used in the executor so RPCs without WebSocket support do not cause false failures or log floods.
+Create a single new migration that performs all three steps idempotently (so it's safe even if parts somehow partially landed). Concretely:
 
-2. Add a safe recovery path for minted-but-not-distributed Pump.fun launches
-   - Add a small recovery script/tooling path under the worker codebase that can process one launch ID.
-   - For this launch it will:
-     - parse/persist the missing Pump.fun signature from the existing error if needed,
-     - run the Token-2022-aware custodial sweep from PumpPortal custodial wallet to the launch escrow,
-     - set the launch to `launched` so the distributor can pick it up,
-     - clear stale worker locks.
-   - It will not blindly refund anyone; the source of truth after a successful mint is the token balance, not SOL refunds.
+### 1. Add `sweep_recovery` to the enum
+```sql
+ALTER TYPE public.launch_status ADD VALUE IF NOT EXISTS 'sweep_recovery';
+```
+Run this in its own statement / migration block (Postgres requires enum additions to be committed before they can be referenced by name in the same transaction).
 
-3. Reconcile the existing bad refund metadata for `ETEST`
-   - Clear the erroneous `refund_tx_signature` / `refund_shortfall_lamports` records for the affected contributions after confirming tokens are being delivered instead of SOL refunds.
-   - Preserve the original contribution amounts and token delivery wallet overrides.
-   - Keep token allocation based on the existing contributions, including the 5% creator floor and the delivery override to `F46Ai...`.
+### 2. Create `claim_sweep_recovery_launch_for_worker`
+Re-create the function exactly as defined in `supabase/migrations/20260426193200_claim_sweep_recovery_launch.sql`:
+- `SECURITY DEFINER`, `search_path = public`
+- `UPDATE … WHERE id = (SELECT … WHERE status = 'sweep_recovery' AND lock expired/null FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`
+- Sets `worker_locked_at = now()`, `worker_id = p_worker_id`
 
-4. Prevent this from happening again at the database/state level
-   - Add a dedicated recovery state to the launch status enum, for example `sweep_recovery`, for cases where mint succeeded but the custodial-to-escrow sweep failed.
-   - Update executor failure routing so post-mint sweep failures are not just generic `execution_failed`; they become recoverable and are excluded from automatic refund logic.
-   - Update distributor/admin recovery visibility to show these launches as token-recovery cases, not refund cases.
+### 3. Reconcile the ETEST launch `9caf31b8-af12-4feb-8f72-32539e903461`
+Confirmed live state of its 2 contributions:
 
-5. Add guardrails against incorrect refunds after a mint
-   - In executor auto-refund logic and refund edge functions, check whether a Pump.fun launch has a persisted signature or an error that indicates Lightning create succeeded.
-   - If a mint likely succeeded, block SOL refunds and return an explicit message: tokens must be recovered/distributed instead.
-   - This prevents future partial refunds when SOL is already in the bonding curve.
+| wallet | amount | refund_tx_signature | refund_shortfall_lamports | token_delivery_wallet |
+|---|---|---|---|---|
+| `62aKW…ubaV` | 0.1 SOL | `4sCGYe9D…ySS` (partial refund) | 96,782,620 | `F46Ai…69BEK` |
+| `BvpGu…c9rxV` | 0.1 SOL | NULL | 99,995,000 | NULL |
 
-6. Document the invariant
-   - Update project memory/docs to state:
-     - Pump.fun mints are Token-2022-aware end-to-end.
-     - Post-mint failures must enter recovery/no-refund handling.
-     - Distribution must not assume legacy SPL Token program.
+Apply:
+```sql
+UPDATE public.launches
+SET status = 'sweep_recovery',
+    pumpfun_launch_signature = '3T5aZSx…' ,    -- the real on-chain mint sig
+    execution_error = 'Reconciled: mint succeeded, sweep failed',
+    worker_locked_at = NULL,
+    worker_id = NULL
+WHERE id = '9caf31b8-af12-4feb-8f72-32539e903461';
 
-Technical details
-
-Current pipeline should become:
-
-```text
-PumpPortal create succeeds
-  -> persist launch signature
-  -> detect Token-2022 or legacy SPL mint
-  -> sweep custodial tokens to escrow using detected token program
-  -> mark launch launched
-  -> distributor detects token program again
-  -> distribute escrow tokens to contributor delivery wallets
-  -> mark distribution complete
+UPDATE public.contributions
+SET refund_tx_signature = NULL,
+    refund_shortfall_lamports = 0
+WHERE launch_id = '9caf31b8-af12-4feb-8f72-32539e903461';
 ```
 
-For the stuck `ETEST` launch specifically:
+**Open item:** I need the exact `pumpfun_launch_signature` for ETEST. The previous reconcile migration referenced `3T5aZSx…` — I'll re-read `supabase/migrations/20260426193100_reconcile_etest_launch.sql` to grab the full signature it used and reuse it verbatim. If that file has a placeholder rather than the real sig, I'll flag and ask before running.
 
-```text
-current: execution_failed + tokens in custodial + stale refund metadata
-recovery: sweep custodial -> escrow, mark launched, clear stale refund metadata
-distribution: escrow -> F46Ai... and BvpGu... according to calculated token shares
-```
+## Files
 
-After approval, I will implement the code changes and provide the exact operational steps needed to run the one-shot recovery on Railway/local worker environment for the already-stranded launch.
+- **New**: `supabase/migrations/<timestamp>_apply_sweep_recovery.sql` — consolidated, idempotent version of the three previous migrations.
+- **Delete**: the three previously-created-but-never-applied migrations under `supabase/migrations/20260426193000_…`, `…193100_…`, `…193200_…` so the migration history isn't ambiguous (their content is fully subsumed by the new one).
+
+No code changes — the executor and edge functions already reference `sweep_recovery` and `claim_sweep_recovery_launch_for_worker`; they just need the DB to catch up.
+
+## Verification after migration applies
+
+1. `SELECT unnest(enum_range(NULL::public.launch_status))` includes `sweep_recovery`.
+2. `SELECT proname FROM pg_proc WHERE proname='claim_sweep_recovery_launch_for_worker'` returns 1 row.
+3. ETEST launch shows `status=sweep_recovery`, signature populated, both contributions cleared of refund metadata.
+4. Railway executor logs: the "Could not find the function" errors stop and a "Worker … claimed launch 9caf31b8… for sweep recovery" line appears within ~1 poll cycle.
+5. After sweep + status flip back to `launched`, distributor delivers tokens (50/50 split, Wallet A's `F46Ai…` override honored).
+
+No executor/distributor redeploy needed — they're already running the right code.
