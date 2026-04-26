@@ -42,6 +42,7 @@ import {
 } from "@/lib/adminFormat";
 import StatusBadge from "@/components/StatusBadge";
 import PlatformBadge from "@/components/admin/PlatformBadge";
+import PumpfunFeeHealthPanel from "@/components/admin/PumpfunFeeHealthPanel";
 
 interface Contribution {
   id: string;
@@ -210,6 +211,8 @@ const RecoveryTab = ({ launches, contributions }: Props) => {
           </div>
         </div>
       </div>
+
+      <PumpfunFeeHealthPanel />
 
       <div className="bg-card border border-border rounded-none overflow-x-auto">
         <Table>
