@@ -9,7 +9,7 @@ import {
   setLaunched,
   storeBasisPoints,
 } from "./db";
-import { setFailedNoRefund } from "./db";
+import { setFailedNoRefund, setFailedWithSignature } from "./db";
 import {
   fundCustodialWallet,
   sweepSolToWallet,
