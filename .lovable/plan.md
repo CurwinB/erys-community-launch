@@ -1,68 +1,84 @@
-## Root cause
+# Why metadata isn't showing in the wallet dropdown
 
-The previous batch wrote three migration **files** into `supabase/migrations/` but they were never executed against the live database. Verified directly:
+## What I confirmed in the database
 
-- `launch_status` enum currently contains: `scheduled, executing, launched, execution_failed, cancelled, sponsor_pending` — **no `sweep_recovery`**.
-- `public.claim_sweep_recovery_launch_for_worker` does **not** exist (hence the Railway errors).
-- ETEST launch `9caf31b8-af12-4feb-8f72-32539e903461` is still `status=execution_failed` with `pumpfun_launch_signature=NULL` — reconcile never ran.
+Wallet `BvpGuDSLDafZXSDeokapirQqiPshocaMFHG5N46c9rxV` **did receive its tokens**:
 
-The redeployed executor is calling an RPC and looking for an enum value that don't exist, against un-reconciled data. Distribution will never trigger.
+| Field | Value |
+|---|---|
+| Launch | ETEST (`9caf31b8…`) — status `launched`, `distribution_completed = true` |
+| Mint | `JAQch38sjEK752q98NVMWMbmNuuZsjoENHVYc9b8Ceay` (Token-2022) |
+| Tokens distributed to BvpGuD… | `3,038,710,024,059` base units |
+| Distribution tx | `4sS6gknmh7T8Y7jWbNfQdAGARKmd6kJKkXid45zn1tHdsk1BGXX3ou2mLsYtdv4sqnuhNjLrrcnNMvDJe4m5vWjn` |
 
-## Fix — re-run the 3 migrations as one consolidated migration
+The IPFS metadata is also fine — `https://ipfs.io/ipfs/bafkreiao…` returns the proper `{ name, symbol, image, description }` JSON, and Pump.fun set the on-chain Token-2022 metadata extension to point at it. External wallets (Phantom, Solflare) will display the name + image once their indexers pick it up.
 
-Create a single new migration that performs all three steps idempotently (so it's safe even if parts somehow partially landed). Concretely:
+## The actual bug — `src/components/WalletDropdown.tsx`
 
-### 1. Add `sweep_recovery` to the enum
-```sql
-ALTER TYPE public.launch_status ADD VALUE IF NOT EXISTS 'sweep_recovery';
-```
-Run this in its own statement / migration block (Postgres requires enum additions to be committed before they can be referenced by name in the same transaction).
+Pump.fun mints are owned by the **Token-2022 program**, not the legacy SPL Token program. Token-2022 ATAs are derived with the Token-2022 program id as part of the seed, which produces a **different address** from the legacy ATA.
 
-### 2. Create `claim_sweep_recovery_launch_for_worker`
-Re-create the function exactly as defined in `supabase/migrations/20260426193200_claim_sweep_recovery_launch.sql`:
-- `SECURITY DEFINER`, `search_path = public`
-- `UPDATE … WHERE id = (SELECT … WHERE status = 'sweep_recovery' AND lock expired/null FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`
-- Sets `worker_locked_at = now()`, `worker_id = p_worker_id`
+`WalletDropdown.tsx` hardcodes the legacy program everywhere it touches a token:
 
-### 3. Reconcile the ETEST launch `9caf31b8-af12-4feb-8f72-32539e903461`
-Confirmed live state of its 2 contributions:
+- **Line 133** — `getAssociatedTokenAddress(mintPubkey, walletPubkey)` defaults to `TOKEN_PROGRAM_ID`. For ETEST this returns the wrong ATA, `getAccountInfo` returns `null`, the balance stays `0n`, and the token gets filtered out by `tokens.filter(t => t.balance > 0n)` → **"No Erys tokens yet"** even though the user owns 3T base units.
+- **Lines 260–261** — same wrong derivation in `handleSendToken` for `fromAta`/`toAta`.
+- **Line 294** — `createTransferInstruction(..., TOKEN_PROGRAM_ID)` hardcodes legacy. A Token-2022 transfer must use the Token-2022 program id; otherwise the instruction errors out at preflight.
+- **Line 374** — same wrong derivation in the recipient-ATA-exists check (recipient would always look "missing", and even if ATA creation ran it'd create the wrong one).
 
-| wallet | amount | refund_tx_signature | refund_shortfall_lamports | token_delivery_wallet |
-|---|---|---|---|---|
-| `62aKW…ubaV` | 0.1 SOL | `4sCGYe9D…ySS` (partial refund) | 96,782,620 | `F46Ai…69BEK` |
-| `BvpGu…c9rxV` | 0.1 SOL | NULL | 99,995,000 | NULL |
+This is the same Token-2022 vs. legacy SPL bug we already fixed in the executor (`pumpportalCustodial.ts`) and distributor (`distributor/src/distribute.ts`). The frontend was missed.
 
-Apply:
-```sql
-UPDATE public.launches
-SET status = 'sweep_recovery',
-    pumpfun_launch_signature = '3T5aZSx…' ,    -- the real on-chain mint sig
-    execution_error = 'Reconciled: mint succeeded, sweep failed',
-    worker_locked_at = NULL,
-    worker_id = NULL
-WHERE id = '9caf31b8-af12-4feb-8f72-32539e903461';
+## Plan
 
-UPDATE public.contributions
-SET refund_tx_signature = NULL,
-    refund_shortfall_lamports = 0
-WHERE launch_id = '9caf31b8-af12-4feb-8f72-32539e903461';
+### 1. Token-2022-aware helper in `WalletDropdown.tsx`
+
+Add a small helper that fetches the mint account once and resolves the right token program:
+
+```ts
+import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, ... } from "@solana/spl-token";
+
+async function getMintTokenProgram(mint: PublicKey): Promise<PublicKey> {
+  const info = await connection.getAccountInfo(mint);
+  if (!info) throw new Error(`Mint ${mint.toBase58()} not found`);
+  if (info.owner.equals(TOKEN_2022_PROGRAM_ID)) return TOKEN_2022_PROGRAM_ID;
+  if (info.owner.equals(TOKEN_PROGRAM_ID)) return TOKEN_PROGRAM_ID;
+  throw new Error(`Unsupported token program ${info.owner.toBase58()}`);
+}
 ```
 
-**Open item:** I need the exact `pumpfun_launch_signature` for ETEST. The previous reconcile migration referenced `3T5aZSx…` — I'll re-read `supabase/migrations/20260426193100_reconcile_etest_launch.sql` to grab the full signature it used and reuse it verbatim. If that file has a placeholder rather than the real sig, I'll flag and ask before running.
+Cache the result per mint inside `loadBalances` so we don't re-fetch on every render.
 
-## Files
+### 2. Fix `loadBalances` (line 129–147)
 
-- **New**: `supabase/migrations/<timestamp>_apply_sweep_recovery.sql` — consolidated, idempotent version of the three previous migrations.
-- **Delete**: the three previously-created-but-never-applied migrations under `supabase/migrations/20260426193000_…`, `…193100_…`, `…193200_…` so the migration history isn't ambiguous (their content is fully subsumed by the new one).
+For each token, look up the program id, then:
+- `getAssociatedTokenAddress(mint, owner, false, programId)`
+- `getParsedAccountInfo(ata)` — the parser already understands Token-2022 accounts, so balance + decimals continue to work.
 
-No code changes — the executor and edge functions already reference `sweep_recovery` and `claim_sweep_recovery_launch_for_worker`; they just need the DB to catch up.
+Also store `programId` on the `ErysToken` shape so the send flow can reuse it.
 
-## Verification after migration applies
+### 3. Fix `handleSendToken` (lines 234–341)
 
-1. `SELECT unnest(enum_range(NULL::public.launch_status))` includes `sweep_recovery`.
-2. `SELECT proname FROM pg_proc WHERE proname='claim_sweep_recovery_launch_for_worker'` returns 1 row.
-3. ETEST launch shows `status=sweep_recovery`, signature populated, both contributions cleared of refund metadata.
-4. Railway executor logs: the "Could not find the function" errors stop and a "Worker … claimed launch 9caf31b8… for sweep recovery" line appears within ~1 poll cycle.
-5. After sweep + status flip back to `launched`, distributor delivers tokens (50/50 split, Wallet A's `F46Ai…` override honored).
+- Use the stored `programId` (or re-derive) for both `fromAta` and `toAta`.
+- Pass `programId` as the 4th arg to `getAssociatedTokenAddress`.
+- Pass `programId` to `createAssociatedTokenAccountInstruction` (5th arg).
+- Pass `programId` to `createTransferInstruction` (last arg) — replacing the hardcoded `TOKEN_PROGRAM_ID` on line 294.
 
-No executor/distributor redeploy needed — they're already running the right code.
+Note: amount math should switch to passing the `bigint` directly (current code does `Number(amount)` which loses precision above 2^53). Out of scope for this bug, but worth flagging — happy to fix in the same change if you want.
+
+### 4. Fix the recipient-ATA preview check (lines 364–383)
+
+Same fix: derive ATA using the mint's program id before `getAccountInfo`.
+
+### 5. No backend / RPC changes needed
+
+The data is already correct on-chain and in the DB. This is a pure frontend display + send-flow fix.
+
+## Files touched
+- `src/components/WalletDropdown.tsx` (single file)
+
+## What the user will see after the fix
+- Reopening the wallet dropdown shows **Erys test (ETEST)** with the correct balance and the IPFS image (because we already store `image_url` on the launch row and pass it through).
+- "Send" works for the ETEST token (and any future Pump.fun-launched token).
+- Bags-launched tokens, which are legacy SPL, continue to work because the helper falls through to `TOKEN_PROGRAM_ID`.
+
+## Out of scope (separate concerns)
+- External wallets (Phantom/Solflare) showing the token name+image is **not our code path** — that's their indexer reading the Token-2022 metadata extension, which is already set correctly by Pump.fun. Usually appears within minutes; can take longer for fresh mints. No action on our side.
+- The `Number(amount)` precision issue in send — not blocking the reported bug; can be folded in if you want.

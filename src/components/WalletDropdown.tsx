@@ -12,6 +12,7 @@ import {
   createTransferInstruction,
   createAssociatedTokenAccountInstruction,
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
 } from "@solana/spl-token";
 import { isSolanaWallet } from "@dynamic-labs/solana";
 import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
@@ -30,10 +31,36 @@ interface ErysToken {
   balance: bigint;
   decimals: number;
   launch_id: string;
+  programId: PublicKey;
 }
 
 const ALCHEMY_RPC = import.meta.env.VITE_SOLANA_RPC_URL;
 const connection = new Connection(ALCHEMY_RPC, "confirmed");
+
+// Pump.fun mints are owned by the Token-2022 program; Bags / legacy mints
+// by the classic SPL Token program. Token-2022 ATAs derive to a different
+// address because the program id is part of the seed, so we MUST detect
+// the owning program before deriving an ATA, transferring, or creating one.
+const mintProgramCache = new Map<string, PublicKey>();
+async function getMintTokenProgram(mint: PublicKey): Promise<PublicKey> {
+  const key = mint.toBase58();
+  const cached = mintProgramCache.get(key);
+  if (cached) return cached;
+  const info = await connection.getAccountInfo(mint);
+  if (!info) throw new Error(`Mint ${key} not found on-chain`);
+  let programId: PublicKey;
+  if (info.owner.equals(TOKEN_2022_PROGRAM_ID)) {
+    programId = TOKEN_2022_PROGRAM_ID;
+  } else if (info.owner.equals(TOKEN_PROGRAM_ID)) {
+    programId = TOKEN_PROGRAM_ID;
+  } else {
+    throw new Error(
+      `Mint ${key} owned by unsupported program ${info.owner.toBase58()}`
+    );
+  }
+  mintProgramCache.set(key, programId);
+  return programId;
+}
 
 const WalletDropdown = () => {
   const { connected, publicKey, wallet } = useWallet();
@@ -95,6 +122,7 @@ const WalletDropdown = () => {
             balance: 0n,
             decimals: 6,
             launch_id: launchId,
+            programId: TOKEN_PROGRAM_ID, // refined below once we know the mint owner
           });
         }
       };
@@ -130,7 +158,14 @@ const WalletDropdown = () => {
         try {
           const mintPubkey = new PublicKey(token.mint);
           const walletPubkey = new PublicKey(publicKey);
-          const ata = await getAssociatedTokenAddress(mintPubkey, walletPubkey);
+          const programId = await getMintTokenProgram(mintPubkey);
+          token.programId = programId;
+          const ata = await getAssociatedTokenAddress(
+            mintPubkey,
+            walletPubkey,
+            false,
+            programId
+          );
           const ataInfo = await connection.getAccountInfo(ata);
 
           if (ataInfo) {
@@ -141,8 +176,9 @@ const WalletDropdown = () => {
               token.decimals = data.decimals;
             }
           }
-        } catch {
+        } catch (err) {
           // Token not held
+          console.warn(`Could not load balance for ${token.mint}:`, err);
         }
       }
 
@@ -257,10 +293,23 @@ const WalletDropdown = () => {
       const mintPubkey = new PublicKey(selectedToken.mint);
       const fromPubkey = new PublicKey(publicKey);
 
-      const fromAta = await getAssociatedTokenAddress(mintPubkey, fromPubkey);
-      const toAta = await getAssociatedTokenAddress(mintPubkey, toPubkey);
+      const programId =
+        selectedToken.programId ?? (await getMintTokenProgram(mintPubkey));
+      const fromAta = await getAssociatedTokenAddress(
+        mintPubkey,
+        fromPubkey,
+        false,
+        programId
+      );
+      const toAta = await getAssociatedTokenAddress(
+        mintPubkey,
+        toPubkey,
+        false,
+        programId
+      );
       console.log("From ATA:", fromAta.toBase58());
       console.log("To ATA:", toAta.toBase58());
+      console.log("Token program:", programId.toBase58());
 
       const toAtaInfo = await connection.getAccountInfo(toAta);
       console.log("Recipient ATA exists:", !!toAtaInfo);
@@ -274,7 +323,8 @@ const WalletDropdown = () => {
             fromPubkey,
             toAta,
             toPubkey,
-            mintPubkey
+            mintPubkey,
+            programId
           )
         );
       }
@@ -291,7 +341,7 @@ const WalletDropdown = () => {
           fromPubkey,
           Number(amount),
           [],
-          TOKEN_PROGRAM_ID
+          programId
         )
       );
 
@@ -371,7 +421,14 @@ const WalletDropdown = () => {
       try {
         const mintPubkey = new PublicKey(selectedToken.mint);
         const toPubkey = new PublicKey(sendTo);
-        const toAta = await getAssociatedTokenAddress(mintPubkey, toPubkey);
+        const programId =
+          selectedToken.programId ?? (await getMintTokenProgram(mintPubkey));
+        const toAta = await getAssociatedTokenAddress(
+          mintPubkey,
+          toPubkey,
+          false,
+          programId
+        );
         const info = await connection.getAccountInfo(toAta);
         setRecipientNeedsAta(!info);
       } catch {
