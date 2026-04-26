@@ -9,6 +9,7 @@ import {
   setLaunched,
   storeBasisPoints,
 } from "./db";
+import { setFailedNoRefund } from "./db";
 import {
   fundCustodialWallet,
   sweepSolToWallet,
