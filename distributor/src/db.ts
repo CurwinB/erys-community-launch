@@ -210,6 +210,25 @@ export async function markPumpfunFeeClaimAttempt(launchId: string): Promise<void
   }
 }
 
+// Record a fee-claim FAILURE in the DB. Stamps the throttle so we don't
+// re-fire the broken path every 30 seconds, and persists the error message
+// so we can see it in the admin UI without grepping Railway logs.
+export async function recordPumpfunFeeClaimFailure(
+  launchId: string,
+  errorMessage: string
+): Promise<void> {
+  const { error } = await supabase.rpc("record_pumpfun_fee_claim_failure", {
+    p_launch_id: launchId,
+    p_error: errorMessage,
+  });
+  if (error) {
+    console.error(
+      `Error recording Pump.fun fee claim failure for launch ${launchId}:`,
+      error.message
+    );
+  }
+}
+
 // Reset launches stuck in "executing" status whose scheduled launch_datetime
 // is more than 10 minutes in the past. Flips them to "execution_failed" so
 // the existing pg_cron retry job will pick them up and re-execute.
