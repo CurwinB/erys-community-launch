@@ -78,6 +78,21 @@ export async function claimNextExecutingLaunch(workerId: string): Promise<Launch
   return (data?.[0] as Launch) || null;
 }
 
+// Atomically claim the next sweep_recovery launch (mint exists on-chain
+// but custodial -> escrow token sweep failed previously). Same SKIP LOCKED
+// semantics as claim_executing_launch_for_worker.
+export async function claimNextSweepRecovery(workerId: string): Promise<Launch | null> {
+  const { data, error } = await supabase.rpc(
+    "claim_sweep_recovery_launch_for_worker",
+    { p_worker_id: workerId, p_lock_expiry_seconds: 300 }
+  );
+  if (error) {
+    console.error("Error claiming sweep_recovery launch:", error.message);
+    return null;
+  }
+  return (data?.[0] as Launch) || null;
+}
+
 // Release a worker lock. Crashed workers' locks also self-heal via the
 // expiry window in claim_executing_launch_for_worker.
 export async function releaseLaunchLock(launchId: string): Promise<void> {
