@@ -9,6 +9,7 @@ import {
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   getAssociatedTokenAddress,
   createAssociatedTokenAccountInstruction,
   createTransferInstruction,
@@ -251,23 +252,65 @@ export async function sweepTokensToWallet(
   const custodial = getCustodialKeypair();
   const mintPubkey = new PublicKey(mintAddress);
 
+  // Pump.fun mints created since the Token-2022 cutover are owned by the
+  // Token-2022 program, not the legacy SPL Token program. ATAs for
+  // Token-2022 mints have a DIFFERENT derived address because the program
+  // id is part of the seed. We must detect the mint's owner program first
+  // and route every subsequent ATA derivation, getAccount, and transfer
+  // instruction through the matching token program.
+  const mintAccountInfo = await connection.getAccountInfo(mintPubkey);
+  if (!mintAccountInfo) {
+    throw new Error(
+      `Mint account ${mintAddress} not found on-chain — Lightning create may not have landed yet`
+    );
+  }
+  const mintOwner = mintAccountInfo.owner;
+  let tokenProgramId: PublicKey;
+  if (mintOwner.equals(TOKEN_2022_PROGRAM_ID)) {
+    tokenProgramId = TOKEN_2022_PROGRAM_ID;
+    console.log(`[sweepTokensToWallet] mint ${mintAddress} is Token-2022`);
+  } else if (mintOwner.equals(TOKEN_PROGRAM_ID)) {
+    tokenProgramId = TOKEN_PROGRAM_ID;
+    console.log(`[sweepTokensToWallet] mint ${mintAddress} is legacy SPL Token`);
+  } else {
+    throw new Error(
+      `Mint ${mintAddress} owned by unsupported program ${mintOwner.toBase58()}`
+    );
+  }
+
   const sourceAta = await getAssociatedTokenAddress(
     mintPubkey,
-    custodial.publicKey
+    custodial.publicKey,
+    false,
+    tokenProgramId
   );
-  const destAta = await getAssociatedTokenAddress(mintPubkey, destinationOwner);
+  const destAta = await getAssociatedTokenAddress(
+    mintPubkey,
+    destinationOwner,
+    false,
+    tokenProgramId
+  );
+  console.log(
+    `[sweepTokensToWallet] sourceAta=${sourceAta.toBase58()} destAta=${destAta.toBase58()}`
+  );
 
   let amount = 0n;
   try {
-    const sourceAccount = await getAccount(connection, sourceAta);
+    const sourceAccount = await getAccount(
+      connection,
+      sourceAta,
+      "confirmed",
+      tokenProgramId
+    );
     amount = sourceAccount.amount;
   } catch (err: any) {
     throw new Error(
-      `Custodial wallet has no token account for mint ${mintAddress}: ${
+      `Custodial wallet has no token account for mint ${mintAddress} (program ${tokenProgramId.toBase58()}): ${
         err?.message ?? err
       }`
     );
   }
+  console.log(`[sweepTokensToWallet] custodial holds ${amount} base units`);
 
   if (amount === 0n) {
     throw new Error(
@@ -295,7 +338,8 @@ export async function sweepTokensToWallet(
             custodial.publicKey,
             destAta,
             destinationOwner,
-            mintPubkey
+            mintPubkey,
+            tokenProgramId
           )
         );
       }
@@ -306,7 +350,7 @@ export async function sweepTokensToWallet(
           custodial.publicKey,
           amount,
           [],
-          TOKEN_PROGRAM_ID
+          tokenProgramId
         )
       );
       tx.feePayer = custodial.publicKey;

@@ -139,6 +139,34 @@ export async function setFailed(launchId: string, reason: string): Promise<void>
   }
 }
 
+// Mark a launch failed WITHOUT triggering auto-refund. Use this when the
+// on-chain launch already happened (e.g. Pump.fun create succeeded, signature
+// is final on-chain) but a downstream step like the token sweep failed.
+// In that state the SOL has already been spent into the bonding curve, so
+// auto-refunds would just cause partial/short refunds while leaving the
+// dev-buy tokens stranded in the custodial wallet for manual recovery.
+export async function setFailedNoRefund(
+  launchId: string,
+  reason: string,
+  signature?: string,
+): Promise<void> {
+  console.error(`Launch ${launchId} failed (no auto-refund): ${reason}`);
+  const update: Record<string, unknown> = {
+    status: "execution_failed",
+    execution_error: reason,
+  };
+  if (signature) update.pumpfun_launch_signature = signature;
+  const { error } = await supabase
+    .from("launches")
+    .update(update)
+    .eq("id", launchId);
+  if (error)
+    console.error(
+      `Error marking launch ${launchId} failed-no-refund:`,
+      error.message,
+    );
+}
+
 export async function storeFeeShareConfig(
   launchId: string,
   configKey: string,

@@ -1,87 +1,105 @@
-## Root cause (verified on-chain)
+## What failed
 
-The latest launch (`Erys test`, sig `4m8qBeEv…`) was **submitted successfully** to Pump.fun but **reverted on-chain** during the Buy instruction:
+The latest Pump.fun test did not fail at creation. The on-chain Pump.fun create/buy transaction succeeded:
 
+- Launch: `9caf31b8-af12-4feb-8f72-32539e903461`
+- Token: `Erys test` / `ETEST`
+- Mint: `JAQch38sjEK752q98NVMWMbmNuuZsjoENHVYc9b8Ceay`
+- Pump.fun tx: `3T5aZSxFsTG1zEsM2rudWxbz99pbGqKquXEwaZtRxvjdgu7Bsou5999oKSf852VribibJAEJ7DhNDFeAvZroZfHC`
+- Solscan shows `Success` and the custodial wallet owns `6,077,420.048119 ETEST`.
+
+The launch failed after creation during our sweep step:
+
+```text
+Lightning create succeeded (...) but token sweep failed after retries:
+Custodial wallet has no token account for mint JAQch38...
 ```
-Transfer: insufficient lamports 183158380, need 185886440
+
+## Root cause
+
+The new Pump.fun token was created under the **Token-2022 program**:
+
+```text
+Owner Program: Token 2022 Program
+TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb
 ```
 
-The custodial wallet was short by **~0.0027 SOL** because `CUSTODIAL_FUNDING_BUFFER_LAMPORTS = 0.01 SOL` doesn't cover the real combined cost of: 2× ATA rent (~0.004), Pump.fun 1% protocol fee (~0.002 on a 0.19 SOL buy), creator fee, compute/priority, and tx fee — total ~0.0125 SOL.
-
-A second bug compounded it: the failure branch checks `lightningJson?.errors`, but PumpPortal returns `errors: []` (empty array = truthy in JS), so even successful Lightning responses trip the failure path. That's why the DB error message shows `errors:[]` despite the signature being valid.
-
-## Fixes
-
-### 1. `executor/src/executePumpfunLightning.ts` — bump the funding buffer
-
-Raise `CUSTODIAL_FUNDING_BUFFER_LAMPORTS` from `10_000_000n` (0.01 SOL) to **`25_000_000n` (0.025 SOL)**.
-
-Breakdown that 0.025 must cover, with margin:
-- 2× ATA rent at ~0.00204 each = 0.00408 SOL
-- Pump.fun 1% protocol fee on initial buy = up to ~0.005 SOL on a 0.5 SOL buy
-- Pump.fun creator fee (0.05%) = negligible
-- Compute + priority fees = ~0.001 SOL
-- PumpPortal transaction fee = ~0.001 SOL
-- Safety margin = ~0.013 SOL
-
-Leftovers are already swept back to escrow by `sweepSolToWallet` after a successful launch, so over-padding is harmless.
-
-### 2. `executor/src/executePumpfunLightning.ts` — fix the empty-array error check
-
-Change line 246 from:
+But `executor/src/pumpportalCustodial.ts` currently derives and reads the custodial ATA using the legacy SPL Token program only:
 
 ```ts
-if (!lightningRes.ok || lightningJson?.errors) {
+getAssociatedTokenAddress(mintPubkey, custodial.publicKey)
+getAccount(connection, sourceAta)
+createTransferInstruction(..., TOKEN_PROGRAM_ID)
 ```
 
-to:
+For Token-2022 mints, the associated token account address is different because the token program id is part of ATA derivation. Our code looked for the legacy-token ATA, so it concluded there was no token account even though the Token-2022 ATA exists and holds the dev-buy supply.
 
-```ts
-if (!lightningRes.ok || (Array.isArray(lightningJson?.errors) && lightningJson.errors.length > 0)) {
-```
+## Important side effect
 
-This way an empty `errors: []` from a successful Lightning response no longer trips the failure branch.
+Because the launch was marked `execution_failed`, `setFailed()` auto-triggered refunds. The escrow had already funded/spent most SOL into Pump.fun, so the refunds are partial/short:
 
-### 3. `executor/src/executePumpfunLightning.ts` — verify on-chain status before declaring failure
+- First contribution got only a small partial refund, with a shortfall recorded.
+- Second contribution has no refund signature and near-full shortfall.
 
-After `connection.confirmTransaction` (line 283), explicitly check the on-chain status of `launchSignature` via `getSignatureStatuses` (with `searchTransactionHistory: true`). If `status.err` is non-null:
+The dev-buy tokens are still recoverable from the PumpPortal custodial wallet. We should not run normal refund logic for this type of post-create sweep failure going forward.
 
-- Mark the launch failed with the actual on-chain error (e.g. `InstructionError: insufficient lamports during Buy`).
-- Run `trySweepSolBack` so the residual custodial SOL is returned to escrow (currently it's stuck because the failure path after submission doesn't call sweep-back).
-- Skip the token sweep step (no tokens were minted to the custodial wallet).
+## Fix plan
 
-This turns confusing PumpPortal-side error strings into clear on-chain reverts and prevents stranded SOL in the custodial wallet.
+### 1. Make custodial token sweeps Token-2022 aware
 
-### 4. `executor/src/executePumpfunLightning.ts` — also sweep SOL back when on-chain Buy reverts
+Update `executor/src/pumpportalCustodial.ts` to support both token programs:
 
-The current code only calls `trySweepSolBack` on PumpPortal HTTP errors. With the new on-chain status check (item 3), add the sweep-back to the on-chain-revert branch too. The custodial wallet currently holds ~0.183 SOL stranded from this failed launch — once redeployed, the next successful launch will sweep it as residual on the way out, but adding the sweep-back here makes the failure path self-cleaning.
+- Import `TOKEN_2022_PROGRAM_ID` from `@solana/spl-token`.
+- Detect the mint owner program with `connection.getAccountInfo(mintPubkey)`.
+- If the mint owner is `TOKEN_2022_PROGRAM_ID`, use Token-2022 for:
+  - `getAssociatedTokenAddress(mint, owner, false, TOKEN_2022_PROGRAM_ID)`
+  - `getAccount(connection, sourceAta, commitment, TOKEN_2022_PROGRAM_ID)`
+  - `createAssociatedTokenAccountInstruction(..., TOKEN_2022_PROGRAM_ID)`
+  - `createTransferInstruction(..., TOKEN_2022_PROGRAM_ID)`
+- If the mint owner is legacy `TOKEN_PROGRAM_ID`, keep current behavior.
+- If the owner is neither, throw a clear unsupported-token-program error.
 
-### 5. Documentation update
+### 2. Fix the post-create failure behavior
 
-Update `.lovable/memory/features/custodial-wallet-locking.md` (or create a new memory file `pumpfun-lightning-buffer.md`) noting:
-- Funding buffer is 0.025 SOL and covers ATA rent + Pump.fun protocol fee + priority + tx fee + margin.
-- On-chain status MUST be verified after Lightning submission, since Lightning returns 200 + signature even for txs that revert on chain.
-- Empty `errors: []` arrays from PumpPortal mean success.
+Update `executor/src/executePumpfunLightning.ts` so a successful Pump.fun create followed by sweep failure is treated as a recovery-needed state, not as a failed launch that auto-refunds contributors.
 
-## Files modified
+Recommended minimal code change:
 
-- `executor/src/executePumpfunLightning.ts` — buffer + error check + on-chain verify + sweep-back
-- `.lovable/memory/features/custodial-wallet-locking.md` — note the buffer + on-chain verify rules
-- `.lovable/memory/index.md` — link the new/updated memory if a new file is created
+- Add a new DB helper in `executor/src/db.ts`, e.g. `setExecutionErrorOnly(launchId, reason)` or `markLaunchNeedsRecovery(...)`, that updates `execution_error` without calling `refundFailedLaunch()`.
+- Use that helper in the token-sweep failure branch instead of `setFailed()`.
+- Keep the status as either `executing` for a safe retry after the Token-2022 fix, or move to an existing admin-visible failure state only if it does not auto-refund. The safest immediate behavior is to leave it recoverable and avoid refunds once the token exists on-chain.
 
-## After deploy
+### 3. Add clearer diagnostics around the sweep
 
-Once you redeploy the **executor service on Railway**, the next Pump.fun test launch should:
-1. Fund the custodial wallet with 0.025 SOL of buffer (instead of 0.01).
-2. Submit via Lightning, get a signature.
-3. Wait for on-chain confirmation, verify status is `Ok`.
-4. Sweep tokens + residual SOL back to escrow.
-5. Mark the launch `launched`.
+Add logs for:
 
-The previously stranded ~0.183 SOL in the custodial wallet will be picked up as residual on the next successful launch's SOL sweep step.
+- Mint program owner (`legacy SPL` vs `Token-2022`).
+- Derived source ATA and destination ATA.
+- Token amount found before sweep.
 
-## What I am NOT changing
+This will make the next Railway log review obvious instead of showing only “no token account”.
 
-- Distributor math, contribution flow, claim flow — none of these are involved.
-- The 5% creator floor logic from the previous task — untouched.
-- Bags launch path — failure was Pump.fun-specific.
+### 4. Optional but recommended: suppress the remaining WebSocket log spam
+
+There is still one `connection.confirmTransaction` call in `executePumpfunLightning.ts` after PumpPortal returns the Lightning signature. On Alchemy this can still trigger `signatureSubscribe` spam.
+
+Replace that confirmation block with HTTP polling using `getSignatureStatuses`, similar to the existing custom helper, or at least stop relying on `confirmTransaction` for that path. This is not the cause of this latest failure, but it makes Railway logs usable.
+
+### 5. Recovery after deploy
+
+After deploying the executor:
+
+1. Manually recover/sweep the existing `ETEST` Token-2022 balance from custodial wallet `8fjQrCqeJfNgc5QQRarykX1eBwL7Xt5dvFi5hA2bqGed` to the launch escrow `6HDsA9hFh4dPnJUpJv7nxtN8JZGpeYuLNSMw3GyW5RXV`.
+2. Update the launch record to store the Pump.fun signature and move it to the correct launched/recovery-complete status, or run a small controlled recovery script that calls the fixed sweep path.
+3. Review the two contribution refund records because auto-refund already ran with shortfalls.
+
+## Files to modify
+
+- `executor/src/pumpportalCustodial.ts` — Token-2022 detection and sweep support.
+- `executor/src/executePumpfunLightning.ts` — avoid auto-refund on post-create token sweep failure; remove noisy `confirmTransaction` path if included.
+- `executor/src/db.ts` — add a non-refunding error/recovery helper.
+- `.lovable/memory/features/custodial-wallet-locking.md` — record that Pump.fun mints may be Token-2022 and sweep helpers must derive ATAs with the mint owner program.
+
+## Why this should fix the latest failure
+
+The latest transaction succeeded and the token account exists on-chain; our code simply looked under the wrong token program. Once the sweep helper derives Token-2022 ATAs and sends transfers through the Token-2022 program, it should find and move the `6,077,420.048119 ETEST` balance instead of failing with “no token account.”
