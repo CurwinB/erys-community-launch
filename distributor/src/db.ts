@@ -192,6 +192,24 @@ export async function updatePumpfunFeesClaimed(
   }
 }
 
+// Stamp pumpfun_fees_last_claimed_at WITHOUT incrementing the claimed total.
+// Called when collectCreatorFee succeeded on-chain but the vault was empty
+// (i.e. "No creator fee to collect"). This is the steady state for any low-
+// volume launch and we MUST throttle these no-op claims, otherwise the
+// distributor re-fires the call every poll cycle and burns ~55k lamports of
+// priority fee per attempt out of the custodial wallet.
+export async function markPumpfunFeeClaimAttempt(launchId: string): Promise<void> {
+  const { error } = await supabase.rpc("mark_pumpfun_fee_claim_attempt", {
+    p_launch_id: launchId,
+  });
+  if (error) {
+    console.error(
+      `Error stamping Pump.fun fee claim attempt for launch ${launchId}:`,
+      error.message
+    );
+  }
+}
+
 // Reset launches stuck in "executing" status whose scheduled launch_datetime
 // is more than 10 minutes in the past. Flips them to "execution_failed" so
 // the existing pg_cron retry job will pick them up and re-execute.
