@@ -137,6 +137,8 @@ export type Database = {
           pumpfun_creator_fees_distributed: number | null
           pumpfun_fees_claimed_total: number | null
           pumpfun_fees_last_claimed_at: string | null
+          pumpfun_last_claim_attempt_at: string | null
+          pumpfun_last_claim_error: string | null
           pumpfun_launch_signature: string | null
           pumpfun_mint_keypair_encrypted: string | null
           sponsor_link_claimed_at: string | null
@@ -180,6 +182,8 @@ export type Database = {
           pumpfun_creator_fees_distributed?: number | null
           pumpfun_fees_claimed_total?: number | null
           pumpfun_fees_last_claimed_at?: string | null
+          pumpfun_last_claim_attempt_at?: string | null
+          pumpfun_last_claim_error?: string | null
           pumpfun_launch_signature?: string | null
           pumpfun_mint_keypair_encrypted?: string | null
           sponsor_link_claimed_at?: string | null
@@ -223,6 +227,8 @@ export type Database = {
           pumpfun_creator_fees_distributed?: number | null
           pumpfun_fees_claimed_total?: number | null
           pumpfun_fees_last_claimed_at?: string | null
+          pumpfun_last_claim_attempt_at?: string | null
+          pumpfun_last_claim_error?: string | null
           pumpfun_launch_signature?: string | null
           pumpfun_mint_keypair_encrypted?: string | null
           sponsor_link_claimed_at?: string | null
@@ -296,6 +302,8 @@ export type Database = {
           pumpfun_creator_fees_distributed: number | null
           pumpfun_fees_claimed_total: number | null
           pumpfun_fees_last_claimed_at: string | null
+          pumpfun_last_claim_attempt_at: string | null
+          pumpfun_last_claim_error: string | null
           pumpfun_launch_signature: string | null
           pumpfun_mint_keypair_encrypted: string | null
           sponsor_link_claimed_at: string | null
@@ -352,6 +360,8 @@ export type Database = {
           pumpfun_creator_fees_distributed: number | null
           pumpfun_fees_claimed_total: number | null
           pumpfun_fees_last_claimed_at: string | null
+          pumpfun_last_claim_attempt_at: string | null
+          pumpfun_last_claim_error: string | null
           pumpfun_launch_signature: string | null
           pumpfun_mint_keypair_encrypted: string | null
           sponsor_link_claimed_at: string | null
@@ -404,6 +414,8 @@ export type Database = {
           pumpfun_creator_fees_distributed: number | null
           pumpfun_fees_claimed_total: number | null
           pumpfun_fees_last_claimed_at: string | null
+          pumpfun_last_claim_attempt_at: string | null
+          pumpfun_last_claim_error: string | null
           pumpfun_launch_signature: string | null
           pumpfun_mint_keypair_encrypted: string | null
           sponsor_link_claimed_at: string | null
@@ -456,6 +468,8 @@ export type Database = {
           pumpfun_creator_fees_distributed: number | null
           pumpfun_fees_claimed_total: number | null
           pumpfun_fees_last_claimed_at: string | null
+          pumpfun_last_claim_attempt_at: string | null
+          pumpfun_last_claim_error: string | null
           pumpfun_launch_signature: string | null
           pumpfun_mint_keypair_encrypted: string | null
           sponsor_link_claimed_at: string | null
@@ -482,6 +496,10 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      force_pumpfun_fee_claim_retry: {
+        Args: { p_launch_id: string }
+        Returns: undefined
+      }
       get_sponsor_slot_by_token: {
         Args: { p_token: string }
         Returns: {
@@ -501,6 +519,10 @@ export type Database = {
       is_admin_wallet: { Args: { p_wallet: string }; Returns: boolean }
       mark_pumpfun_fee_claim_attempt: {
         Args: { p_launch_id: string }
+        Returns: undefined
+      }
+      record_pumpfun_fee_claim_failure: {
+        Args: { p_error: string; p_launch_id: string }
         Returns: undefined
       }
       release_custodial_lock: { Args: { p_key: string }; Returns: boolean }
