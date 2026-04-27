@@ -44,6 +44,7 @@ const NavbarSearch = () => {
         .from("launches_public")
         .select("id, token_name, token_symbol, image_url, status, platform")
         .or(`token_symbol.ilike.%${term}%,token_name.ilike.%${term}%`)
+        .in("status", ["scheduled", "executing", "launched"])
         .limit(8);
       if (error) throw error;
       return (data || []) as SearchResult[];
