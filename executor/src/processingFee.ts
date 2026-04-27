@@ -16,6 +16,13 @@ export const PROCESSING_FEE_LAMPORTS = 60_000_000n; // 0.06 SOL
 export const PROCESSING_FEE_THRESHOLD = 300_000_000n; // 0.3 SOL
 const PROCESSING_FEE_TX_FEE = 5_000n; // network fee for the SystemProgram.transfer
 
+// How long we re-poll signature status after a confirmTransaction throw
+// before deciding the tx genuinely didn't land. Mirrors the pattern in
+// fundSponsoredEscrow.ts so RPC blockhash flakiness doesn't abort launches.
+const CONFIRM_RECOVERY_POLL_MS = 30_000;
+const CONFIRM_RECOVERY_INTERVAL_MS = 2_000;
+const MAX_SEND_ATTEMPTS = 3;
+
 export function shouldChargeProcessingFee(totalLamports: bigint): boolean {
   return totalLamports >= PROCESSING_FEE_THRESHOLD;
 }
@@ -27,17 +34,106 @@ export interface ProcessingFeeResult {
 }
 
 /**
+ * Poll signature status until landed (confirmed/finalized) or the budget
+ * runs out. Returns true on landing, false on timeout, throws on tx error.
+ */
+async function waitForSignatureLanded(
+  connection: Connection,
+  signature: string,
+  budgetMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: true,
+      });
+      const status = res?.value?.[0];
+      if (status) {
+        if (status.err) {
+          throw new Error(
+            `Processing fee tx ${signature} reverted on-chain: ${JSON.stringify(
+              status.err,
+            )}`,
+          );
+        }
+        const conf = status.confirmationStatus;
+        if (conf === "confirmed" || conf === "finalized") return true;
+      }
+    } catch (err: any) {
+      // Re-throw on-chain reverts; swallow transient RPC errors.
+      if (err?.message?.includes("reverted on-chain")) throw err;
+    }
+    await new Promise((r) => setTimeout(r, CONFIRM_RECOVERY_INTERVAL_MS));
+  }
+  return false;
+}
+
+/**
+ * If the launch row already has a processing_fee_tx_signature, check it
+ * on-chain. If finalized → treat as already paid (idempotency). Returns
+ * the existing signature on success, null otherwise.
+ */
+export async function findAlreadyPaidProcessingFee(
+  connection: Connection,
+  existingSignature: string | null | undefined,
+): Promise<string | null> {
+  if (!existingSignature) return null;
+  try {
+    const res = await connection.getSignatureStatuses([existingSignature], {
+      searchTransactionHistory: true,
+    });
+    const status = res?.value?.[0];
+    if (!status) return null;
+    if (status.err) return null; // reverted — treat as not paid, charge again
+    const conf = status.confirmationStatus;
+    if (conf === "confirmed" || conf === "finalized") {
+      return existingSignature;
+    }
+  } catch {
+    // ignore — fall through to fresh charge
+  }
+  return null;
+}
+
+/**
  * Transfers PROCESSING_FEE_LAMPORTS - tx fee from the escrow wallet to the
  * platform treasury. The on-chain debit on the escrow is exactly
  * PROCESSING_FEE_LAMPORTS (transfer + 5_000 network fee = 0.06 SOL).
- * Throws on failure so the caller can decide whether to abort the launch.
+ *
+ * Hardened against RPC blockhash flakiness:
+ *   - If `existingSignature` is provided and finalized on-chain, returns it
+ *     immediately (no second debit).
+ *   - On confirmTransaction throw, re-polls signature status before treating
+ *     it as a failure (the tx often lands seconds after we gave up).
+ *   - On a true blockhash expiry, re-signs with a fresh blockhash up to
+ *     MAX_SEND_ATTEMPTS times.
+ *
+ * Throws only after every recovery path is exhausted.
  */
 export async function chargeProcessingFee(
   connection: Connection,
   escrowKeypair: Keypair,
   treasuryWallet: string,
   launchId: string,
+  existingSignature?: string | null,
 ): Promise<ProcessingFeeResult> {
+  // Idempotency: if a prior attempt already landed, return it.
+  const alreadyPaid = await findAlreadyPaidProcessingFee(
+    connection,
+    existingSignature,
+  );
+  if (alreadyPaid) {
+    console.log(
+      `[launch ${launchId}] Processing fee already paid on-chain (${alreadyPaid}) — skipping`,
+    );
+    return {
+      charged: true,
+      signature: alreadyPaid,
+      feeLamports: PROCESSING_FEE_LAMPORTS,
+    };
+  }
+
   const transferAmount = PROCESSING_FEE_LAMPORTS - PROCESSING_FEE_TX_FEE;
 
   console.log(
@@ -46,35 +142,106 @@ export async function chargeProcessingFee(
     } SOL → ${treasuryWallet}`,
   );
 
-  const { blockhash, lastValidBlockHeight } =
-    await connection.getLatestBlockhash("confirmed");
+  let lastError: any = null;
+  let lastSignature: string | null = null;
 
-  const tx = new Transaction().add(
-    SystemProgram.transfer({
-      fromPubkey: escrowKeypair.publicKey,
-      toPubkey: new PublicKey(treasuryWallet),
-      lamports: Number(transferAmount),
-    }),
+  for (let attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt++) {
+    const { blockhash, lastValidBlockHeight } =
+      await connection.getLatestBlockhash("confirmed");
+
+    const tx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: escrowKeypair.publicKey,
+        toPubkey: new PublicKey(treasuryWallet),
+        lamports: Number(transferAmount),
+      }),
+    );
+    tx.feePayer = escrowKeypair.publicKey;
+    tx.recentBlockhash = blockhash;
+    tx.sign(escrowKeypair);
+
+    let signature: string;
+    try {
+      signature = await connection.sendRawTransaction(tx.serialize(), {
+        preflightCommitment: "confirmed",
+      });
+    } catch (sendErr: any) {
+      lastError = sendErr;
+      console.warn(
+        `[launch ${launchId}] Processing fee send attempt ${attempt} failed: ${sendErr?.message ?? sendErr}`,
+      );
+      // If a previous attempt produced a signature still in-flight, check it.
+      if (lastSignature) {
+        const landed = await waitForSignatureLanded(
+          connection,
+          lastSignature,
+          CONFIRM_RECOVERY_POLL_MS,
+        );
+        if (landed) {
+          console.log(
+            `[launch ${launchId}] Prior attempt's tx ${lastSignature} landed during retry — using it`,
+          );
+          return {
+            charged: true,
+            signature: lastSignature,
+            feeLamports: PROCESSING_FEE_LAMPORTS,
+          };
+        }
+      }
+      continue;
+    }
+
+    lastSignature = signature;
+
+    try {
+      await connection.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        "confirmed",
+      );
+      console.log(`[launch ${launchId}] Processing fee sent: ${signature}`);
+      console.log(
+        `[launch ${launchId}] Solscan: https://solscan.io/tx/${signature}`,
+      );
+      return {
+        charged: true,
+        signature,
+        feeLamports: PROCESSING_FEE_LAMPORTS,
+      };
+    } catch (confirmErr: any) {
+      lastError = confirmErr;
+      console.warn(
+        `[launch ${launchId}] confirmTransaction threw on attempt ${attempt} (${confirmErr?.message ?? confirmErr}) — polling status for ${CONFIRM_RECOVERY_POLL_MS}ms before retry`,
+      );
+
+      // The tx may still land. Poll status before declaring failure.
+      try {
+        const landed = await waitForSignatureLanded(
+          connection,
+          signature,
+          CONFIRM_RECOVERY_POLL_MS,
+        );
+        if (landed) {
+          console.log(
+            `[launch ${launchId}] Processing fee tx ${signature} landed after confirm timeout`,
+          );
+          return {
+            charged: true,
+            signature,
+            feeLamports: PROCESSING_FEE_LAMPORTS,
+          };
+        }
+      } catch (statusErr: any) {
+        // On-chain revert — bail out, do not retry.
+        throw statusErr;
+      }
+
+      // Not landed within budget. Loop will rebuild with a fresh blockhash.
+    }
+  }
+
+  throw new Error(
+    `Processing fee transfer failed after ${MAX_SEND_ATTEMPTS} attempts. Last error: ${
+      lastError?.message ?? lastError ?? "unknown"
+    }${lastSignature ? ` Last signature: ${lastSignature}` : ""}`,
   );
-  tx.feePayer = escrowKeypair.publicKey;
-  tx.recentBlockhash = blockhash;
-  tx.sign(escrowKeypair);
-
-  const signature = await connection.sendRawTransaction(tx.serialize(), {
-    preflightCommitment: "confirmed",
-  });
-
-  await connection.confirmTransaction(
-    { signature, blockhash, lastValidBlockHeight },
-    "confirmed",
-  );
-
-  console.log(`[launch ${launchId}] Processing fee sent: ${signature}`);
-  console.log(`[launch ${launchId}] Solscan: https://solscan.io/tx/${signature}`);
-
-  return {
-    charged: true,
-    signature,
-    feeLamports: PROCESSING_FEE_LAMPORTS,
-  };
 }
