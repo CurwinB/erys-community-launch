@@ -288,6 +288,23 @@ const SponsoredPage = () => {
                   />
                 </div>
                 <div>
+                  <Label htmlFor="launch_dt">Launch time (1–72h ahead) *</Label>
+                  <Input
+                    id="launch_dt"
+                    type="datetime-local"
+                    value={launchDatetime}
+                    onChange={(e) => setLaunchDatetime(e.target.value)}
+                    min={minDateTime}
+                    max={maxDateTime}
+                    required
+                    className="rounded-none mt-1"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    If your chosen minute is full, we'll slide forward to the next open
+                    Pump.fun slot.
+                  </p>
+                </div>
+                <div>
                   <Label htmlFor="description">Description</Label>
                   <Textarea
                     id="description"
