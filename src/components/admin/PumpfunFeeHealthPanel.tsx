@@ -10,7 +10,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ExternalLink, Loader2, RefreshCw, AlertTriangle } from "lucide-react";
+import { ExternalLink, Loader2, RefreshCw, AlertTriangle, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { formatSolNumber, lamportsToSol, truncate } from "@/lib/adminFormat";
 
@@ -114,6 +114,15 @@ const PumpfunFeeHealthPanel = () => {
   const balanceLow =
     custodialBalance !== null && custodialBalance < 5_000_000; // < 0.005 SOL
 
+  const copyCustodialAddress = async () => {
+    try {
+      await navigator.clipboard.writeText(CUSTODIAL_WALLET);
+      toast.success("Custodial wallet address copied");
+    } catch {
+      toast.error("Could not copy address");
+    }
+  };
+
   return (
     <div className="bg-card border border-border rounded-none p-4">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -167,10 +176,28 @@ const PumpfunFeeHealthPanel = () => {
       {balanceLow && (
         <div className="bg-destructive/10 border border-destructive rounded-none p-3 mb-3 flex items-start gap-2">
           <AlertTriangle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
-          <div className="text-xs">
-            Custodial wallet balance is below 0.005 SOL. Fee claims and new
-            launches may fail. Top up{" "}
-            <span className="font-mono">{truncate(CUSTODIAL_WALLET, 6, 6)}</span>.
+          <div className="text-xs flex-1">
+            <div className="font-bold text-destructive mb-1">
+              Custodial wallet underfunded — fee claims paused
+            </div>
+            <div className="text-muted-foreground">
+              Balance is below 0.005 SOL. The distributor will not attempt
+              creator-fee claims until the wallet is topped up. Recommended
+              top-up: 0.05 SOL.
+            </div>
+            <div className="mt-2 flex items-center gap-2 flex-wrap">
+              <span className="font-mono text-foreground">
+                {CUSTODIAL_WALLET}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="rounded-none h-6 px-2"
+                onClick={copyCustodialAddress}
+              >
+                <Copy className="h-3 w-3 mr-1" /> Copy
+              </Button>
+            </div>
           </div>
         </div>
       )}
