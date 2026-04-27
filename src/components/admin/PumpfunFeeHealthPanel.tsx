@@ -23,9 +23,13 @@ interface PumpfunLaunchRow {
   pumpfun_fees_last_claimed_at: string | null;
   pumpfun_last_claim_attempt_at: string | null;
   pumpfun_last_claim_error: string | null;
+  pumpfun_creator_vault_balance_lamports: number | null;
+  pumpfun_creator_vault_checked_at: string | null;
 }
 
 const CUSTODIAL_WALLET = "8fjQrCqeJfNgc5QQRarykX1eBwL7Xt5dvFi5hA2bqGed";
+// Mirror of distributor PUMPFUN_MIN_CLAIM_LAMPORTS default
+const MIN_CLAIM_LAMPORTS = 600_000;
 const RPC_URL =
   (import.meta.env.VITE_SOLANA_RPC_URL as string | undefined) ||
   "https://api.mainnet-beta.solana.com";
@@ -56,7 +60,7 @@ const PumpfunFeeHealthPanel = () => {
       const { data, error } = await supabase
         .from("launches")
         .select(
-          "id, token_name, token_symbol, token_mint_address, pumpfun_fees_claimed_total, pumpfun_fees_last_claimed_at, pumpfun_last_claim_attempt_at, pumpfun_last_claim_error"
+          "id, token_name, token_symbol, token_mint_address, pumpfun_fees_claimed_total, pumpfun_fees_last_claimed_at, pumpfun_last_claim_attempt_at, pumpfun_last_claim_error, pumpfun_creator_vault_balance_lamports, pumpfun_creator_vault_checked_at"
         )
         .eq("platform", "pumpfun")
         .eq("status", "launched")
@@ -209,6 +213,7 @@ const PumpfunFeeHealthPanel = () => {
               <TableHead>Token</TableHead>
               <TableHead>Mint</TableHead>
               <TableHead className="text-right">Claimed Total</TableHead>
+              <TableHead className="text-right">Vault Balance</TableHead>
               <TableHead>Last Successful</TableHead>
               <TableHead>Last Attempt</TableHead>
               <TableHead>Last Error</TableHead>
@@ -219,7 +224,7 @@ const PumpfunFeeHealthPanel = () => {
             {isLoading && (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={8}
                   className="text-center text-muted-foreground py-6 font-mono text-xs"
                 >
                   Loading…
@@ -229,7 +234,7 @@ const PumpfunFeeHealthPanel = () => {
             {!isLoading && rows.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={8}
                   className="text-center text-muted-foreground py-6 font-mono text-xs"
                 >
                   No launched Pump.fun tokens
@@ -241,6 +246,10 @@ const PumpfunFeeHealthPanel = () => {
                 Number(row.pumpfun_fees_claimed_total ?? 0)
               );
               const hasError = !!row.pumpfun_last_claim_error;
+              const vaultLamports = Number(
+                row.pumpfun_creator_vault_balance_lamports ?? 0
+              );
+              const vaultEligible = vaultLamports >= MIN_CLAIM_LAMPORTS;
               return (
                 <TableRow key={row.id} className="border-border align-top">
                   <TableCell>
@@ -268,6 +277,28 @@ const PumpfunFeeHealthPanel = () => {
                   </TableCell>
                   <TableCell className="font-mono text-right text-xs">
                     {formatSolNumber(claimedSol)} SOL
+                  </TableCell>
+                  <TableCell className="font-mono text-right text-xs">
+                    {row.pumpfun_creator_vault_checked_at ? (
+                      <div>
+                        <div
+                          className={
+                            vaultEligible ? "text-primary font-bold" : ""
+                          }
+                        >
+                          {formatSolNumber(lamportsToSol(vaultLamports))} SOL
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">
+                          {vaultEligible
+                            ? "≥ threshold"
+                            : `< ${formatSolNumber(
+                                lamportsToSol(MIN_CLAIM_LAMPORTS)
+                              )} threshold`}
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                   <TableCell className="font-mono text-xs">
                     {timeAgo(row.pumpfun_fees_last_claimed_at)}
