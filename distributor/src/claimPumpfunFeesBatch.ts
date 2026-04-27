@@ -6,7 +6,6 @@ import {
   Keypair,
   LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
-import bs58 from "bs58";
 import {
   Launch,
   claimPumpfunFeeBatchForWorker,
@@ -18,12 +17,13 @@ import {
   recordPumpfunCreatorVaultBalance,
 } from "./db";
 import { withCustodialLock } from "./custodialLock";
+import {
+  getAllWallets,
+  type PumpPortalWallet,
+} from "./pumpportalWalletPool";
 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
 const ERYS_PLATFORM_WALLET = process.env.BAGS_PARTNER_WALLET!;
-const PUMPPORTAL_API_KEY = process.env.PUMPPORTAL_API_KEY;
-const PUMPPORTAL_CUSTODIAL_PRIVATE_KEY = process.env.PUMPPORTAL_CUSTODIAL_PRIVATE_KEY;
-const PUMPPORTAL_CUSTODIAL_WALLET = process.env.PUMPPORTAL_CUSTODIAL_WALLET;
 const PUMP_PROGRAM_ID = new PublicKey(
   process.env.PUMP_PROGRAM_ID || "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 );
@@ -59,30 +59,6 @@ function getCreatorVaultPda(creator: PublicKey): PublicKey {
   )[0];
 }
 
-let cachedCustodialKeypair: Keypair | null = null;
-function getCustodialKeypair(): Keypair {
-  if (cachedCustodialKeypair) return cachedCustodialKeypair;
-  if (!PUMPPORTAL_CUSTODIAL_PRIVATE_KEY) {
-    throw new Error("PUMPPORTAL_CUSTODIAL_PRIVATE_KEY env var is not set");
-  }
-  const secret = bs58.decode(PUMPPORTAL_CUSTODIAL_PRIVATE_KEY);
-  if (secret.length !== 64) {
-    throw new Error(
-      `PUMPPORTAL_CUSTODIAL_PRIVATE_KEY decoded to ${secret.length} bytes, expected 64`
-    );
-  }
-  cachedCustodialKeypair = Keypair.fromSecretKey(new Uint8Array(secret));
-  if (
-    PUMPPORTAL_CUSTODIAL_WALLET &&
-    cachedCustodialKeypair.publicKey.toBase58() !== PUMPPORTAL_CUSTODIAL_WALLET
-  ) {
-    throw new Error(
-      `PUMPPORTAL_CUSTODIAL_PRIVATE_KEY pubkey mismatch with PUMPPORTAL_CUSTODIAL_WALLET`
-    );
-  }
-  return cachedCustodialKeypair;
-}
-
 interface PerLaunchResult {
   launch: Launch;
   claimedLamports: number; // share of the batch-claim total attributed to this launch
@@ -114,10 +90,6 @@ interface PerLaunchResult {
  * launch row so it shows up in the admin panel.
  */
 export async function claimPumpfunFeesBatch(): Promise<void> {
-  if (!PUMPPORTAL_API_KEY) {
-    console.error("PUMPPORTAL_API_KEY not set; skipping batched fee claim");
-    return;
-  }
   if (!ERYS_PLATFORM_WALLET) {
     console.error(
       "BAGS_PARTNER_WALLET (treasury) not set; skipping batched fee claim"
@@ -136,22 +108,57 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
     return;
   }
 
-  let custodialKeypair: Keypair;
+  let wallets: PumpPortalWallet[];
   try {
-    custodialKeypair = getCustodialKeypair();
+    wallets = getAllWallets();
   } catch (err: any) {
-    console.error("Custodial wallet not configured:", err?.message ?? err);
+    console.error("PumpPortal wallet pool misconfigured:", err?.message ?? err);
+    return;
+  }
+  if (wallets.length === 0) {
+    console.error(
+      "No PumpPortal custodial wallets configured; skipping batched fee claim"
+    );
     return;
   }
 
-  const launches = await claimPumpfunFeeBatchForWorker(WORKER_ID, BATCH_SIZE);
+  const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+
+  // Iterate the pool. Each wallet has its OWN creator vault PDA, its OWN
+  // custodial lock key, and its OWN PumpPortal API key, so different wallets
+  // can be processed in parallel by different distributor replicas without
+  // interference. Within a single replica we process them sequentially to
+  // keep RPC fan-out bounded.
+  for (const wallet of wallets) {
+    try {
+      await claimForWallet(wallet, connection, treasuryPubkey);
+    } catch (err: any) {
+      console.error(
+        `Wallet slot ${wallet.slot} (${wallet.pubkey}) batch failed: ${
+          err?.message ?? err
+        }`
+      );
+    }
+  }
+}
+
+async function claimForWallet(
+  wallet: PumpPortalWallet,
+  connection: Connection,
+  treasuryPubkey: PublicKey
+): Promise<void> {
+  const launches = await claimPumpfunFeeBatchForWorker(
+    WORKER_ID,
+    BATCH_SIZE,
+    wallet.pubkey
+  );
   if (launches.length === 0) return;
 
   console.log(
-    `Worker ${WORKER_ID} batched ${launches.length} Pump.fun launch(es) for fee claim`
+    `Worker ${WORKER_ID} batched ${launches.length} launch(es) on wallet slot ${wallet.slot}`
   );
 
-  const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+  const custodialKeypair = wallet.keypair;
 
   // We no longer need escrow keys for the sweep — claimed creator fees are
   // sent directly from the custodial wallet to the platform treasury. We
@@ -170,8 +177,8 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
 
   // ============================================================
   // CRITICAL SECTION: hold the custodial lock for the WHOLE batch.
-  // This is the bottleneck-buster: instead of N lock acquisitions
-  // serialized across all replicas, we do ONE.
+  // Lock key = THIS wallet's pubkey, so other wallets in the pool
+  // can be claimed in parallel by other replicas.
   // ============================================================
   const lockKey = custodialKeypair.publicKey.toBase58();
   let preBalance = 0n;
@@ -267,7 +274,7 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
 
         // ONE collectCreatorFee call drains every creator vault our wallet
         // owns. `mint` is ignored when pool === "pump".
-        const claimRes = await collectAllCreatorFees(connection);
+        const claimRes = await collectAllCreatorFees(connection, wallet.apiKey);
         if (!claimRes.success) {
           console.error(`Batch collectCreatorFee failed: ${claimRes.error}`);
           for (const c of candidates) {
@@ -355,7 +362,7 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
     );
   } catch (lockErr: any) {
     console.error(
-      `Could not acquire custodial lock for batch fee claim: ${
+      `Could not acquire custodial lock for wallet slot ${wallet.slot}: ${
         lockErr?.message ?? lockErr
       }`
     );
@@ -380,7 +387,7 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
           treasuryWallet: treasuryPubkey.toBase58(),
           amountLamports: c.claimedLamports,
           txSignature: sweepSignature,
-          notes: `Batch sweep across ${candidates.length} launch(es)`,
+          notes: `Batch sweep across ${candidates.length} launch(es) on wallet slot ${wallet.slot}`,
         });
       } finally {
         await releaseLaunchLock(c.launch.id);
@@ -389,19 +396,18 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
   );
 
   console.log(
-    `Batch complete. Processed ${candidates.length} launch(es); swept ${
+    `Batch complete on wallet slot ${wallet.slot}. Processed ${candidates.length} launch(es); swept ${
       Number(sweepableLamports) / LAMPORTS_PER_SOL
     } SOL to treasury.`
   );
 }
 
 async function collectAllCreatorFees(
-  connection: Connection
+  connection: Connection,
+  apiKey: string
 ): Promise<{ success: true } | { success: false; error: string }> {
   const response = await fetch(
-    `https://pumpportal.fun/api/trade?api-key=${encodeURIComponent(
-      PUMPPORTAL_API_KEY!
-    )}`,
+    `https://pumpportal.fun/api/trade?api-key=${encodeURIComponent(apiKey)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
