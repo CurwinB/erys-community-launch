@@ -655,6 +655,24 @@ const WalletDropdown = () => {
                     onChange={(e) => setSendAmount(e.target.value)}
                     className="font-mono text-xs"
                   />
+                  <div className="grid grid-cols-4 gap-1">
+                    {([
+                      { label: "25%", pct: 0.25 as const },
+                      { label: "50%", pct: 0.5 as const },
+                      { label: "75%", pct: 0.75 as const },
+                      { label: "Max", pct: 1 as const },
+                    ]).map((opt) => (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        disabled={percentDisabled}
+                        onClick={() => setAmountByPercent(opt.pct)}
+                        className="border border-border bg-card px-2 py-1 font-mono text-[11px] text-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border disabled:hover:text-foreground"
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
                   {recipientNeedsAta && (
                     <p className="text-xs text-yellow-500">
                       ⚠ Recipient has no token account. ATA creation will cost ~0.00204 SOL.
