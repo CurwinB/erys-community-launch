@@ -138,6 +138,8 @@ export type Database = {
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
+          pumpfun_creator_vault_balance_lamports: number | null
+          pumpfun_creator_vault_checked_at: string | null
           pumpfun_fees_claimed_total: number | null
           pumpfun_fees_last_claimed_at: string | null
           pumpfun_last_claim_attempt_at: string | null
@@ -187,6 +189,8 @@ export type Database = {
           processing_fee_tx_signature?: string | null
           pumpfun_consecutive_empty_claims?: number
           pumpfun_creator_fees_distributed?: number | null
+          pumpfun_creator_vault_balance_lamports?: number | null
+          pumpfun_creator_vault_checked_at?: string | null
           pumpfun_fees_claimed_total?: number | null
           pumpfun_fees_last_claimed_at?: string | null
           pumpfun_last_claim_attempt_at?: string | null
@@ -236,6 +240,8 @@ export type Database = {
           processing_fee_tx_signature?: string | null
           pumpfun_consecutive_empty_claims?: number
           pumpfun_creator_fees_distributed?: number | null
+          pumpfun_creator_vault_balance_lamports?: number | null
+          pumpfun_creator_vault_checked_at?: string | null
           pumpfun_fees_claimed_total?: number | null
           pumpfun_fees_last_claimed_at?: string | null
           pumpfun_last_claim_attempt_at?: string | null
@@ -348,6 +354,8 @@ export type Database = {
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
+          pumpfun_creator_vault_balance_lamports: number | null
+          pumpfun_creator_vault_checked_at: string | null
           pumpfun_fees_claimed_total: number | null
           pumpfun_fees_last_claimed_at: string | null
           pumpfun_last_claim_attempt_at: string | null
@@ -410,6 +418,8 @@ export type Database = {
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
+          pumpfun_creator_vault_balance_lamports: number | null
+          pumpfun_creator_vault_checked_at: string | null
           pumpfun_fees_claimed_total: number | null
           pumpfun_fees_last_claimed_at: string | null
           pumpfun_last_claim_attempt_at: string | null
@@ -468,6 +478,8 @@ export type Database = {
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
+          pumpfun_creator_vault_balance_lamports: number | null
+          pumpfun_creator_vault_checked_at: string | null
           pumpfun_fees_claimed_total: number | null
           pumpfun_fees_last_claimed_at: string | null
           pumpfun_last_claim_attempt_at: string | null
@@ -530,6 +542,8 @@ export type Database = {
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
+          pumpfun_creator_vault_balance_lamports: number | null
+          pumpfun_creator_vault_checked_at: string | null
           pumpfun_fees_claimed_total: number | null
           pumpfun_fees_last_claimed_at: string | null
           pumpfun_last_claim_attempt_at: string | null
@@ -588,6 +602,8 @@ export type Database = {
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
+          pumpfun_creator_vault_balance_lamports: number | null
+          pumpfun_creator_vault_checked_at: string | null
           pumpfun_fees_claimed_total: number | null
           pumpfun_fees_last_claimed_at: string | null
           pumpfun_last_claim_attempt_at: string | null
@@ -642,6 +658,10 @@ export type Database = {
       is_admin_wallet: { Args: { p_wallet: string }; Returns: boolean }
       mark_pumpfun_fee_claim_attempt: {
         Args: { p_launch_id: string }
+        Returns: undefined
+      }
+      record_pumpfun_creator_vault_balance: {
+        Args: { p_balance_lamports: number; p_launch_ids: string[] }
         Returns: undefined
       }
       record_pumpfun_empty_claim: {
