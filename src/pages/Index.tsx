@@ -49,7 +49,7 @@ const Index = () => {
       if (!liveLaunches) return {};
       const ids = liveLaunches.map((l) => l.id);
       const { data, error } = await supabase
-        .from("contributions")
+        .from("contributions_public")
         .select("launch_id, amount_lamports")
         .in("launch_id", ids);
       if (error) throw error;

@@ -47,8 +47,8 @@ const LaunchPage = () => {
     refetchInterval: 30000,
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("contributions")
-        .select("*")
+        .from("contributions_public")
+        .select("id, launch_id, wallet_address, amount_lamports, contributed_at")
         .eq("launch_id", id!)
         .order("contributed_at", { ascending: false });
       if (error) throw error;
