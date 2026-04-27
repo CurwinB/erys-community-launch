@@ -482,6 +482,29 @@ const SchedulePage = () => {
               Your {form.creatorContribution} SOL seed contribution is in escrow. Share this link with your community.
             </p>
 
+            {adjustedNotice && (
+              <div className="rounded-sm border border-amber-500/40 bg-amber-500/10 p-3 text-left">
+                <p className="text-xs leading-relaxed text-amber-600 dark:text-amber-400">
+                  <strong>Time adjusted:</strong> the slot you picked was full,
+                  so your launch was moved from{" "}
+                  <strong>
+                    {new Date(adjustedNotice.from).toLocaleString([], {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    })}
+                  </strong>{" "}
+                  to{" "}
+                  <strong>
+                    {new Date(adjustedNotice.to).toLocaleString([], {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    })}
+                  </strong>
+                  .
+                </p>
+              </div>
+            )}
+
             <div className="flex items-center gap-2 rounded-sm border border-border bg-background p-3">
               <code className="flex-1 truncate text-xs text-primary">{successData.url}</code>
               <Button variant="outline" size="icon" className="h-8 w-8 flex-shrink-0" onClick={copyLink}>
