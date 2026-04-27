@@ -2,6 +2,7 @@ import * as dotenv from "dotenv";
 dotenv.config();
 
 import { executeAllPendingLaunches } from "./executeLaunch";
+import { fundAllPendingSponsoredEscrows } from "./fundSponsoredEscrow";
 import { getAllWallets } from "./pumpportalWalletPool";
 import { supabase } from "./db";
 
@@ -63,8 +64,13 @@ async function main(): Promise<void> {
     console.warn(`Could not publish wallet pool size: ${err?.message ?? err}`);
   }
 
-  await executeAllPendingLaunches(WORKER_ID);
-  setInterval(() => executeAllPendingLaunches(WORKER_ID), POLL_INTERVAL_MS);
+  const tick = async () => {
+    await fundAllPendingSponsoredEscrows(WORKER_ID);
+    await executeAllPendingLaunches(WORKER_ID);
+  };
+
+  await tick();
+  setInterval(tick, POLL_INTERVAL_MS);
 
   process.on("SIGTERM", () => {
     console.log("SIGTERM received. Shutting down...");

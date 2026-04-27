@@ -23,6 +23,15 @@ type SlotState =
       };
     }
   | {
+      kind: "funding";
+      launchId: string;
+      tokenName: string;
+      launchDatetime: string;
+      wasAdjusted: boolean;
+      offsetMinutes: number;
+      pollAttempts: number;
+    }
+  | {
       kind: "success";
       launchUrl: string;
       tokenName: string;
@@ -184,14 +193,17 @@ const SponsoredPage = () => {
       if (error) throw error;
       if (!data?.success) throw new Error(data?.error || "Failed to claim slot");
 
-      const fullUrl = `${window.location.origin}${data.launch_url}`;
+      // Edge function only writes the DB row; the Railway executor funds the
+      // escrow asynchronously. Switch to the funding state and poll until
+      // the launch flips to 'scheduled' (success) or 'cancelled' (failure).
       setState({
-        kind: "success",
-        launchUrl: fullUrl,
+        kind: "funding",
+        launchId: data.launch_id,
         tokenName: tokenName.trim(),
         launchDatetime: data.adjusted_launch_datetime || launchIso,
         wasAdjusted: Boolean(data.was_adjusted),
         offsetMinutes: Number(data.offset_minutes ?? 0),
+        pollAttempts: 0,
       });
     } catch (err: any) {
       toast.error(err.message || "Failed to submit");
@@ -199,6 +211,74 @@ const SponsoredPage = () => {
       setSubmitting(false);
     }
   }
+
+  // Poll launch status while the executor funds the sponsored escrow.
+  useEffect(() => {
+    if (state.kind !== "funding") return;
+    const MAX_POLLS = 30; // ~60s at 2s interval
+    let cancelled = false;
+
+    const poll = async () => {
+      const { data, error } = await supabase.rpc("get_launch_public", {
+        p_id: state.launchId,
+      });
+      if (cancelled) return;
+      const row: any = Array.isArray(data) ? data[0] : data;
+      if (error || !row) {
+        // transient — keep polling
+        bump();
+        return;
+      }
+      if (row.status === "scheduled" || row.status === "executing" || row.status === "launched") {
+        const fullUrl = `${window.location.origin}/launch/${state.launchId}`;
+        setState({
+          kind: "success",
+          launchUrl: fullUrl,
+          tokenName: state.tokenName,
+          launchDatetime: state.launchDatetime,
+          wasAdjusted: state.wasAdjusted,
+          offsetMinutes: state.offsetMinutes,
+        });
+        return;
+      }
+      if (row.status === "cancelled") {
+        setState({
+          kind: "error",
+          message:
+            "Funding the sponsored escrow failed. Please contact info@erys.live for a new link.",
+        });
+        return;
+      }
+      bump();
+    };
+
+    const bump = () => {
+      if (cancelled) return;
+      setState((prev) => {
+        if (prev.kind !== "funding") return prev;
+        if (prev.pollAttempts >= MAX_POLLS) {
+          // Timed out — assume it's still working; show success card with a
+          // note so the user can refresh the launch page later.
+          const fullUrl = `${window.location.origin}/launch/${prev.launchId}`;
+          return {
+            kind: "success",
+            launchUrl: fullUrl,
+            tokenName: prev.tokenName,
+            launchDatetime: prev.launchDatetime,
+            wasAdjusted: prev.wasAdjusted,
+            offsetMinutes: prev.offsetMinutes,
+          };
+        }
+        return { ...prev, pollAttempts: prev.pollAttempts + 1 };
+      });
+    };
+
+    const t = setTimeout(poll, state.pollAttempts === 0 ? 1500 : 2000);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [state]);
 
   const copyLink = async (url: string) => {
     await navigator.clipboard.writeText(url);
@@ -375,6 +455,21 @@ const SponsoredPage = () => {
               </form>
             </Card>
           </>
+        )}
+
+        {state.kind === "funding" && (
+          <Card className="rounded-none border-primary/40 bg-card p-8 text-center">
+            <Loader2 className="mx-auto h-10 w-10 text-primary animate-spin mb-4" />
+            <h1 className="text-2xl font-bold mb-2">Funding your launch…</h1>
+            <p className="text-muted-foreground mb-2">
+              We're transferring{" "}
+              <span className="text-foreground font-semibold">{seedSol} SOL</span>{" "}
+              from the Erys treasury to your launch escrow on Solana.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              This usually takes 5–15 seconds. Don't close this tab.
+            </p>
+          </Card>
         )}
 
         {state.kind === "success" && (

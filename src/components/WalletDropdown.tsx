@@ -91,10 +91,10 @@ const WalletDropdown = () => {
       setSolBalance(lamports / LAMPORTS_PER_SOL);
 
       const { data: contributionsRaw } = await supabase.rpc(
-        "list_my_contributions",
-        { p_wallet: publicKey }
+        "list_my_contributions" as any,
+        { p_wallet: publicKey } as any
       );
-      const contributions = (contributionsRaw ?? []).filter(
+      const contributions = ((contributionsRaw as any[]) ?? []).filter(
         (c: any) => c.tokens_distributed === true
       );
 
