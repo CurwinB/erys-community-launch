@@ -4,7 +4,7 @@ import { Launch, supabase } from "./db";
 import {
   sweepTokensToWallet,
   sweepSolToWallet,
-  getCustodialPublicKey,
+  resolveLaunchWallet,
   lamportsToSol,
 } from "./pumpportalCustodial";
 import { withCustodialLock } from "./custodialLock";
@@ -53,15 +53,19 @@ export async function recoverPumpfunSweep(launch: Launch): Promise<void> {
     return;
   }
 
-  let custodialPubkey: PublicKey;
+  let wallet;
   try {
-    custodialPubkey = getCustodialPublicKey();
+    wallet = resolveLaunchWallet(
+      launch.id,
+      (launch as any).pumpportal_wallet_pubkey ?? null
+    );
   } catch (err: any) {
     console.error(
       `[recovery] custodial wallet config invalid: ${err?.message ?? err}`
     );
     return;
   }
+  const custodialPubkey: PublicKey = wallet.publicKey;
 
   const connection = new Connection(SOLANA_RPC_URL, "confirmed");
 
@@ -76,7 +80,8 @@ export async function recoverPumpfunSweep(launch: Launch): Promise<void> {
           swept = await sweepTokensToWallet(
             connection,
             launch.token_mint_address!,
-            escrowKeypair.publicKey
+            escrowKeypair.publicKey,
+            wallet
           );
           break;
         } catch (err: any) {
@@ -109,7 +114,8 @@ export async function recoverPumpfunSweep(launch: Launch): Promise<void> {
       try {
         const solSweep = await sweepSolToWallet(
           connection,
-          escrowKeypair.publicKey
+          escrowKeypair.publicKey,
+          wallet
         );
         if (solSweep) {
           console.log(
