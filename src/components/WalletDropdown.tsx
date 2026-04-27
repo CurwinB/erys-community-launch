@@ -78,6 +78,45 @@ const WalletDropdown = () => {
   const [recipientNeedsAta, setRecipientNeedsAta] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // Compute the maximum sendable balance for the active asset.
+  // For SOL we leave a tiny reserve so the tx still has room for the
+  // network signature fee (~5 000 lamports = 0.000005 SOL; we keep 0.00001
+  // for safety). For SPL tokens the full balance is sendable since the
+  // network fee is paid in SOL, not the token itself.
+  const SOL_FEE_RESERVE = 0.00001;
+
+  const formatSolAmount = (n: number) => {
+    if (!Number.isFinite(n) || n <= 0) return "";
+    // Up to 6 decimals, strip trailing zeros so the input stays clean.
+    return n.toFixed(6).replace(/\.?0+$/, "");
+  };
+
+  const formatTokenAmount = (n: number, decimals: number) => {
+    if (!Number.isFinite(n) || n <= 0) return "";
+    const d = Math.min(Math.max(decimals, 0), 9);
+    return n.toFixed(d).replace(/\.?0+$/, "");
+  };
+
+  const setAmountByPercent = (pct: 0.25 | 0.5 | 0.75 | 1) => {
+    if (sendMode === "sol") {
+      if (solBalance == null || solBalance <= 0) return;
+      const usable = Math.max(solBalance - SOL_FEE_RESERVE, 0);
+      const target = pct === 1 ? usable : solBalance * pct;
+      setSendAmount(formatSolAmount(target));
+    } else if (sendMode === "token" && selectedToken) {
+      const total =
+        Number(selectedToken.balance) /
+        Math.pow(10, selectedToken.decimals || 6);
+      if (!Number.isFinite(total) || total <= 0) return;
+      setSendAmount(formatTokenAmount(total * pct, selectedToken.decimals || 6));
+    }
+  };
+
+  const percentDisabled =
+    sendMode === "sol"
+      ? solBalance == null || solBalance <= 0
+      : !selectedToken || selectedToken.balance <= 0n;
+
   const loadBalances = async () => {
     if (!publicKey) return;
     setLoadingBalances(true);
