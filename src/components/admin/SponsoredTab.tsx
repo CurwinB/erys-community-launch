@@ -200,16 +200,18 @@ const SponsoredTab = ({ launches }: Props) => {
               <TableHead>Influencer</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Token</TableHead>
+              <TableHead>Delivery wallet</TableHead>
               <TableHead>Launch time</TableHead>
               <TableHead>Link expires</TableHead>
               <TableHead>Claimed at</TableHead>
+              <TableHead>Recovery</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {sponsored.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                   No sponsored slots yet
                 </TableCell>
               </TableRow>
@@ -225,6 +227,13 @@ const SponsoredTab = ({ launches }: Props) => {
                 <TableCell className="font-mono text-xs">
                   {l.token_symbol === "PENDING" ? "—" : l.token_symbol}
                 </TableCell>
+                <TableCell className="font-mono text-xs">
+                  {l.creator_delivery_wallet ? (
+                    truncate(l.creator_delivery_wallet)
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
                 <TableCell className="text-xs">
                   {l.launch_datetime ? (
                     fmt(l.launch_datetime)
@@ -234,6 +243,25 @@ const SponsoredTab = ({ launches }: Props) => {
                 </TableCell>
                 <TableCell className="text-xs">{fmt(l.sponsor_link_expires_at)}</TableCell>
                 <TableCell className="text-xs">{fmt(l.sponsor_link_claimed_at)}</TableCell>
+                <TableCell className="text-xs">
+                  {l.status === "cancelled" ? (
+                    l.sponsor_recovery_tx_signature ? (
+                      <span className="text-primary">
+                        ✓ {((l.sponsor_recovery_amount_lamports ?? 0) / 1_000_000_000).toFixed(4)} SOL
+                      </span>
+                    ) : l.sponsor_recovery_completed_at ? (
+                      <span className="text-muted-foreground">Nothing to sweep</span>
+                    ) : l.sponsor_recovery_error ? (
+                      <span className="text-destructive" title={l.sponsor_recovery_error}>
+                        Retry pending
+                      </span>
+                    ) : (
+                      <span className="text-amber-400">Pending sweep…</span>
+                    )
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
                 <TableCell className="text-right">
                   <div className="flex justify-end gap-1">
                     {l.status === "sponsor_pending" && l.sponsor_link_token && (
