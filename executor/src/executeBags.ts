@@ -127,15 +127,23 @@ export async function executeBagsLaunch(
   console.log(`Fresh tokenMint: ${tokenMint.toBase58()}`);
   console.log(`Fresh metadataUrl: ${ipfsMetadataUrl}`);
 
-  // Persist fresh mint + IPFS, clear any stale fee-share config
+  // Persist fresh mint + IPFS. Only clear `fee_share_config_key` if the mint
+  // actually changed — otherwise we'd lose a key from a prior partial run
+  // and trip Bags' "Config already exists" guard on retry.
+  const mintChanged =
+    !launch.token_mint_address ||
+    launch.token_mint_address !== tokenMint.toBase58();
+  const updatePayload: Record<string, unknown> = {
+    token_mint_address: tokenMint.toBase58(),
+    ipfs_metadata_url: ipfsMetadataUrl,
+  };
+  if (mintChanged) {
+    updatePayload.fee_share_config_key = null;
+    updatePayload.claimer_count = null;
+  }
   const { error: updateErr } = await supabase
     .from("launches")
-    .update({
-      token_mint_address: tokenMint.toBase58(),
-      ipfs_metadata_url: ipfsMetadataUrl,
-      fee_share_config_key: null,
-      claimer_count: null,
-    })
+    .update(updatePayload)
     .eq("id", launch.id);
   if (updateErr) {
     await setFailed(
@@ -144,8 +152,10 @@ export async function executeBagsLaunch(
     );
     return;
   }
-  launch.fee_share_config_key = null;
-  launch.claimer_count = null;
+  if (mintChanged) {
+    launch.fee_share_config_key = null;
+    launch.claimer_count = null;
+  }
 
   // Compute net buy lamports (subtract reserves for ATAs, lookup table, fees)
   const totalLamports = contributions.reduce(
@@ -305,6 +315,8 @@ export async function executeBagsLaunch(
       /block height exceeded|blockhash not found|TransactionExpiredBlockheightExceededError|expired/i.test(
         msg,
       );
+    const isAlreadyExistsError = (msg: string) =>
+      /config already exists|already initialized|already in use/i.test(msg);
 
     let lastErr: any = null;
     let submitted = false;
@@ -321,10 +333,43 @@ export async function executeBagsLaunch(
           additionalLookupTables,
         });
       } catch (err: any) {
-        // Build-time errors are not retryable (auth, schema, etc.)
+        const buildMsg = err?.message ?? String(err);
+        // "Config already exists" means a previous attempt's fee-share
+        // bundle landed on-chain but we lost the config key (worker died
+        // mid-run, distributor reset, etc.). Bags' API may return the
+        // existing key on the error object — try to recover it.
+        if (isAlreadyExistsError(buildMsg)) {
+          const recovered =
+            err?.meteoraConfigKey?.toBase58?.() ??
+            err?.configKey?.toBase58?.() ??
+            err?.response?.meteoraConfigKey ??
+            err?.response?.configKey ??
+            err?.data?.meteoraConfigKey ??
+            err?.data?.configKey ??
+            null;
+          if (recovered && typeof recovered === "string") {
+            console.log(
+              `Fee-share config already on-chain — recovered key from API error: ${recovered}`,
+            );
+            configKeyStr = recovered;
+            await storeFeeShareConfig(
+              launch.id,
+              configKeyStr,
+              feeClaimers.length,
+            );
+            submitted = true;
+            break;
+          }
+          await setFailed(
+            launch.id,
+            `createBagsFeeShareConfig says "Config already exists" but did not return the existing config key. Manual recovery needed: query Bags for the config PDA matching mint ${tokenMint.toBase58()} + this claimer set, then UPDATE launches SET fee_share_config_key='<key>' WHERE id='${launch.id}' and retry.`,
+          );
+          return;
+        }
+        // Other build-time errors are not retryable (auth, schema, etc.)
         await setFailed(
           launch.id,
-          `createBagsFeeShareConfig failed: ${err.message}`,
+          `createBagsFeeShareConfig failed: ${buildMsg}`,
         );
         return;
       }
