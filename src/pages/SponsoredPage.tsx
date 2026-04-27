@@ -451,6 +451,24 @@ const SponsoredPage = () => {
                   </div>
                 </div>
 
+                <div className="border border-primary/40 bg-card p-4 space-y-2">
+                  <Label htmlFor="delivery_wallet" className="text-sm font-semibold text-foreground">
+                    Pump.fun wallet (optional)
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Receive your token allocation at a wallet you control so you can
+                    trade immediately when the launch goes live on Pump.fun. Leave
+                    blank to skip — you can claim later via Erys.
+                  </p>
+                  <Input
+                    id="delivery_wallet"
+                    value={creatorDeliveryWallet}
+                    onChange={(e) => setCreatorDeliveryWallet(e.target.value)}
+                    placeholder="Enter Solana wallet address"
+                    className="rounded-none mt-1 font-mono text-xs"
+                  />
+                </div>
+
                 <Button
                   type="submit"
                   disabled={submitting}
