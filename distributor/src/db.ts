@@ -25,6 +25,7 @@ export interface Launch {
   pumpfun_fees_claimed_total: number;
   worker_locked_at: string | null;
   worker_id: string | null;
+  pumpportal_wallet_pubkey: string | null;
 }
 
 export interface Contribution {
@@ -94,7 +95,8 @@ export async function claimNextPumpfunFeeClaim(workerId: string): Promise<Launch
 // Single round-trip — much cheaper than calling claimNextPumpfunFeeClaim N times.
 export async function claimPumpfunFeeBatchForWorker(
   workerId: string,
-  limit: number
+  limit: number,
+  walletPubkey?: string | null
 ): Promise<Launch[]> {
   const { data, error } = await supabase.rpc(
     "claim_pumpfun_launches_batch_for_worker",
@@ -102,6 +104,7 @@ export async function claimPumpfunFeeBatchForWorker(
       p_worker_id: workerId,
       p_limit: limit,
       p_lock_expiry_seconds: 300,
+      p_wallet_pubkey: walletPubkey ?? null,
     }
   );
   if (error) {
