@@ -60,11 +60,9 @@ export function useDashboardNotifications() {
     queryKey: ["dashboard-contributions", walletAddress],
     enabled: connected && !!walletAddress,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("contributions")
-        .select(`*, launches(${LAUNCH_PUBLIC_COLUMNS})`)
-        .eq("wallet_address", walletAddress)
-        .order("contributed_at", { ascending: false });
+      const { data, error } = await supabase.rpc("list_my_contributions", {
+        p_wallet: walletAddress!,
+      });
       if (error) throw error;
       return data || [];
     },
