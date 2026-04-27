@@ -5,7 +5,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.0";
 import {
   findNextAvailableSlot,
-  PLATFORM_CAPS,
+  getPlatformCap,
   type Platform,
 } from "../_shared/scheduleCapacity.ts";
 
@@ -45,10 +45,12 @@ Deno.serve(async (req) => {
       launch_datetime
     );
 
+    const cap = await getPlatformCap(supabase, platform as Platform);
+
     return json({
       ...slot,
       platform,
-      cap_per_minute: PLATFORM_CAPS[platform as Platform],
+      cap_per_minute: cap,
     });
   } catch (err: any) {
     console.error("check-launch-slot error:", err);

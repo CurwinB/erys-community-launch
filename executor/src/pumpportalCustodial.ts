@@ -16,21 +16,21 @@ import {
   getAccount,
 } from "@solana/spl-token";
 import bs58 from "bs58";
+import {
+  getWalletByPubkey,
+  getWalletForLaunch,
+  type PumpPortalWallet,
+} from "./pumpportalWalletPool";
 
 /**
- * Helpers for working with the shared PumpPortal Lightning custodial wallet.
+ * Helpers for working with PumpPortal Lightning custodial wallets.
  *
- * The PumpPortal Lightning API signs and submits all create / buy / sell
- * transactions using a custodial wallet that PumpPortal generates for you.
- * Per their FAQ, the wallet is a normal Solana keypair — they give you the
- * private key on creation and we hold it as a secret. We use that private
- * key to sweep tokens and SOL back to the per-launch escrow wallet so the
- * rest of the system (distributor, fee claimer, refund flow) keeps working
- * exactly as it does today, with the escrow as the source of truth.
+ * Each Pump.fun launch is bound to one wallet from the pool (see
+ * pumpportalWalletPool.ts). All on-chain operations for a launch — funding,
+ * Lightning create, post-mint sweep, fee claim, recovery — flow through
+ * that single wallet, so the lock key (= wallet pubkey) cleanly serializes
+ * per-wallet operations and lets distinct wallets run in parallel.
  */
-
-const CUSTODIAL_PRIVATE_KEY_BS58 = process.env.PUMPPORTAL_CUSTODIAL_PRIVATE_KEY!;
-const CUSTODIAL_PUBLIC_KEY = process.env.PUMPPORTAL_CUSTODIAL_WALLET!;
 
 // Keep a small SOL floor in the custodial wallet so it stays rent-exempt
 // and we don't need to fund a fresh account on the next launch.
@@ -50,35 +50,27 @@ const REBROADCAST_EVERY_MS = 5_000;
 const PER_ATTEMPT_TIMEOUT_MS = 90_000;
 const MAX_BLOCKHASH_REFRESH_ATTEMPTS = 3;
 
-let cachedKeypair: Keypair | null = null;
-
-export function getCustodialKeypair(): Keypair {
-  if (cachedKeypair) return cachedKeypair;
-  if (!CUSTODIAL_PRIVATE_KEY_BS58) {
-    throw new Error("PUMPPORTAL_CUSTODIAL_PRIVATE_KEY env var is not set");
+/**
+ * Resolve the wallet a launch should use. If the launch row has a stored
+ * pubkey (post-rollout), use that exact wallet. Otherwise fall back to the
+ * deterministic pool selection so legacy rows + brand-new launches both
+ * work identically.
+ */
+export function resolveLaunchWallet(
+  launchId: string,
+  storedPubkey?: string | null
+): PumpPortalWallet {
+  if (storedPubkey) {
+    const w = getWalletByPubkey(storedPubkey);
+    if (!w) {
+      throw new Error(
+        `Launch ${launchId} was assigned to wallet ${storedPubkey}, but that ` +
+          `wallet is no longer in the configured pool. Re-add its secrets to recover.`
+      );
+    }
+    return w;
   }
-  const secret = bs58.decode(CUSTODIAL_PRIVATE_KEY_BS58);
-  if (secret.length !== 64) {
-    throw new Error(
-      `PUMPPORTAL_CUSTODIAL_PRIVATE_KEY decoded to ${secret.length} bytes, expected 64`
-    );
-  }
-  cachedKeypair = Keypair.fromSecretKey(new Uint8Array(secret));
-  // Sanity-check: decoded pubkey must match the PUMPPORTAL_CUSTODIAL_WALLET
-  // secret. Mismatched keypair vs wallet is an instant disaster, so fail loud.
-  if (
-    CUSTODIAL_PUBLIC_KEY &&
-    cachedKeypair.publicKey.toBase58() !== CUSTODIAL_PUBLIC_KEY
-  ) {
-    throw new Error(
-      `PUMPPORTAL_CUSTODIAL_PRIVATE_KEY pubkey ${cachedKeypair.publicKey.toBase58()} does not match PUMPPORTAL_CUSTODIAL_WALLET ${CUSTODIAL_PUBLIC_KEY}`
-    );
-  }
-  return cachedKeypair;
-}
-
-export function getCustodialPublicKey(): PublicKey {
-  return getCustodialKeypair().publicKey;
+  return getWalletForLaunch(launchId);
 }
 
 /**
@@ -213,9 +205,10 @@ async function sendAndConfirmWithRetry(
 export async function fundCustodialWallet(
   connection: Connection,
   escrowKeypair: Keypair,
-  lamports: bigint
+  lamports: bigint,
+  wallet: PumpPortalWallet
 ): Promise<string> {
-  const custodialPubkey = getCustodialPublicKey();
+  const custodialPubkey = wallet.publicKey;
   return sendAndConfirmWithRetry(
     connection,
     (blockhash) => {
@@ -247,9 +240,10 @@ export async function fundCustodialWallet(
 export async function sweepTokensToWallet(
   connection: Connection,
   mintAddress: string,
-  destinationOwner: PublicKey
+  destinationOwner: PublicKey,
+  wallet: PumpPortalWallet
 ): Promise<{ signature: string; amount: bigint }> {
-  const custodial = getCustodialKeypair();
+  const custodial = wallet.keypair;
   const mintPubkey = new PublicKey(mintAddress);
 
   // Pump.fun mints created since the Token-2022 cutover are owned by the
@@ -371,9 +365,10 @@ export async function sweepTokensToWallet(
  */
 export async function sweepSolToWallet(
   connection: Connection,
-  destination: PublicKey
+  destination: PublicKey,
+  wallet: PumpPortalWallet
 ): Promise<{ signature: string; amount: bigint } | null> {
-  const custodial = getCustodialKeypair();
+  const custodial = wallet.keypair;
   const balance = BigInt(
     await connection.getBalance(custodial.publicKey, "confirmed")
   );

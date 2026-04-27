@@ -19,17 +19,18 @@ import {
   fundCustodialWallet,
   sweepSolToWallet,
   sweepTokensToWallet,
-  getCustodialPublicKey,
+  resolveLaunchWallet,
   lamportsToSol,
 } from "./pumpportalCustodial";
+import type { PumpPortalWallet } from "./pumpportalWalletPool";
 import { withCustodialLock } from "./custodialLock";
 import {
   shouldChargeProcessingFee,
   chargeProcessingFee,
 } from "./processingFee";
+import { supabase as db } from "./db";
 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
-const PUMPPORTAL_API_KEY = process.env.PUMPPORTAL_API_KEY!;
 const TREASURY_WALLET = process.env.BAGS_PARTNER_WALLET!;
 const WORKER_ID =
   process.env.WORKER_ID || process.env.RAILWAY_REPLICA_ID || "executor-default";
@@ -55,11 +56,6 @@ export async function executePumpfunLightningLaunch(
     `Executing Pump.fun (Lightning) launch ${launch.id} (${launch.token_name})`
   );
 
-  if (!PUMPPORTAL_API_KEY) {
-    await setFailed(launch.id, "PUMPPORTAL_API_KEY env var is not set");
-    return;
-  }
-
   // ---- Decrypt escrow + mint keypairs ----
   const escrowSecret = decryptEscrowKey(
     launch.escrow_wallet_encrypted_private_key
@@ -81,12 +77,18 @@ export async function executePumpfunLightningLaunch(
     return;
   }
 
-  // ---- Pre-flight: verify custodial keypair is well-formed ----
-  let custodialPubkey: PublicKey;
+  // ---- Pick (or look up) the custodial wallet for this launch ----
+  // If the launch was already assigned a wallet (e.g. a previous attempt),
+  // we honor that exact wallet so retries always touch the same on-chain
+  // accounts. New launches get a deterministic pool selection.
+  let wallet: PumpPortalWallet;
   try {
-    custodialPubkey = getCustodialPublicKey();
+    wallet = resolveLaunchWallet(
+      launch.id,
+      (launch as any).pumpportal_wallet_pubkey ?? null
+    );
     console.log(
-      `Using PumpPortal custodial wallet ${custodialPubkey.toBase58()}`
+      `Using PumpPortal custodial wallet slot ${wallet.slot} (${wallet.pubkey})`
     );
   } catch (err: any) {
     await setFailed(
@@ -94,6 +96,21 @@ export async function executePumpfunLightningLaunch(
       `Custodial wallet config invalid: ${err?.message ?? err}`
     );
     return;
+  }
+  const custodialPubkey = wallet.publicKey;
+
+  // Persist the wallet assignment up front so fee-claim + recovery can find
+  // the exact wallet later, even across pool size changes.
+  if (!(launch as any).pumpportal_wallet_pubkey) {
+    const { error: assignErr } = await db
+      .from("launches")
+      .update({ pumpportal_wallet_pubkey: wallet.pubkey })
+      .eq("id", launch.id);
+    if (assignErr) {
+      console.warn(
+        `Failed to persist pumpportal_wallet_pubkey on launch ${launch.id}: ${assignErr.message}`
+      );
+    }
   }
 
   // ---- Compute split: contributor reserves + initial buy ----
@@ -187,7 +204,7 @@ export async function executePumpfunLightningLaunch(
         connection,
         escrowKeypair,
         mintKeypair,
-        custodialPubkey,
+        wallet,
         initialBuyLamports
       );
     });
@@ -210,9 +227,10 @@ async function runCustodialCriticalSection(
   connection: Connection,
   escrowKeypair: Keypair,
   mintKeypair: Keypair,
-  custodialPubkey: PublicKey,
+  wallet: PumpPortalWallet,
   initialBuyLamports: bigint
 ): Promise<void> {
+  const custodialPubkey = wallet.publicKey;
   // ---- Step 1: Fund the custodial wallet from escrow ----
   const fundingAmount = initialBuyLamports + CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
   console.log(
@@ -225,7 +243,8 @@ async function runCustodialCriticalSection(
     const fundingSig = await fundCustodialWallet(
       connection,
       escrowKeypair,
-      fundingAmount
+      fundingAmount,
+      wallet
     );
     console.log(`Custodial funding tx confirmed: ${fundingSig}`);
   } catch (err: any) {
@@ -242,7 +261,7 @@ async function runCustodialCriticalSection(
   // create instruction on its side.
   const mintBs58Secret = bs58.encode(mintKeypair.secretKey);
   const lightningUrl = `https://pumpportal.fun/api/trade?api-key=${encodeURIComponent(
-    PUMPPORTAL_API_KEY
+    wallet.apiKey
   )}`;
 
   console.log("Calling PumpPortal Lightning create");
@@ -271,7 +290,7 @@ async function runCustodialCriticalSection(
     });
   } catch (err: any) {
     clearTimeout(timeout);
-    await trySweepSolBack(connection, escrowKeypair.publicKey).catch(() => {});
+    await trySweepSolBack(connection, escrowKeypair.publicKey, wallet).catch(() => {});
     if (err.name === "AbortError") {
       await setFailed(
         launch.id,
@@ -293,7 +312,7 @@ async function runCustodialCriticalSection(
     lightningJson = await lightningRes.json();
   } catch (jsonErr: any) {
     const rawText = await lightningRes.text().catch(() => "");
-    await trySweepSolBack(connection, escrowKeypair.publicKey).catch(() => {});
+    await trySweepSolBack(connection, escrowKeypair.publicKey, wallet).catch(() => {});
     await setFailed(
       launch.id,
       `PumpPortal Lightning returned non-JSON [${lightningRes.status} ${
@@ -317,7 +336,7 @@ async function runCustodialCriticalSection(
       `Lightning create failed [${lightningRes.status}]:`,
       lightningJson
     );
-    await trySweepSolBack(connection, escrowKeypair.publicKey).catch(() => {});
+    await trySweepSolBack(connection, escrowKeypair.publicKey, wallet).catch(() => {});
     await setFailed(
       launch.id,
       `PumpPortal Lightning create failed (${lightningRes.status}): ${errSummary}`
@@ -327,7 +346,7 @@ async function runCustodialCriticalSection(
 
   const launchSignature: string | undefined = lightningJson?.signature;
   if (!launchSignature) {
-    await trySweepSolBack(connection, escrowKeypair.publicKey).catch(() => {});
+    await trySweepSolBack(connection, escrowKeypair.publicKey, wallet).catch(() => {});
     await setFailed(
       launch.id,
       `PumpPortal Lightning returned no signature: ${JSON.stringify(
@@ -364,7 +383,7 @@ async function runCustodialCriticalSection(
   if (landed.status === "reverted") {
     const errStr =
       typeof landed.err === "string" ? landed.err : JSON.stringify(landed.err);
-    await trySweepSolBack(connection, escrowKeypair.publicKey).catch(() => {});
+    await trySweepSolBack(connection, escrowKeypair.publicKey, wallet).catch(() => {});
     await setFailedWithSignature(
       launch.id,
       `Pump.fun launch tx reverted on-chain (${launchSignature}): ${errStr}. ` +
@@ -375,7 +394,7 @@ async function runCustodialCriticalSection(
   }
 
   if (landed.status === "not_landed") {
-    await trySweepSolBack(connection, escrowKeypair.publicKey).catch(() => {});
+    await trySweepSolBack(connection, escrowKeypair.publicKey, wallet).catch(() => {});
     await setFailedWithSignature(
       launch.id,
       `Pump.fun launch tx ${launchSignature} did not land within 60s polling window. ` +
@@ -397,7 +416,8 @@ async function runCustodialCriticalSection(
       tokenSweepResult = await sweepTokensToWallet(
         connection,
         launch.token_mint_address!,
-        escrowKeypair.publicKey
+        escrowKeypair.publicKey,
+        wallet
       );
       break;
     } catch (sweepErr: any) {
@@ -429,7 +449,11 @@ async function runCustodialCriticalSection(
 
   // ---- Step 5: Sweep residual SOL custodial → escrow (best-effort) ----
   try {
-    const solSweep = await sweepSolToWallet(connection, escrowKeypair.publicKey);
+    const solSweep = await sweepSolToWallet(
+      connection,
+      escrowKeypair.publicKey,
+      wallet
+    );
     if (solSweep) {
       console.log(
         `Swept ${lamportsToSol(solSweep.amount)} SOL residual back to escrow: ${
@@ -498,10 +522,11 @@ async function pollLandedStatus(
 // custodial wallet. We don't want that SOL stranded.
 async function trySweepSolBack(
   connection: Connection,
-  escrowPubkey: PublicKey
+  escrowPubkey: PublicKey,
+  wallet: PumpPortalWallet
 ): Promise<void> {
   try {
-    const sweep = await sweepSolToWallet(connection, escrowPubkey);
+    const sweep = await sweepSolToWallet(connection, escrowPubkey, wallet);
     if (sweep) {
       console.log(
         `Refunded ${lamportsToSol(sweep.amount)} SOL from custodial back to escrow after failed create: ${sweep.signature}`

@@ -1,76 +1,156 @@
 ## Goal
 
-Make the system aware of its own throughput limits when users schedule launches. Instead of rejecting overlapping launches, **automatically slide each new launch into the next available time slot** for its platform — and show the user the adjusted time before they confirm.
+Make adding a new PumpPortal custodial wallet a **zero-code operation**. Going from 1 wallet to N should require only:
 
-Pump.fun and Bags.fm have separate capacity ceilings and don't interfere with each other, so each platform is scheduled on its own independent timeline.
+1. Add `PUMPPORTAL_CUSTODIAL_WALLET_2`, `PUMPPORTAL_CUSTODIAL_PRIVATE_KEY_2`, and `PUMPPORTAL_API_KEY_2` as secrets.
+2. Restart the workers.
 
-## Capacity Rules (per platform)
+That's it. No code changes. No UI changes. The system auto-discovers the new wallet, includes it in the scheduling capacity calculation, distributes new launches across the pool, and includes it in the fee-claim cycle.
 
-Based on the bottleneck analysis:
+## How It Works
 
-| Platform  | Throughput per minute | Slot size | Reason |
-|-----------|-----------------------|-----------|--------|
-| Pump.fun  | 1 launch / minute     | 60 seconds | Serialized by `withCustodialLock` on the shared PumpPortal wallet (~10s per launch + safety margin) |
-| Bags.fm   | 5 launches / minute   | 12 seconds | Independent escrows; bounded by RPC rate limits and replica count |
+### 1. Wallet pool auto-discovery
 
-These ceilings live in a single config file (`supabase/functions/_shared/scheduleCapacity.ts`) so they're easy to tune later.
+A new shared module `pumpportalWalletPool.ts` scans environment variables on boot and builds an array of `{ id, pubkey, secretKey, apiKey }`. The naming convention is:
 
-## How it Works
+```text
+Slot 1 (existing, unchanged):
+  PUMPPORTAL_CUSTODIAL_WALLET
+  PUMPPORTAL_CUSTODIAL_PRIVATE_KEY
+  PUMPPORTAL_API_KEY
 
-### 1. Slot picker (shared edge-function helper)
+Slot 2:
+  PUMPPORTAL_CUSTODIAL_WALLET_2
+  PUMPPORTAL_CUSTODIAL_PRIVATE_KEY_2
+  PUMPPORTAL_API_KEY_2
 
-A new helper `findNextAvailableSlot(platform, requestedTime)`:
-- Queries `launches` for all rows on the same platform within a ±60-minute window of `requestedTime`, where `status IN ('scheduled','executing')`.
-- Buckets them into per-minute counts.
-- Walks forward from `requestedTime` minute-by-minute until it finds a minute whose count is below the platform's cap.
-- For Pump.fun (cap = 1), this means: if 8:00 PM is taken, try 8:01, 8:02, etc.
-- For Bags (cap = 5), 8:00 PM holds 5 launches before pushing to 8:01.
-- Returns `{ adjustedTime, wasAdjusted, originalTime, offsetMinutes }`.
+Slot N:
+  PUMPPORTAL_CUSTODIAL_WALLET_N
+  PUMPPORTAL_CUSTODIAL_PRIVATE_KEY_N
+  PUMPPORTAL_API_KEY_N
+```
 
-### 2. Server-side enforcement (source of truth)
+The loader stops at the first numbered slot whose secrets are missing. Each slot must have all three; partial slots throw at boot with a clear error. Existing single-wallet deployments keep working with no changes (slot 1 = the legacy unsuffixed names).
 
-Both `create-launch` and `create-launch-pumpfun` edge functions:
-- Run `findNextAvailableSlot(platform, launch_datetime)` before inserting.
-- Insert with the **adjusted** time, not the user-requested time.
-- Return `{ launch_id, escrow_wallet, adjusted_launch_datetime, original_launch_datetime, was_adjusted }` in the response.
-- Wrap the slot lookup + insert in an advisory lock (`pg_try_advisory_lock` keyed by platform) so two simultaneous submissions can't both grab the same slot.
+The module is duplicated across `executor/src/` and `distributor/src/` (Node) since the two services are deployed separately, but they share the exact same file contents (kept in sync — small file).
 
-### 3. Client-side preview (UX)
+### 2. Capacity scales with the pool size
 
-`SchedulePage.tsx`:
+`supabase/functions/_shared/scheduleCapacity.ts` currently hard-codes `pumpfun: 1` per minute. We change it to read the pool size from a database setting and multiply: `pumpfun_cap = pool_size`. So:
 
-**a. Live availability hint under the time picker.** When the user picks a date+time, debounce 300ms and call a new lightweight edge function `check-launch-slot` that returns the adjusted time without inserting anything. Show one of:
-- ✅ "8:00 PM is available."
-- ⚠ "8:00 PM is full on Pump.fun — your launch will be scheduled for **8:03 PM**."
+- 1 wallet → 1 launch/min on Pump.fun
+- 2 wallets → 2 launches/min
+- 5 wallets → 5 launches/min
 
-**b. Confirmation on submit.** If the server returns `was_adjusted: true`, show a toast/inline message after creation:
-> "Your launch was moved from 8:00 PM to 8:03 PM — the original slot was full."
+Implementation: a tiny new `app_settings` table with a single row `(key='pumpportal_wallet_pool_size', value=integer)`. The workers update this row on boot whenever they detect a different pool size. The scheduling edge functions read it (cached for 30 s) when computing slot capacity. This keeps the edge functions stateless — they don't need access to the wallet env vars.
 
-The success screen also displays the actual scheduled time.
+### 3. Per-launch wallet assignment
 
-### 4. Display in calendar / dashboard
+When the executor picks up a `scheduled` Pump.fun launch:
 
-`Index.tsx` and `DashboardPage.tsx` already render launches by `launch_datetime`. No changes needed — they'll naturally show the adjusted time.
+1. It hashes `launch.id` to a number, `mod pool_size`, picking a wallet deterministically.
+2. It writes the chosen `pumpportal_wallet_pubkey` to the launch row **before** running the critical section.
+3. It uses that wallet's secret key + API key for funding, the Lightning create call, and the post-mint sweep.
+4. The custodial lock key becomes the wallet pubkey (already the case today — so concurrent launches on different wallets run in parallel automatically).
 
-## Technical Details
+Recovery (`recoverPumpfunSweep`) reads the persisted `pumpportal_wallet_pubkey` so it knows which wallet to sweep tokens from.
+
+### 4. Fee-claim cycle iterates the pool
+
+`claimPumpfunFeesBatch` becomes wallet-aware:
+
+- The `claim_pumpfun_launches_batch_for_worker` RPC takes an optional `p_wallet_pubkey` filter so each batch contains launches for exactly one wallet.
+- The distributor loops through every wallet in the pool, claiming + sweeping each one in turn (each under its own lock key, so two distributors can sweep two wallets in parallel).
+- Each wallet has its own creator-vault PDA, so the existing "balance check before claim" logic runs per wallet.
+
+### 5. Admin visibility (optional but cheap)
+
+The admin AccountingTab already shows fee-sweep history. We add a small "Wallet pool" panel showing each configured wallet, its current SOL balance, its creator-vault balance, and how many launches it owns. Read-only — no controls. This is the only UI change.
+
+## Database Changes
+
+Two small migrations:
+
+```sql
+-- 1. Add per-launch wallet tracking
+alter table public.launches
+  add column pumpportal_wallet_pubkey text;
+
+create index if not exists idx_launches_pumpportal_wallet
+  on public.launches(pumpportal_wallet_pubkey)
+  where platform = 'pumpfun';
+
+-- 2. App settings for cross-service config
+create table if not exists public.app_settings (
+  key text primary key,
+  value text not null,
+  updated_at timestamptz not null default now()
+);
+alter table public.app_settings enable row level security;
+create policy "Service role manages app_settings"
+  on public.app_settings for all
+  to service_role using (true) with check (true);
+create policy "App settings are readable by everyone"
+  on public.app_settings for select
+  to public using (true);
+
+-- 3. Updated batch-claim RPC with optional wallet filter
+create or replace function public.claim_pumpfun_launches_batch_for_worker(
+  p_worker_id text,
+  p_limit integer default 25,
+  p_lock_expiry_seconds integer default 300,
+  p_wallet_pubkey text default null
+) returns setof public.launches ...
+  -- adds: and (p_wallet_pubkey is null
+  --            or pumpportal_wallet_pubkey = p_wallet_pubkey)
+```
+
+`pumpportal_wallet_pubkey` stays `null` for existing launches (they all use the legacy single wallet, which is slot 1 of the pool — backwards-compatible by definition).
+
+## Files Touched
 
 **New files:**
-- `supabase/functions/_shared/scheduleCapacity.ts` — caps + `findNextAvailableSlot()` helper, shared between create + check functions.
-- `supabase/functions/check-launch-slot/index.ts` — public read-only function: takes `{ platform, launch_datetime }`, returns adjusted slot. No DB writes.
+- `executor/src/pumpportalWalletPool.ts` — pool loader + `getWalletForLaunch(launchId)` + `getAllWallets()`.
+- `distributor/src/pumpportalWalletPool.ts` — identical contents.
+- `supabase/migrations/<ts>_pumpportal_wallet_pool.sql` — schema + RPC update.
 
-**Modified files:**
-- `supabase/functions/create-launch/index.ts` — call slot picker, insert adjusted time, return adjustment metadata. Use advisory lock `schedule:bags` during the lookup+insert.
-- `supabase/functions/create-launch-pumpfun/index.ts` — same pattern with lock key `schedule:pumpfun`.
-- `src/pages/SchedulePage.tsx` — debounced availability check, inline hint UI, toast on adjustment, success screen shows actual time.
+**Modified:**
+- `executor/src/pumpportalCustodial.ts` — refactor module-level cached keypair into `getKeypairForWallet(pubkey)`. Helper functions take a wallet handle.
+- `executor/src/executePumpfunLightning.ts` — pick wallet via `getWalletForLaunch`, pass wallet handle into helpers, persist `pumpportal_wallet_pubkey`.
+- `executor/src/recoverPumpfunSweep.ts` — read `pumpportal_wallet_pubkey` from launch, use that wallet.
+- `executor/src/index.ts` — on boot, write current pool size to `app_settings`.
+- `distributor/src/claimPumpfunFeesBatch.ts` — outer loop over all wallets in pool; each iteration uses that wallet's keypair + API key, with the wallet pubkey as the lock key.
+- `distributor/src/claimPumpfunFees.ts` — same single-launch path: read launch's wallet column, use that wallet.
+- `distributor/src/index.ts` — write pool size to `app_settings` on boot.
+- `supabase/functions/_shared/scheduleCapacity.ts` — read `pumpportal_wallet_pool_size` from `app_settings` (cached) and use it as the per-minute cap.
+- `src/components/admin/AccountingTab.tsx` — small "Wallet pool" panel (read-only).
 
-**No DB migration needed.** All logic uses the existing `launches.launch_datetime` + `launches.platform` + `launches.status` columns. Both columns are already indexed via the worker-claim queries; if performance becomes an issue we can add a partial index later.
+## What Stays The Same
 
-**Lookahead window:** the slot picker scans up to 60 minutes forward. If somehow every minute is full for an hour (extremely unlikely), it falls back to the next minute past the window with a warning logged. This avoids unbounded loops.
+- All existing secrets, RPC URLs, encryption keys: untouched.
+- The custodial lock RPC functions: unchanged (already keyed by string).
+- The launch flow on the user side: identical.
+- The fee-claim economics + thresholds: identical.
+- Single-wallet deployments: still work with zero changes.
 
-**Existing "10 min from now / within 72 hr" guard stays**, applied to the *original* requested time. The adjusted time may push a few minutes past 72h in the worst case — we accept this since the offset is small.
+## Operational Story (the user-facing simplicity)
+
+After this lands, here's the entire process to add wallet #2:
+
+1. Create a new PumpPortal Lightning wallet, copy its API key + private key + public key.
+2. In the Lovable secrets panel, add three secrets: `PUMPPORTAL_API_KEY_2`, `PUMPPORTAL_CUSTODIAL_WALLET_2`, `PUMPPORTAL_CUSTODIAL_PRIVATE_KEY_2`.
+3. Restart the executor + distributor on Railway.
+
+The system immediately:
+- Reports pool size = 2 to the database.
+- Doubles the per-minute Pump.fun scheduling capacity in the UI.
+- Starts assigning new launches to wallets 1 or 2 (round-robin via launch-id hash).
+- Includes wallet 2 in every fee-claim cycle.
+
+To remove a wallet: delete the three secrets and restart. New launches stop using it; old launches still on it get swept whenever someone tops up its SOL.
 
 ## Out of Scope
 
-- Adjusting capacity caps dynamically based on replica count (manual tune for now).
-- Reshuffling already-scheduled launches when capacity changes.
-- Sponsored-slot reservation logic (separate concern; current sponsored-slot flow is unaffected because it goes through its own path).
+- Auto-rebalancing SOL between wallets (operator's responsibility for now).
+- Failover when one wallet errors (each launch sticks to its assigned wallet — failure is per-launch, not per-wallet).
+- A UI to add/remove wallets without touching secrets (deliberately not building this — secrets stay the source of truth).
