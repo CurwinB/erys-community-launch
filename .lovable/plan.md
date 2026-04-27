@@ -106,3 +106,11 @@ $$;
 - Sponsor link expires after pre-funding → status flips to `cancelled` via existing logic, sweep worker reclaims SOL.
 - Recovered launch is later un-cancelled by an admin → recovery row already wrote `completed_at`; we'll guard the sweep with both `status='cancelled'` AND `completed_at IS NULL`.
 - Bags wallet runs out: documented manual top-up requirement remains; nothing in this plan changes that.
+
+## Status (shipped)
+- Migration applied: new `creator_delivery_wallet` + `sponsor_recovery_*` columns and `claim_sponsor_recovery_for_worker` RPC.
+- `claim-sponsored-slot` now accepts and validates `creator_delivery_wallet`.
+- `SponsoredPage` renders an optional Pump.fun wallet input matching the `SchedulePage` UX.
+- `executor/src/fundSponsoredEscrow.ts` now writes a contribution row for the funded 0.1 SOL (idempotent on `tx_signature`), so the influencer receives tokens at distribution.
+- `executor/src/sweepCancelledSponsorEscrows.ts` is wired into the main poll tick to recover SOL stranded in cancelled sponsor escrows.
+- `SponsoredTab` shows the delivery wallet and a per-row recovery status.
