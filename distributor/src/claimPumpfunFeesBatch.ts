@@ -15,6 +15,7 @@ import {
   recordPumpfunFeeClaimFailure,
   recordPumpfunWalletStarved,
   recordPumpfunFeeTreasurySweep,
+  recordPumpfunCreatorVaultBalance,
 } from "./db";
 import { withCustodialLock } from "./custodialLock";
 
@@ -23,6 +24,9 @@ const ERYS_PLATFORM_WALLET = process.env.BAGS_PARTNER_WALLET!;
 const PUMPPORTAL_API_KEY = process.env.PUMPPORTAL_API_KEY;
 const PUMPPORTAL_CUSTODIAL_PRIVATE_KEY = process.env.PUMPPORTAL_CUSTODIAL_PRIVATE_KEY;
 const PUMPPORTAL_CUSTODIAL_WALLET = process.env.PUMPPORTAL_CUSTODIAL_WALLET;
+const PUMP_PROGRAM_ID = new PublicKey(
+  process.env.PUMP_PROGRAM_ID || "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+);
 
 const WORKER_ID =
   process.env.WORKER_ID || process.env.RAILWAY_REPLICA_ID || "distributor-default";
@@ -35,6 +39,25 @@ const BATCH_SIZE = parseInt(process.env.PUMPFUN_FEE_BATCH_SIZE || "50", 10);
 const SINGLE_CLAIM_PRIORITY_FEE_LAMPORTS = 55_000;
 const TX_FEE_RESERVE = 5_000;
 const CUSTODIAL_SOL_FLOOR_LAMPORTS = 2_000_000n; // 0.002 SOL
+
+// Economic gate: only spend gas to claim when the on-chain creator vault
+// holds at least this much above its rent-exempt minimum. Default 600,000
+// lamports (0.0006 SOL) ≈ 10× the ~60k lamport per-cycle cost. Tunable via
+// env so we can lower it once on-chain volume picks up. There is also a
+// hard floor of 100,000 lamports — no matter what env value is set, we
+// will never claim dust below that level.
+const PUMPFUN_MIN_CLAIM_LAMPORTS = BigInt(
+  process.env.PUMPFUN_MIN_CLAIM_LAMPORTS || "600000"
+);
+const PUMPFUN_MIN_CLAIM_HARD_FLOOR_LAMPORTS = 100_000n;
+
+function getCreatorVaultPda(creator: PublicKey): PublicKey {
+  // Pump program seeds: ["creator-vault", creator_pubkey]
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("creator-vault"), creator.toBuffer()],
+    PUMP_PROGRAM_ID
+  )[0];
+}
 
 let cachedCustodialKeypair: Keypair | null = null;
 function getCustodialKeypair(): Keypair {
@@ -191,6 +214,56 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
             Number(requiredForClaims) / LAMPORTS_PER_SOL
           } SOL — 1 claim sweeps all ${candidates.length} vaults)`
         );
+
+        // ============================================================
+        // ECONOMIC GATE: peek at the creator vault PDA on-chain BEFORE
+        // burning ~55k lamports of priority fee. The vault is a single
+        // PDA owned by our custodial wallet that holds fees from EVERY
+        // coin we've created (pool: "pump" claims sweep all of them).
+        // If the claimable balance is below our minimum, skip the API
+        // call entirely and stamp the empty-claim throttle.
+        // ============================================================
+        const vaultPda = getCreatorVaultPda(custodialKeypair.publicKey);
+        let vaultLamports = 0n;
+        try {
+          vaultLamports = BigInt(
+            await connection.getBalance(vaultPda, "confirmed")
+          );
+        } catch (err: any) {
+          console.warn(
+            `Failed to read creator vault PDA ${vaultPda.toBase58()}: ${
+              err?.message ?? err
+            } — proceeding with claim anyway`
+          );
+        }
+        // Persist for admin visibility regardless of outcome.
+        await recordPumpfunCreatorVaultBalance(
+          candidates.map((c) => c.launch.id),
+          Number(vaultLamports)
+        );
+
+        const minClaim =
+          PUMPFUN_MIN_CLAIM_LAMPORTS < PUMPFUN_MIN_CLAIM_HARD_FLOOR_LAMPORTS
+            ? PUMPFUN_MIN_CLAIM_HARD_FLOOR_LAMPORTS
+            : PUMPFUN_MIN_CLAIM_LAMPORTS;
+        if (vaultLamports > 0n && vaultLamports < minClaim) {
+          console.log(
+            `Creator vault holds ${
+              Number(vaultLamports) / LAMPORTS_PER_SOL
+            } SOL (${vaultLamports} lamports), below threshold ${minClaim} — skipping claim to avoid burning gas on dust`
+          );
+          for (const c of candidates) c.vaultEmpty = true;
+          return;
+        }
+        if (vaultLamports >= minClaim) {
+          console.log(
+            `Creator vault has ${
+              Number(vaultLamports) / LAMPORTS_PER_SOL
+            } SOL — above threshold ${
+              Number(minClaim) / LAMPORTS_PER_SOL
+            } SOL, proceeding with claim`
+          );
+        }
 
         // ONE collectCreatorFee call drains every creator vault our wallet
         // owns. `mint` is ignored when pool === "pump".
