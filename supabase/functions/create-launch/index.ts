@@ -1,4 +1,8 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.103.0";
+import {
+  findNextAvailableSlot,
+  withScheduleLock,
+} from "../_shared/scheduleCapacity.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -79,30 +83,33 @@ Deno.serve(async (req) => {
       ESCROW_ENCRYPTION_KEY
     );
 
-    // Step 3: Insert into launches table
-    const { data, error } = await supabase.from("launches").insert({
-      token_name,
-      token_symbol: token_symbol.toUpperCase(),
-      description: description || null,
-      image_url: image_url || null,
-      twitter_url: twitter_url || null,
-      telegram_url: telegram_url || null,
-      website_url: website_url || null,
-      launch_datetime,
-      min_contribution_lamports,
-      max_contribution_lamports: max_contribution_lamports || null,
-      escrow_wallet_public_key: escrowPublicKey,
-      escrow_wallet_encrypted_private_key: encryptedPrivateKey,
-      created_by_wallet,
-      token_mint_address: null,
-      ipfs_metadata_url: null,
-      status: "scheduled",
-    }).select("id").single();
-
-    if (error) {
-      console.error("Insert error:", error);
-      return errorResponse(`Failed to create launch: ${error.message}`, 500);
-    }
+    // Step 3: Allocate a slot + insert atomically under platform lock so two
+    // concurrent submissions can't both grab the same minute.
+    const { data, slot } = await withScheduleLock(supabase, "bags", async () => {
+      const slot = await findNextAvailableSlot(supabase, "bags", launch_datetime);
+      const inserted = await supabase.from("launches").insert({
+        token_name,
+        token_symbol: token_symbol.toUpperCase(),
+        description: description || null,
+        image_url: image_url || null,
+        twitter_url: twitter_url || null,
+        telegram_url: telegram_url || null,
+        website_url: website_url || null,
+        launch_datetime: slot.adjustedTime,
+        min_contribution_lamports,
+        max_contribution_lamports: max_contribution_lamports || null,
+        escrow_wallet_public_key: escrowPublicKey,
+        escrow_wallet_encrypted_private_key: encryptedPrivateKey,
+        created_by_wallet,
+        token_mint_address: null,
+        ipfs_metadata_url: null,
+        status: "scheduled",
+      }).select("id").single();
+      if (inserted.error) {
+        throw new Error(`Failed to create launch: ${inserted.error.message}`);
+      }
+      return { data: inserted.data, slot };
+    });
 
     return new Response(
       JSON.stringify({
@@ -110,6 +117,10 @@ Deno.serve(async (req) => {
         launch_id: data.id,
         url: `/launch/${data.id}`,
         escrow_wallet: escrowPublicKey,
+        adjusted_launch_datetime: slot.adjustedTime,
+        original_launch_datetime: slot.originalTime,
+        was_adjusted: slot.wasAdjusted,
+        offset_minutes: slot.offsetMinutes,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
