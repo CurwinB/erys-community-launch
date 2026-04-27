@@ -634,6 +634,36 @@ const SchedulePage = () => {
             <p className="text-[10px] text-muted-foreground">
               Launch must be between 10 minutes and 72 hours from now. Contributions close 5 min before launch. Your timezone: {Intl.DateTimeFormat().resolvedOptions().timeZone}
             </p>
+            {form.launchDate && form.launchTime && (
+              <div className="mt-2 text-xs">
+                {slotChecking ? (
+                  <p className="flex items-center gap-1.5 text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Checking slot availability…
+                  </p>
+                ) : slotPreview?.wasAdjusted ? (
+                  <p className="flex items-start gap-1.5 text-amber-500">
+                    <AlertCircle className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                    <span>
+                      That slot is full on {platformLabel}. Your launch will be
+                      scheduled for{" "}
+                      <strong>
+                        {new Date(slotPreview.adjustedTime).toLocaleString([], {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        })}
+                      </strong>{" "}
+                      ({slotPreview.offsetMinutes} min later).
+                    </span>
+                  </p>
+                ) : slotPreview ? (
+                  <p className="flex items-center gap-1.5 text-success">
+                    <Check className="h-3 w-3" />
+                    Slot available on {platformLabel}.
+                  </p>
+                ) : null}
+              </div>
+            )}
           </div>
 
           <div className="space-y-4 border border-border bg-card p-6">
