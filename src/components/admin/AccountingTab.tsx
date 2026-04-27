@@ -245,7 +245,8 @@ const AccountingTab = ({ launches, contributions, claims }: Props) => {
       const nonRefunded = launchContribs.filter((c) => !c.refund_tx_signature);
       const contributorCount = nonRefunded.length;
 
-      // Pump.fun fees
+      // Pump.fun fees — Erys takes 100% of the creator fees, swept directly
+      // from the PumpPortal custodial wallet to the platform treasury.
       const pumpTotal = Number(l.pumpfun_fees_claimed_total ?? 0);
       if (
         l.platform === "pumpfun" &&
@@ -256,29 +257,14 @@ const AccountingTab = ({ launches, contributions, claims }: Props) => {
           id: `pumpfee-${l.id}`,
           date: l.pumpfun_fees_last_claimed_at,
           type: "Pump.fun Fee Claimed",
-          description: `Pump.fun fee claimed (Erys 50% share)`,
+          description: `Pump.fun fee swept to treasury (100% Erys)`,
           launchId: l.id,
           tokenName: l.token_name,
           tokenSymbol: l.token_symbol,
           platform: l.platform,
           wallet: "Erys Platform Wallet",
-          amountSol: lamportsToSol(pumpTotal * 0.5),
+          amountSol: lamportsToSol(pumpTotal),
           direction: "in",
-          txSignature: null,
-          estimated: true,
-        });
-        out.push({
-          id: `creatorfee-${l.id}`,
-          date: l.pumpfun_fees_last_claimed_at,
-          type: "Creator Fee Paid",
-          description: `Creator fee distributed (50% share)`,
-          launchId: l.id,
-          tokenName: l.token_name,
-          tokenSymbol: l.token_symbol,
-          platform: l.platform,
-          wallet: l.escrow_wallet_public_key,
-          amountSol: lamportsToSol(pumpTotal * 0.5),
-          direction: "out",
           txSignature: null,
           estimated: true,
         });
