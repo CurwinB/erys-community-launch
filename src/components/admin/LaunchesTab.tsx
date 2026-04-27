@@ -62,7 +62,7 @@ interface Props {
 const LaunchesTab = ({ launches, contributions }: Props) => {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
-  const { walletAddress } = useWallet();
+  const { publicKey: walletAddress } = useWallet();
 
   const handleRetry = async (launchId: string) => {
     if (!walletAddress) {
