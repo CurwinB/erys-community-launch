@@ -337,7 +337,7 @@ export async function executeBagsLaunch(
       try {
         for (let bIdx = 0; bIdx < cfgResult.bundles.length; bIdx++) {
           const bundle = cfgResult.bundles[bIdx];
-          const signed: VersionedTransaction[] = bundle.map((tx) => {
+          const signed: VersionedTransaction[] = bundle.map((tx: VersionedTransaction) => {
             tx.sign([escrowKeypair]);
             return tx;
           });
@@ -385,7 +385,7 @@ export async function executeBagsLaunch(
       return;
     }
 
-    await storeFeeShareConfig(launch.id, configKeyStr!, feeClaimers.length);
+    await storeFeeShareConfig(launch.id, configKeyStr, feeClaimers.length);
   }
 
   // Wait for Bags to index the fee-share config on-chain
