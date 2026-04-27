@@ -1,67 +1,55 @@
-## What failed
+## What happened
 
-Your last Bags launch (`Erys Test` / `ETEST`, launched 2026-04-27 21:30 UTC, id `9c4049bd…`) failed at **Step 2: fee-share config submission**.
+Yes — the launch ran on Railway (the executor service polling `executing` launches). It did not fail in the Supabase edge function.
 
-The exact executor error stored on the row:
-
+**Latest launch** `e9d37218…` ("Erys test" / ETEST, 22:23 UTC) failed with:
 ```
-Fee-share submission failed: Signature 3SQwJv8yCbuxQTRGUTxYMStkt4MBqUY2rLyFwjrPZCF7EdwUunUUdx87Gh85f3rziaZmsffqjhxFCFusBte2ZM6Y has expired: block height exceeded.
+createBagsFeeShareConfig failed: Config already exists
 ```
 
-Translation: the executor signed a Jito bundle returned by `sdk.config.createBagsFeeShareConfig(...)` and tried to send it via `sendBundleAndConfirm`, but by the time Jito landed/confirmed it the recent blockhash baked into the transaction was already past its `lastValidBlockHeight`. So the network rejected it.
+**The previous one** (`9c4049bd…`) failed with `Reset from stale executing state by distributor` — the distributor's janitor flipped it back to `execution_failed` before the new fee-share retry loop could finish. So we have two related bugs to fix.
 
-Because Step 2 failed, the executor never reached Step 3 (`createLaunchTransaction`) — that's why the row has:
-- `fee_share_config_key = NULL`
-- `claimer_count = NULL`
-- `processing_fee_tx_signature = NULL`
-- a `token_mint_address` (Step 0 succeeded, mint was reserved on Bags)
-- `status = execution_failed`, `execution_attempts = 1`
+## Root causes
 
-No SOL was debited from escrow (no processing fee charged, no launch buy sent). Funds are safe in escrow.
+### Bug 1 — "Config already exists" (the one you just hit)
+- Step 0 of `executeBags.ts` *always* mints a fresh token AND clears `fee_share_config_key` to `null`.
+- On the previous attempt the fee-share Jito bundle did land on-chain, but either Step 3/4 failed afterwards or the worker lock was released before we persisted the key. The config PDA is now live for that mint, but our DB has `null`.
+- On retry, Step 0 mints a *new* mint, then Step 2 calls `createBagsFeeShareConfig` — and Bags' API refuses because for the claimer set + partner combo a config already exists (Bags dedupes by claimer hash, not by mint).
+- Code currently treats this as fatal → `setFailed`.
 
-### Why this happens
-Bags' SDK builds the bundle txs with a blockhash fetched at build time. Between build → our sign → Jito submit → Jito leader inclusion, ~60–90s can elapse, especially on a busy slot or slow Jito region. Solana blockhashes only live ~60–90s (~150 blocks). Our code does **not** refresh blockhashes or retry expired bundles — one shot, then `setFailed`.
+### Bug 2 — Distributor resets in-flight launches
+- The distributor service has a janitor that flips long-`executing` launches back to `execution_failed` ("Reset from stale executing state").
+- The new fee-share retry loop with rebuilds can take >Xs across 3 attempts. The janitor's stale threshold killed the previous launch mid-retry.
 
-This is the same family of issue we've hit before but on the launch tx; we never hardened the **fee-share bundle** path.
+### Why no Railway log lines appear above
+The edge-function log dump only shows `execute-launch` enqueueing — actual execution logs live in the Railway executor logs (not in Supabase). The error string in `launches.execution_error` is the authoritative trail.
 
-## Fix plan
+## Proposed fix
 
-Two parts: (1) recover this specific launch, (2) prevent the next one.
+### A. Handle "Config already exists" gracefully (`executor/src/executeBags.ts`)
+1. In the Step 2 catch block, detect the substring `Config already exists` (case-insensitive).
+2. When detected: call `sdk.config.createBagsFeeShareConfig` again with the same args to get the deterministic `meteoraConfigKey` from the SDK response (it returns the key even when txs aren't needed), OR derive the PDA client-side from `(baseMint, partner, partnerConfig, claimerHash)`. Prefer asking the SDK first.
+3. If we get the key, persist via `storeFeeShareConfig` and continue to Step 3 — no resubmit needed.
+4. If we still can't recover the key, fall through to `setFailed` with a clear message.
 
-### 1. Recover launch `9c4049bd…`
+### B. Stop clobbering `fee_share_config_key` in Step 0
+- Only `update({ fee_share_config_key: null })` if the freshly-minted `tokenMint` differs from the previously stored `token_mint_address`. If we ended up with the same mint (idempotent path), keep the existing key.
+- Even simpler: never null it out; rely on Bug-A recovery to repopulate when the mint changes.
 
-The launch is in `execution_failed` with no `pumpfun_launch_signature` and no fee-share config key, so the existing admin retry endpoint (`retry-failed-launch`) is safe to use. On retry, `executeBags.ts` Step 0 already re-reserves a fresh mint and clears stale fee-share config, so a second attempt is clean.
+### C. Raise the distributor's stale-`executing` threshold
+- Find the janitor in `distributor/src/` that emits "Reset from stale executing state" and bump the timeout to comfortably exceed worst-case fee-share retries (≥10 minutes), plus require that `worker_locked_at` is null OR older than the threshold (so an actively-locked worker is never stomped).
 
-Action: trigger retry from the admin panel (or via the `retry-failed-launch` edge function) for `9c4049bd-56b3-43e5-9d48-db09774209ae`.
+### D. Manual recovery for `e9d37218…`
+- The on-chain fee-share config exists for mint `ATd5uFp7qQLJRPr2Ngk7VYCsbpv6cWTjaXRXkN2VBAGS`. After the code fix, retrying the launch via the existing `retry-failed-launch` edge function will:
+  - Step 0 mints a *new* mint (fresh PDA → no collision), OR
+  - If we hit the same combo again, the new "already exists" handler recovers the key.
+- No SOL was debited (`processing_fee_lamports = 0`, no signature stored), so retry is safe.
 
-### 2. Harden fee-share bundle submission in `executor/src/executeBags.ts`
+## Files to change
+- `executor/src/executeBags.ts` — Step 0 conditional clear + Step 2 "already exists" recovery branch.
+- `distributor/src/...` (whichever file owns the stale-executing janitor) — bump threshold + respect active worker lock.
 
-In the Step 2 loop where we send Jito bundles, wrap each `sendBundleAndConfirm` in a small retry that:
-
-1. Catches `block height exceeded` / `blockhash not found` / generic timeout errors.
-2. On expiry, **rebuilds** the fee-share config by calling `sdk.config.createBagsFeeShareConfig(...)` again to get fresh-blockhash transactions (the Bags SDK is the only thing that can re-emit signed-shape txs with a new blockhash for that config layout).
-3. Re-signs the new bundles with `escrowKeypair` and resubmits.
-4. Caps at ~3 attempts; on final failure call `setFailed` with the original error.
-
-Also apply the same wrapper to the non-bundled `signAndSendTransaction` calls in Step 2 for consistency (LUT extends already use `signAndSendTransaction` which has internal retry, so leave those alone).
-
-Note: we cannot simply patch the blockhash on the existing `VersionedTransaction` — versioned tx message is immutable once signed. Re-fetching from the SDK is the correct path.
-
-### Technical details
-
-- File to change: `executor/src/executeBags.ts`, the block currently labeled `// Send bundles atomically via Jito` (around the `for (let bIdx = 0; bIdx < cfgResult.bundles.length; bIdx++)` loop).
-- Add a helper `submitFeeShareWithRetry(sdk, escrowKeypair, args, maxAttempts = 3)` that owns the build → sign → send → detect-expiry → rebuild loop and returns the final `meteoraConfigKey`.
-- `configKeyStr` should be set from the **last successful** rebuild's `meteoraConfigKey` (it can change between rebuilds since each call creates a new config account).
-- Keep the existing `storeFeeShareConfig(launch.id, configKeyStr, feeClaimers.length)` call after success.
-- Leave Step 1 (LUT) and Step 3 (launch tx) as-is — Step 3 already runs through `signAndSendTransaction` which handles blockhash refresh internally per Bags SDK.
-
-### Out of scope
-
-- The 4 older `create-launch-transaction failed: Internal server error` rows from 2026-04-24 are Bags API-side 500s, unrelated to this failure mode and not a code bug on our side.
-
-## Summary
-
-- **Cause:** Jito fee-share bundle's blockhash expired before confirmation; executor has no retry for that specific path.
-- **Funds:** Safe in escrow, nothing was spent.
-- **Recovery:** Retry the failed launch from admin (it's idempotent thanks to Step 0 fresh-mint + cleared config).
-- **Prevention:** Add a rebuild-and-resubmit retry around `sendBundleAndConfirm` in `executeBags.ts` Step 2.
+## After approval
+1. Implement A + B + C above.
+2. Trigger `retry-failed-launch` for `e9d37218-29a1-4372-abee-3b613b6eea38`.
+3. Watch Railway executor logs for the next tick; confirm Step 2 now either skips or recovers cleanly.
