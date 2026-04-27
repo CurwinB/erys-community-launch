@@ -17,7 +17,7 @@ const Index = () => {
     queryKey: ["launches", "live"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("launches")
+        .from("launches_public")
         .select(LAUNCH_PUBLIC_COLUMNS)
         .eq("status", "scheduled")
         .gte("launch_datetime", new Date().toISOString())
@@ -31,7 +31,7 @@ const Index = () => {
     queryKey: ["launches", "completed"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("launches")
+        .from("launches_public")
         .select(LAUNCH_PUBLIC_COLUMNS)
         .eq("status", "launched")
         .order("launch_datetime", { ascending: false });

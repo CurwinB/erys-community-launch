@@ -32,7 +32,7 @@ const LaunchPage = () => {
     queryKey: ["launch", id],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("launches")
+        .from("launches_public")
         .select(LAUNCH_PUBLIC_COLUMNS)
         .eq("id", id!)
         .single();
