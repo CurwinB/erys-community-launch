@@ -90,13 +90,13 @@ const WalletDropdown = () => {
       console.log("SOL balance in lamports:", lamports);
       setSolBalance(lamports / LAMPORTS_PER_SOL);
 
-      const { data: contributions } = await supabase
-        .from("contributions")
-        .select(
-          "launch_id, launches(token_mint_address, token_name, token_symbol, image_url)"
-        )
-        .eq("wallet_address", publicKey)
-        .eq("tokens_distributed", true);
+      const { data: contributionsRaw } = await supabase.rpc(
+        "list_my_contributions",
+        { p_wallet: publicKey }
+      );
+      const contributions = (contributionsRaw ?? []).filter(
+        (c: any) => c.tokens_distributed === true
+      );
 
       const { data: createdLaunches } = await supabase
         .from("launches")
