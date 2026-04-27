@@ -8,6 +8,8 @@ import {
 } from "./db";
 import { distributeTokensForLaunch } from "./distribute";
 import { claimPumpfunFeesBatch } from "./claimPumpfunFeesBatch";
+import { getAllWallets } from "./pumpportalWalletPool";
+import { supabase } from "./db";
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "30000");
 
@@ -86,6 +88,19 @@ async function main(): Promise<void> {
   console.log(`Polling every ${POLL_INTERVAL_MS}ms for pending distributions`);
   console.log(`Connected to Supabase: ${process.env.SUPABASE_URL}`);
   console.log(`Using RPC: ${process.env.SOLANA_RPC_URL?.split("/v2/")[0]}/v2/***`);
+
+  try {
+    const pool = getAllWallets();
+    if (pool.length > 0) {
+      await supabase.rpc("set_app_setting", {
+        p_key: "pumpportal_wallet_pool_size",
+        p_value: String(pool.length),
+      });
+      console.log(`Published Pump.fun wallet pool size: ${pool.length}`);
+    }
+  } catch (err: any) {
+    console.warn(`Could not publish wallet pool size: ${err?.message ?? err}`);
+  }
 
   await pollAndDistribute();
   setInterval(pollAndDistribute, POLL_INTERVAL_MS);
