@@ -77,6 +77,17 @@ const SchedulePage = () => {
   const [copied, setCopied] = useState(false);
 
   const [solBalance, setSolBalance] = useState<number | null>(null);
+  const [slotPreview, setSlotPreview] = useState<{
+    wasAdjusted: boolean;
+    adjustedTime: string;
+    originalTime: string;
+    offsetMinutes: number;
+  } | null>(null);
+  const [slotChecking, setSlotChecking] = useState(false);
+  const [adjustedNotice, setAdjustedNotice] = useState<{
+    from: string;
+    to: string;
+  } | null>(null);
 
   // Load SOL balance on connect
   useEffect(() => {
@@ -97,6 +108,59 @@ const SchedulePage = () => {
       cancelled = true;
     };
   }, [connected, publicKey]);
+
+  // Live slot-availability preview: when the user picks a date+time, ask the
+  // server whether that slot is free for the chosen platform. If not, surface
+  // the next available minute so the user knows what time they'll actually get.
+  useEffect(() => {
+    if (!form.launchDate || !form.launchTime) {
+      setSlotPreview(null);
+      return;
+    }
+    const requested = new Date(`${form.launchDate}T${form.launchTime}`);
+    if (isNaN(requested.getTime())) {
+      setSlotPreview(null);
+      return;
+    }
+    const diffMinutes = (requested.getTime() - Date.now()) / 60_000;
+    if (diffMinutes < 10 || diffMinutes > 72 * 60) {
+      setSlotPreview(null);
+      return;
+    }
+
+    let cancelled = false;
+    setSlotChecking(true);
+    const handle = setTimeout(async () => {
+      try {
+        const { data, error } = await supabase.functions.invoke("check-launch-slot", {
+          body: {
+            platform,
+            launch_datetime: requested.toISOString(),
+          },
+        });
+        if (cancelled) return;
+        if (error || data?.error) {
+          setSlotPreview(null);
+        } else {
+          setSlotPreview({
+            wasAdjusted: data.wasAdjusted,
+            adjustedTime: data.adjustedTime,
+            originalTime: data.originalTime,
+            offsetMinutes: data.offsetMinutes,
+          });
+        }
+      } catch {
+        if (!cancelled) setSlotPreview(null);
+      } finally {
+        if (!cancelled) setSlotChecking(false);
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [form.launchDate, form.launchTime, platform]);
 
   const update = (key: string, value: string | boolean) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -319,6 +383,17 @@ const SchedulePage = () => {
       const launchId = data.launch_id;
       const escrowWallet = data.escrow_wallet;
       setPendingLaunch({ launch_id: launchId, escrow_wallet: escrowWallet });
+
+      // If the server moved the launch to the next available slot, surface
+      // that to the user on the success screen.
+      if (data.was_adjusted && data.original_launch_datetime && data.adjusted_launch_datetime) {
+        setAdjustedNotice({
+          from: data.original_launch_datetime,
+          to: data.adjusted_launch_datetime,
+        });
+      } else {
+        setAdjustedNotice(null);
+      }
 
       // Now run the contribution flow
       await performContribution(launchId, escrowWallet);
