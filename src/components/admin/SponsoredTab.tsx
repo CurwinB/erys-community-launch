@@ -29,6 +29,12 @@ interface SponsoredLaunch {
   sponsor_link_expires_at: string | null;
   sponsor_link_claimed_at: string | null;
   is_sponsored: boolean | null;
+  creator_delivery_wallet?: string | null;
+  sponsor_recovery_completed_at?: string | null;
+  sponsor_recovery_tx_signature?: string | null;
+  sponsor_recovery_amount_lamports?: number | null;
+  sponsor_recovery_error?: string | null;
+  sponsor_funding_error?: string | null;
 }
 
 interface Props {
