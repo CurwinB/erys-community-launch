@@ -295,21 +295,6 @@ const Index = () => {
         </div>
       </section>
 
-      <footer className="border-t border-border py-8">
-        <div className="container mx-auto flex flex-col items-center gap-2 px-4 text-center">
-          <span className="text-sm text-muted-foreground">
-            erys<span className="text-primary">.</span> — Launch on{" "}
-            <a href="https://bags.fm" target="_blank" rel="noopener noreferrer" className="text-foreground hover:text-primary transition-colors">
-              Bags.fm
-            </a>{" "}
-            or{" "}
-            <a href="https://pump.fun" target="_blank" rel="noopener noreferrer" className="text-foreground hover:text-primary transition-colors">
-              Pump.fun
-            </a>
-          </span>
-          <span className="text-xs text-muted-foreground">Every token launched through Erys is a real on-chain Solana token.</span>
-        </div>
-      </footer>
     </main>
   );
 };
