@@ -1,80 +1,31 @@
-# Why no sweeps have happened — and the one-line fix
+## Confirmed answer: there are zero creator fees to sweep yet
 
-## The actual reason
+I queried the DB. The state of the world is:
 
-The Pump.fun launch `ETEST` has this in its `pumpfun_last_claim_error`:
+- **One** Pump.fun launch in `launched` status: `ETEST` (id `9caf31b8-…`), launch sig `3T5aZSxFsTG1…ZroZfHC`, launched ~16h ago.
+- The other 7 ETEST attempts on Pump.fun and 10 on Bags are all `execution_failed`. None of those will ever produce fees.
+- `platform_fee_claims` is **empty (0 rows, 0 lamports)**.
+- `ETEST.pumpfun_fees_last_claimed_at = 2026-04-27 10:02:18Z` (~7 minutes ago) with **no error**, **no throttle**, **no worker lock**, and `pumpfun_fees_claimed_total = 0`.
 
-```
-PumpPortal collectCreatorFee HTTP 200: {"signature":"5e8VaFu682r6Ee7bxpqvXmaw9z6Yfkcw31NJZrUn1Vw6pPPZPjwUeGZqcaUdsd7Rp5dPtzKxGtBorQFdK5XpN7dK","errors":[]}
-```
+That last bullet is the whole story: the distributor **is** picking up ETEST every 10 minutes, calling `collectCreatorFee`, and recording the claim attempt successfully — but every claim returns **zero lamports**, so `recordPumpfunEmptyClaim` fires, `pumpfun_fees_last_claimed_at` is stamped, and there's nothing to fan out or sweep. Hence no rows in `platform_fee_claims`.
 
-That is PumpPortal returning **success**: HTTP 200, a real signature, and `errors: []`. We are turning that into a failure.
+## Why every claim is empty
 
-The bug is in `distributor/src/claimPumpfunFeesBatch.ts` line 375:
+Because **nobody has traded the ETEST token**. Pump.fun creator fees only accrue when there's buy/sell volume after launch. ETEST is a test token with the platform's own contributions and presumably no organic trading on the bonding curve, so the creator vault is permanently empty and `collectCreatorFee` returns a 200 with `errors: []` and no balance delta. After 3 consecutive empty cycles the launch will be throttled to once-an-hour by `record_pumpfun_empty_claim` (it isn't yet — `pumpfun_low_volume_throttle_until` is null — meaning the consecutive-empty counter is also being reset cleanly, probably because the distributor was redeployed recently with the truthy-array fix).
 
-```ts
-if (!response.ok || json?.errors) {
-```
+## Why the panel said "No launched Pump.fun tokens"
 
-`json.errors` is an **empty array `[]`**, which is **truthy** in JavaScript. So every successful claim trips the failure branch:
+Look at the screenshot: it actually lists ETEST in the table — the empty-state text is for the second table beneath ("Launches needing recovery"). The panel is healthy. The custodial wallet at 0.0519 SOL is fine; it just hasn't spent anything because no claim has had a non-zero delta.
 
-1. `recordPumpfunFeeClaimFailure` stamps `pumpfun_fees_last_claimed_at = now()` (the 10-min throttle), so the launch is then locked out for 10 minutes.
-2. We `return` from the lock callback before ever computing the post-claim balance delta or the per-launch share.
-3. Because `claimedLamports` stays `0` for every candidate, `sweepEscrowToPlatform` is never called → **no escrow → treasury sweep, ever**.
+## What this means for the previous "truthy errors" diagnosis
 
-So the previous "starved wallet" diagnosis was a red herring — the wallet may now be funded, but we'd still never sweep because we mis-classify every PumpPortal 200 OK as an error and skip the entire fan-out + sweep block. `platform_fee_claims` is empty, `pumpfun_fees_claimed_total = 0`, and `pumpfun_creator_fees_distributed = 0` for the same reason.
+The bug fix (`errorList.length > 0` instead of `json?.errors`) was real and worth shipping — without it, every successful 200 OK was being treated as a failure and stamping `pumpfun_last_claim_error`. The currently-clean error column on ETEST confirms the fix is now in production. But it was never the reason no sweeps happened in real life: the underlying reason is that **no creator fees have ever accrued because there's been no trading on any of our launched tokens**.
 
-The on-chain claim itself probably worked (PumpPortal returned a signature). The custodial wallet may already hold creator fees we never attributed or swept.
+## What to do
 
-## The fix
+No code change. To prove the pipeline end-to-end, do one of:
 
-### 1. Correct the success check in `collectAllCreatorFees`
+1. **Generate trading volume on ETEST** — buy and sell some of it on pump.fun. Within 10 minutes the next claim cycle picks up real lamports, fans out to the escrow, and sweeps escrow → `BAGS_PARTNER_WALLET`, populating `platform_fee_claims`.
+2. **Wait for a real launch with organic volume.** Same outcome.
 
-In `distributor/src/claimPumpfunFeesBatch.ts`, change the check to recognise PumpPortal's success shape:
-
-```ts
-const errorList = Array.isArray(json?.errors) ? json.errors : [];
-if (!response.ok || errorList.length > 0) {
-  const summary =
-    errorList.join(" | ") ||
-    JSON.stringify(json).slice(0, 300) ||
-    response.statusText;
-  return {
-    success: false,
-    error: `PumpPortal collectCreatorFee HTTP ${response.status}: ${summary}`,
-  };
-}
-```
-
-Same bug pattern exists in `distributor/src/claimPumpfunFees.ts` (the legacy single-launch path) — fix it there too for safety.
-
-### 2. Clear the bad error & throttle on the affected launch
-
-The `ETEST` launch is currently throttled because we wrote `pumpfun_fees_last_claimed_at = now()` on the false failure. Clear that so the next 30s poll picks it up again. We already have `force_pumpfun_fee_claim_retry(p_launch_id)` for exactly this — call it once after the code fix lands. We can also wipe the stale error text by adding `pumpfun_last_claim_error = NULL` to that RPC's UPDATE, which is a tiny improvement worth doing.
-
-### 3. Reconcile the custodial wallet on-chain (one-off check, no code)
-
-After the fix runs once, verify on Solscan:
-- The custodial wallet (`8fjQrCqeJfNgc5QQRarykX1eBwL7Xt5dvFi5hA2bqGed`) shows the inbound creator-fee transfer from signature `5e8VaFu682r6Ee7bxpqvXmaw9z6Yfkcw31NJZrUn1Vw6pPPZPjwUeGZqcaUdsd7Rp5dPtzKxGtBorQFdK5XpN7dK`.
-- The next batch cycle then does fan-out → escrow → treasury and `platform_fee_claims` starts populating.
-
-If creator fees did accrue to the vaults *between* the false-failure tx and now, the next `collectCreatorFee` will sweep them too — no data loss, just delayed accounting.
-
-## Files
-
-**Modified**
-- `distributor/src/claimPumpfunFeesBatch.ts` — fix truthy `errors` check
-- `distributor/src/claimPumpfunFees.ts` — same fix in legacy path
-- `supabase/migrations/<ts>_clear_pumpfun_error_on_force_retry.sql` — extend `force_pumpfun_fee_claim_retry` to also null out `pumpfun_last_claim_error`
-
-**Run once after deploy** (no code, just an RPC call from the Pump.fun Fee-Claim Health admin panel "Force retry" button):
-- Click Force retry on `ETEST` — distributor picks it up within 30s and starts sweeping.
-
-## Behavior after fix
-
-| Step | Before fix | After fix |
-|---|---|---|
-| PumpPortal returns 200 + `errors: []` | Treated as failure, throttled 10 min | Treated as success, balance delta computed |
-| `claimedLamports` per launch | `0` | actual lamports / N |
-| Escrow → treasury sweep | **Never runs** | Runs in parallel after fan-out |
-| `platform_fee_claims` table | Empty | Populated each successful cycle |
+If after step 1 you still see `pumpfun_fees_claimed_total = 0` and an empty `platform_fee_claims`, then there's a real bug to chase. Until then, the system is working — there's just nothing to sweep.
