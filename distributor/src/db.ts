@@ -317,6 +317,27 @@ export async function recordPumpfunWalletStarved(
   }
 }
 
+// Stamp the on-chain creator vault balance on every launch in the batch.
+// Called once per cycle whether or not we actually claim, so the admin UI
+// always sees a fresh "vault has X SOL" number explaining why a claim did
+// or did not fire.
+export async function recordPumpfunCreatorVaultBalance(
+  launchIds: string[],
+  balanceLamports: number
+): Promise<void> {
+  if (launchIds.length === 0) return;
+  const { error } = await supabase.rpc("record_pumpfun_creator_vault_balance", {
+    p_launch_ids: launchIds,
+    p_balance_lamports: balanceLamports,
+  });
+  if (error) {
+    console.error(
+      `Error recording Pump.fun creator vault balance:`,
+      error.message
+    );
+  }
+}
+
 // Reset launches stuck in "executing" status whose scheduled launch_datetime
 // is more than 10 minutes in the past. Flips them to "execution_failed" so
 // the existing pg_cron retry job will pick them up and re-execute.
