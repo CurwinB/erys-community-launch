@@ -248,29 +248,18 @@ const SponsoredPage = () => {
               <p className="text-muted-foreground mb-6">
                 Erys will fund your token launch on Pump.fun with{" "}
                 <span className="text-primary font-semibold">{seedSol} SOL</span> at no cost to
-                you. Fill in your token details below and share your launch link with your
-                community.
+                you. Pick your own launch time below — we'll auto-shift forward by a few
+                minutes if your chosen minute is already booked.
               </p>
-              <div className="grid grid-cols-2 gap-4">
-                <Card className="rounded-none border-border bg-card p-4">
-                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">
-                    Launch in
-                  </div>
-                  <div className="font-mono text-xl text-primary">{launchCountdown}</div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {fmtDate(state.slot.launch_datetime)}
-                  </div>
-                </Card>
-                <Card className="rounded-none border-border bg-card p-4">
-                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">
-                    Link expires in
-                  </div>
-                  <div className="font-mono text-xl text-amber-400">{expiryCountdown}</div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {fmtDate(state.slot.sponsor_link_expires_at)}
-                  </div>
-                </Card>
-              </div>
+              <Card className="rounded-none border-border bg-card p-4">
+                <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">
+                  Link expires in
+                </div>
+                <div className="font-mono text-xl text-amber-400">{expiryCountdown}</div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {fmtDate(state.slot.sponsor_link_expires_at)}
+                </div>
+              </Card>
             </div>
 
             <Card className="rounded-none border-border bg-card p-6">
