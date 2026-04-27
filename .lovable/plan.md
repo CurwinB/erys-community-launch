@@ -1,29 +1,63 @@
-## Goal
+## What's actually going on
 
-Display scheduled launches in a 5-column wide grid (with up to 4 rows = 20 cards) before pagination kicks in, matching the density of pump.fun's "Explore coins" view.
+The wallet `BvpGuDSLDafZXSDeokapirQqiPshocaMFHG5N46c9rxV` has **15+ contributions** in the database, including two in the most recent launch (`Erys test` / TESTE, mint `5xTQrHxGKcD73qcVwkLNxkZ63ANafc8B6Muu6CTFGKY3`):
 
-## Changes
+| Contribution | Amount | Tokens distributed | Distribution tx |
+|---|---|---|---|
+| `6d7975d2…` | 0.23 SOL | 5,957,020,458,136 TESTE | `4V7mR1do…` ✅ |
+| `b27e1f0d…` | 0.0999 SOL | 2,589,879,394,396 TESTE | `23wDQbos…` ✅ |
 
-**`src/pages/Index.tsx`**
+Both rows have `tokens_distributed = true` and a real on-chain signature.
 
-Update both grid containers (live launches + completed launches + skeleton placeholders) from:
+### Where did the tokens go?
 
-```tsx
-className="grid gap-4 md:grid-cols-2 lg:grid-cols-3"
+They went exactly where they were supposed to:
+
+- Contribution `6d7975d2…` had `token_delivery_wallet = F46AiunPJYzAZp1WysKNcPy7RphztugX6Zu9Lev69BEK`, so the distributor sent the tokens to that delivery wallet (not back to `BvpG…9rxV`).
+- Contribution `b27e1f0d…` had no delivery wallet set, so the distributor sent the tokens straight to `BvpG…9rxV`.
+
+You can verify both signatures on Solscan — the tokens are not lost. The user almost certainly has the TESTE balance in `F46Aiun…BEK` (their token-delivery wallet) for the bigger contribution and in `BvpG…9rxV` for the smaller one.
+
+### Why the dashboard shows zero
+
+The `contributions` table has RLS that denies all browser SELECT (`USING (false)`), so the dashboard **must** use an RPC to read it. `src/hooks/useDashboardNotifications.ts` calls:
+
+```ts
+supabase.rpc("list_my_contributions", { p_wallet: walletAddress })
 ```
 
-to a responsive ladder that scales up to 5 columns on wide screens:
+That RPC **does not exist in the database** (confirmed via `pg_proc`). The query throws, react-query falls back to `[]`, and every tab — Notifications, My Tokens, My Fees, My Contributions — renders as empty. So the data is fine; the UI just can't see it.
 
-```tsx
-className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
-```
+## Fix
 
-`LAUNCHES_PER_PAGE` already equals 20, so 5 × 4 = 20 fits exactly one page before "Next →" appears. No pagination logic changes needed.
+1. Create the missing RPC `public.list_my_contributions(p_wallet text)` as `SECURITY DEFINER`. It returns each contribution joined with the public-safe launch fields the dashboard needs (matching the shape `c.launches.{token_name, token_symbol, image_url, platform, token_mint_address, status, launch_datetime, distribution_completed_at, …}`). It only returns rows for the caller's own wallet (case-insensitive match on `wallet_address`).
 
-Also bump skeleton placeholder count from 3 to 5 so the loading state matches the new grid width.
+   ```text
+   list_my_contributions(p_wallet text) returns table (
+     id uuid,
+     wallet_address text,
+     amount_lamports bigint,
+     tx_signature text,
+     contributed_at timestamptz,
+     basis_points int,
+     token_amount bigint,
+     tokens_distributed bool,
+     distribution_tx_signature text,
+     distribution_error text,
+     refund_tx_signature text,
+     token_delivery_wallet text,
+     is_fee_claimer bool,
+     launches jsonb   -- nested object built from launches_public columns
+   )
+   ```
 
-## Notes
+   Grant `EXECUTE` to `anon` and `authenticated`. The function is `STABLE SECURITY DEFINER` with `SET search_path = public` and filters strictly by `lower(wallet_address) = lower(p_wallet)` so wallets can only see their own data.
 
-- LaunchCard is already responsive — its image/avatar/typography work fine in narrower columns.
-- Mobile (1 col) → small (2) → tablet (3) → desktop (4) → wide (5) keeps the layout readable at every breakpoint.
-- The `xl` breakpoint (≥1280px) is where the 5-across appears, matching pump.fun's behavior on standard desktop widths.
+2. No frontend changes required — `useDashboardNotifications` already calls the RPC with the right name and argument and already destructures `c.launches.*`.
+
+3. After deploy, the wallet will immediately see all 15+ contributions, the two TESTE distributions in "My Tokens", and the upcoming/scheduled contributions in "Notifications".
+
+## Out of scope
+
+- No tokens are missing or misrouted; no on-chain action needed.
+- The `My Tokens` tab will surface the TESTE distribution to `F46Aiun…BEK` — if the user wants the dashboard to also display *which* wallet received the tokens (delivery wallet vs. connected wallet), that's a follow-up UI tweak we can do after this fix lands.
