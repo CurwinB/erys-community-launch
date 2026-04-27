@@ -153,14 +153,14 @@ const Index = () => {
       <section id="launches" className="border-b border-border">
         <div className="container mx-auto px-4 py-16">
           {liveLaunchesLoading ? (
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {[1, 2, 3].map((i) => (
+            <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              {[1, 2, 3, 4, 5].map((i) => (
                 <div key={i} className="h-72 animate-pulse rounded-sm border border-border bg-card" />
               ))}
             </div>
           ) : liveLaunches && liveLaunches.length > 0 ? (
             <>
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
               {paginatedLaunches.map((launch, i) => {
                 const stats = contributionStats?.[launch.id];
                 return (
@@ -220,14 +220,14 @@ const Index = () => {
           <h2 className="mb-8 text-2xl font-bold text-foreground">Completed Launches</h2>
 
           {completedLoading ? (
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {[1, 2, 3].map((i) => (
+            <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              {[1, 2, 3, 4, 5].map((i) => (
                 <div key={i} className="h-48 animate-pulse rounded-sm border border-border bg-card" />
               ))}
             </div>
           ) : completedLaunches && completedLaunches.length > 0 ? (
             <>
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 opacity-75">
+            <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 opacity-75">
               {paginatedCompleted.map((launch, i) => (
                 <LaunchCard
                   key={launch.id}
