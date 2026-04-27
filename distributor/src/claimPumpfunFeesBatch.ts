@@ -15,6 +15,7 @@ import {
   updatePumpfunFeesClaimed,
   recordPumpfunEmptyClaim,
   recordPumpfunFeeClaimFailure,
+  recordPumpfunWalletStarved,
 } from "./db";
 import { withCustodialLock } from "./custodialLock";
 
@@ -171,8 +172,12 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
             Number(requiredForClaims) / LAMPORTS_PER_SOL
           } SOL). Aborting cycle.`;
           console.error(msg);
+          // Surface the error in the admin panel BUT don't stamp the 10-min
+          // throttle — top up the wallet and the next 30s poll will retry.
+          // Also release the row-locks so any replica can pick them up.
           for (const c of candidates) {
-            await recordPumpfunFeeClaimFailure(c.launch.id, msg);
+            await recordPumpfunWalletStarved(c.launch.id, msg);
+            await releaseLaunchLock(c.launch.id);
           }
           return;
         }
