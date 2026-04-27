@@ -388,6 +388,12 @@ const SponsoredPage = () => {
               launch on Pump.fun at{" "}
               <span className="text-foreground">{fmtDate(state.launchDatetime)}</span>.
             </p>
+            {state.wasAdjusted && (
+              <p className="text-[11px] text-amber-400 mb-6 -mt-4">
+                Your chosen minute was full, so we shifted forward by{" "}
+                {state.offsetMinutes} minute{state.offsetMinutes === 1 ? "" : "s"}.
+              </p>
+            )}
 
             <div className="text-left mb-6">
               <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">
