@@ -17,12 +17,19 @@ type SlotState =
       kind: "ready";
       slot: {
         id: string;
-        launch_datetime: string;
+        launch_datetime: string | null;
         sponsor_link_expires_at: string;
         sponsored_amount_lamports: number;
       };
     }
-  | { kind: "success"; launchUrl: string; tokenName: string; launchDatetime: string };
+  | {
+      kind: "success";
+      launchUrl: string;
+      tokenName: string;
+      launchDatetime: string;
+      wasAdjusted: boolean;
+      offsetMinutes: number;
+    };
 
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleString(undefined, {
@@ -59,12 +66,24 @@ const SponsoredPage = () => {
   const [telegramUrl, setTelegramUrl] = useState("");
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [imageFile, setImageFile] = useState<File | null>(null);
+  const [launchDatetime, setLaunchDatetime] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const slot = state.kind === "ready" ? state.slot : null;
-  const launchCountdown = useCountdown(slot?.launch_datetime ?? null);
   const expiryCountdown = useCountdown(slot?.sponsor_link_expires_at ?? null);
+
+  const minDateTime = useMemo(() => {
+    const d = new Date(Date.now() + 60 * 60 * 1000);
+    // datetime-local expects "YYYY-MM-DDTHH:mm" in local time.
+    const tzOffsetMs = d.getTimezoneOffset() * 60 * 1000;
+    return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 16);
+  }, []);
+  const maxDateTime = useMemo(() => {
+    const d = new Date(Date.now() + 72 * 60 * 60 * 1000);
+    const tzOffsetMs = d.getTimezoneOffset() * 60 * 1000;
+    return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 16);
+  }, []);
 
   useEffect(() => {
     if (!linkToken) {
@@ -132,6 +151,16 @@ const SponsoredPage = () => {
       toast.error("Token name and symbol are required");
       return;
     }
+    if (!launchDatetime) {
+      toast.error("Pick a launch time");
+      return;
+    }
+    const launchIso = new Date(launchDatetime).toISOString();
+    const diffHours = (new Date(launchIso).getTime() - Date.now()) / (1000 * 60 * 60);
+    if (diffHours < 1 || diffHours > 72) {
+      toast.error("Launch time must be 1–72 hours from now");
+      return;
+    }
     setSubmitting(true);
     try {
       let image_url: string | undefined;
@@ -149,6 +178,7 @@ const SponsoredPage = () => {
           twitter_url: twitterUrl.trim() || undefined,
           telegram_url: telegramUrl.trim() || undefined,
           website_url: websiteUrl.trim() || undefined,
+          launch_datetime: launchIso,
         },
       });
       if (error) throw error;
@@ -159,7 +189,9 @@ const SponsoredPage = () => {
         kind: "success",
         launchUrl: fullUrl,
         tokenName: tokenName.trim(),
-        launchDatetime: state.slot.launch_datetime,
+        launchDatetime: data.adjusted_launch_datetime || launchIso,
+        wasAdjusted: Boolean(data.was_adjusted),
+        offsetMinutes: Number(data.offset_minutes ?? 0),
       });
     } catch (err: any) {
       toast.error(err.message || "Failed to submit");
@@ -216,29 +248,18 @@ const SponsoredPage = () => {
               <p className="text-muted-foreground mb-6">
                 Erys will fund your token launch on Pump.fun with{" "}
                 <span className="text-primary font-semibold">{seedSol} SOL</span> at no cost to
-                you. Fill in your token details below and share your launch link with your
-                community.
+                you. Pick your own launch time below — we'll auto-shift forward by a few
+                minutes if your chosen minute is already booked.
               </p>
-              <div className="grid grid-cols-2 gap-4">
-                <Card className="rounded-none border-border bg-card p-4">
-                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">
-                    Launch in
-                  </div>
-                  <div className="font-mono text-xl text-primary">{launchCountdown}</div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {fmtDate(state.slot.launch_datetime)}
-                  </div>
-                </Card>
-                <Card className="rounded-none border-border bg-card p-4">
-                  <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">
-                    Link expires in
-                  </div>
-                  <div className="font-mono text-xl text-amber-400">{expiryCountdown}</div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {fmtDate(state.slot.sponsor_link_expires_at)}
-                  </div>
-                </Card>
-              </div>
+              <Card className="rounded-none border-border bg-card p-4">
+                <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">
+                  Link expires in
+                </div>
+                <div className="font-mono text-xl text-amber-400">{expiryCountdown}</div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {fmtDate(state.slot.sponsor_link_expires_at)}
+                </div>
+              </Card>
             </div>
 
             <Card className="rounded-none border-border bg-card p-6">
@@ -265,6 +286,23 @@ const SponsoredPage = () => {
                     required
                     className="rounded-none mt-1 uppercase"
                   />
+                </div>
+                <div>
+                  <Label htmlFor="launch_dt">Launch time (1–72h ahead) *</Label>
+                  <Input
+                    id="launch_dt"
+                    type="datetime-local"
+                    value={launchDatetime}
+                    onChange={(e) => setLaunchDatetime(e.target.value)}
+                    min={minDateTime}
+                    max={maxDateTime}
+                    required
+                    className="rounded-none mt-1"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    If your chosen minute is full, we'll slide forward to the next open
+                    Pump.fun slot.
+                  </p>
                 </div>
                 <div>
                   <Label htmlFor="description">Description</Label>
@@ -350,6 +388,12 @@ const SponsoredPage = () => {
               launch on Pump.fun at{" "}
               <span className="text-foreground">{fmtDate(state.launchDatetime)}</span>.
             </p>
+            {state.wasAdjusted && (
+              <p className="text-[11px] text-amber-400 mb-6 -mt-4">
+                Your chosen minute was full, so we shifted forward by{" "}
+                {state.offsetMinutes} minute{state.offsetMinutes === 1 ? "" : "s"}.
+              </p>
+            )}
 
             <div className="text-left mb-6">
               <Label className="text-[10px] uppercase tracking-widest text-muted-foreground">

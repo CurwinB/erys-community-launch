@@ -23,7 +23,7 @@ interface SponsoredLaunch {
   token_name: string;
   token_symbol: string;
   status: string;
-  launch_datetime: string;
+  launch_datetime: string | null;
   created_by_wallet: string;
   sponsor_link_token: string | null;
   sponsor_link_expires_at: string | null;
@@ -45,26 +45,25 @@ const SponsoredTab = ({ launches }: Props) => {
   const queryClient = useQueryClient();
 
   const [influencerWallet, setInfluencerWallet] = useState("");
-  const [launchDatetime, setLaunchDatetime] = useState("");
   const [creating, setCreating] = useState(false);
   const [createdLink, setCreatedLink] = useState<{ link: string; expires: string } | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const sponsored = useMemo(
-    () => launches.filter((l) => l.is_sponsored).sort((a, b) =>
-      new Date(b.launch_datetime).getTime() - new Date(a.launch_datetime).getTime(),
-    ),
+    () =>
+      launches
+        .filter((l) => l.is_sponsored)
+        .sort((a, b) => {
+          const aTime = a.launch_datetime
+            ? new Date(a.launch_datetime).getTime()
+            : new Date(a.sponsor_link_expires_at || 0).getTime();
+          const bTime = b.launch_datetime
+            ? new Date(b.launch_datetime).getTime()
+            : new Date(b.sponsor_link_expires_at || 0).getTime();
+          return bTime - aTime;
+        }),
     [launches],
   );
-
-  const minDateTime = useMemo(() => {
-    const d = new Date(Date.now() + 60 * 60 * 1000);
-    return d.toISOString().slice(0, 16);
-  }, []);
-  const maxDateTime = useMemo(() => {
-    const d = new Date(Date.now() + 72 * 60 * 60 * 1000);
-    return d.toISOString().slice(0, 16);
-  }, []);
 
   const copyText = async (text: string, key: string) => {
     await navigator.clipboard.writeText(text);
@@ -78,8 +77,8 @@ const SponsoredTab = ({ launches }: Props) => {
       toast.error("Connect your admin wallet first");
       return;
     }
-    if (!influencerWallet.trim() || !launchDatetime) {
-      toast.error("Influencer wallet and launch time are required");
+    if (!influencerWallet.trim()) {
+      toast.error("Influencer wallet is required");
       return;
     }
     setCreating(true);
@@ -88,14 +87,12 @@ const SponsoredTab = ({ launches }: Props) => {
         body: {
           admin_wallet: walletAddress,
           influencer_wallet: influencerWallet.trim(),
-          launch_datetime: new Date(launchDatetime).toISOString(),
         },
       });
       if (error) throw error;
       if (!data?.success) throw new Error(data?.error || "Failed");
       setCreatedLink({ link: data.sponsor_link, expires: data.expires_at });
       setInfluencerWallet("");
-      setLaunchDatetime("");
       queryClient.invalidateQueries({ queryKey: ["admin-dashboard"] });
       toast.success("Sponsored slot created");
     } catch (err: any) {
@@ -131,29 +128,20 @@ const SponsoredTab = ({ launches }: Props) => {
           Create sponsored slot
         </h3>
         <form onSubmit={handleCreate} className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor="influencer">Influencer wallet address</Label>
-              <Input
-                id="influencer"
-                value={influencerWallet}
-                onChange={(e) => setInfluencerWallet(e.target.value)}
-                placeholder="Solana wallet address"
-                className="rounded-none mt-1 font-mono text-xs"
-              />
-            </div>
-            <div>
-              <Label htmlFor="launch_dt">Launch time (1–72h ahead)</Label>
-              <Input
-                id="launch_dt"
-                type="datetime-local"
-                min={minDateTime}
-                max={maxDateTime}
-                value={launchDatetime}
-                onChange={(e) => setLaunchDatetime(e.target.value)}
-                className="rounded-none mt-1"
-              />
-            </div>
+          <div>
+            <Label htmlFor="influencer">Influencer wallet address</Label>
+            <Input
+              id="influencer"
+              value={influencerWallet}
+              onChange={(e) => setInfluencerWallet(e.target.value)}
+              placeholder="Solana wallet address"
+              className="rounded-none mt-1 font-mono text-xs"
+            />
+            <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed">
+              The influencer picks their own launch time (1–72h ahead) when they
+              claim the link. All sponsored launches go to Pump.fun. Link is
+              valid for 48 hours.
+            </p>
           </div>
           <Button type="submit" disabled={creating} className="rounded-none">
             {creating ? (
@@ -231,7 +219,13 @@ const SponsoredTab = ({ launches }: Props) => {
                 <TableCell className="font-mono text-xs">
                   {l.token_symbol === "PENDING" ? "—" : l.token_symbol}
                 </TableCell>
-                <TableCell className="text-xs">{fmt(l.launch_datetime)}</TableCell>
+                <TableCell className="text-xs">
+                  {l.launch_datetime ? (
+                    fmt(l.launch_datetime)
+                  ) : (
+                    <span className="text-muted-foreground italic">Not yet picked</span>
+                  )}
+                </TableCell>
                 <TableCell className="text-xs">{fmt(l.sponsor_link_expires_at)}</TableCell>
                 <TableCell className="text-xs">{fmt(l.sponsor_link_claimed_at)}</TableCell>
                 <TableCell className="text-right">

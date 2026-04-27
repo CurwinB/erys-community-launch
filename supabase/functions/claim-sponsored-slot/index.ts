@@ -6,6 +6,10 @@ import {
   Transaction,
 } from "https://esm.sh/@solana/web3.js@1.91.1";
 import bs58 from "https://esm.sh/bs58@5.0.0";
+import {
+  findNextAvailableSlot,
+  withScheduleLock,
+} from "../_shared/scheduleCapacity.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -36,10 +40,19 @@ Deno.serve(async (req) => {
       twitter_url,
       telegram_url,
       website_url,
+      launch_datetime,
     } = await req.json();
 
-    if (!link_token || !token_name || !token_symbol) {
+    if (!link_token || !token_name || !token_symbol || !launch_datetime) {
       return errorResponse("Missing required fields", 400);
+    }
+
+    // Validate launch time is 1-72h ahead
+    const launchTime = new Date(launch_datetime);
+    const nowDate = new Date();
+    const diffHours = (launchTime.getTime() - nowDate.getTime()) / (1000 * 60 * 60);
+    if (Number.isNaN(diffHours) || diffHours < 1 || diffHours > 72) {
+      return errorResponse("Launch must be between 1 and 72 hours from now", 400);
     }
 
     // Lookup
@@ -155,30 +168,37 @@ Deno.serve(async (req) => {
     const sponsoredTxSignature = sendData.result;
     console.log(`Sponsored escrow funded: ${sponsoredTxSignature}`);
 
-    const { error: updateError } = await supabase
-      .from("launches")
-      .update({
-        token_name,
-        token_symbol: String(token_symbol).toUpperCase(),
-        description: description || null,
-        image_url: image_url || null,
-        twitter_url: twitter_url || null,
-        telegram_url: telegram_url || null,
-        website_url: website_url || null,
-        ipfs_metadata_url: ipfsMetadataUrl,
-        token_mint_address: mint.publicKey,
-        escrow_wallet_public_key: escrow.publicKey,
-        escrow_wallet_encrypted_private_key: encryptedEscrowPk,
-        pumpfun_mint_keypair_encrypted: encryptedMintPk,
-        sponsored_tx_signature: sponsoredTxSignature,
-        sponsor_link_claimed_at: new Date().toISOString(),
-        status: "scheduled",
-      })
-      .eq("id", launch.id);
-
-    if (updateError) {
-      return errorResponse(`Failed to finalize launch: ${updateError.message}`, 500);
-    }
+    // Allocate a Pump.fun launch slot under the platform schedule lock so we
+    // can't double-book the same minute. The influencer picked launch_datetime;
+    // if that minute is full, we slide forward to the next open slot.
+    const slot = await withScheduleLock(supabase, "pumpfun", async () => {
+      const allocated = await findNextAvailableSlot(supabase, "pumpfun", launch_datetime);
+      const { error: updateError } = await supabase
+        .from("launches")
+        .update({
+          token_name,
+          token_symbol: String(token_symbol).toUpperCase(),
+          description: description || null,
+          image_url: image_url || null,
+          twitter_url: twitter_url || null,
+          telegram_url: telegram_url || null,
+          website_url: website_url || null,
+          ipfs_metadata_url: ipfsMetadataUrl,
+          token_mint_address: mint.publicKey,
+          escrow_wallet_public_key: escrow.publicKey,
+          escrow_wallet_encrypted_private_key: encryptedEscrowPk,
+          pumpfun_mint_keypair_encrypted: encryptedMintPk,
+          sponsored_tx_signature: sponsoredTxSignature,
+          sponsor_link_claimed_at: new Date().toISOString(),
+          launch_datetime: allocated.adjustedTime,
+          status: "scheduled",
+        })
+        .eq("id", launch.id);
+      if (updateError) {
+        throw new Error(`Failed to finalize launch: ${updateError.message}`);
+      }
+      return allocated;
+    });
 
     return new Response(
       JSON.stringify({
@@ -186,6 +206,10 @@ Deno.serve(async (req) => {
         launch_id: launch.id,
         launch_url: `/launch/${launch.id}`,
         mint_address: mint.publicKey,
+        adjusted_launch_datetime: slot.adjustedTime,
+        original_launch_datetime: slot.originalTime,
+        was_adjusted: slot.wasAdjusted,
+        offset_minutes: slot.offsetMinutes,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );

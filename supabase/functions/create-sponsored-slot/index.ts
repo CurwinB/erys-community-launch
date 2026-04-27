@@ -16,10 +16,10 @@ Deno.serve(async (req) => {
   );
 
   try {
-    const { admin_wallet, influencer_wallet, launch_datetime } = await req.json();
+    const { admin_wallet, influencer_wallet } = await req.json();
 
-    if (!admin_wallet || !influencer_wallet || !launch_datetime) {
-      return errorResponse("Missing admin_wallet, influencer_wallet, or launch_datetime", 400);
+    if (!admin_wallet || !influencer_wallet) {
+      return errorResponse("Missing admin_wallet or influencer_wallet", 400);
     }
 
     // Verify admin
@@ -29,25 +29,17 @@ Deno.serve(async (req) => {
     if (adminErr) return errorResponse(`Admin check failed: ${adminErr.message}`, 500);
     if (!isAdmin) return errorResponse("Unauthorized: not an admin wallet", 403);
 
-    // Validate launch time 1-72h ahead
-    const launchTime = new Date(launch_datetime);
-    const now = new Date();
-    const diffHours = (launchTime.getTime() - now.getTime()) / (1000 * 60 * 60);
-    if (Number.isNaN(diffHours) || diffHours < 1 || diffHours > 72) {
-      return errorResponse("Launch must be between 1 and 72 hours from now", 400);
-    }
-
     const linkToken = crypto.randomUUID().replace(/-/g, "");
-
-    const fortyEightHours = new Date(now.getTime() + 48 * 60 * 60 * 1000);
-    const oneHourBeforeLaunch = new Date(launchTime.getTime() - 60 * 60 * 1000);
-    const expiresAt = fortyEightHours < oneHourBeforeLaunch ? fortyEightHours : oneHourBeforeLaunch;
+    const now = new Date();
+    // Link is valid for 48 hours; the influencer picks the actual launch
+    // time when they claim the slot.
+    const expiresAt = new Date(now.getTime() + 48 * 60 * 60 * 1000);
 
     const { data, error } = await supabase
       .from("launches")
       .insert({
         created_by_wallet: influencer_wallet,
-        launch_datetime,
+        launch_datetime: null,
         platform: "pumpfun",
         status: "sponsor_pending",
         is_sponsored: true,

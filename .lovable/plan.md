@@ -1,156 +1,60 @@
-## Goal
+# Influencer-picked launch time for sponsored slots
 
-Make adding a new PumpPortal custodial wallet a **zero-code operation**. Going from 1 wallet to N should require only:
+## What changes
 
-1. Add `PUMPPORTAL_CUSTODIAL_WALLET_2`, `PUMPPORTAL_CUSTODIAL_PRIVATE_KEY_2`, and `PUMPPORTAL_API_KEY_2` as secrets.
-2. Restart the workers.
+Today the admin enters the influencer wallet **and** the launch time, then sends a link. We're flipping that: the admin only generates the link, and the influencer picks their own launch time on the sponsored page (subject to the same scheduling rules as everyone else). Sponsored slots stay locked to Pump.fun — no platform choice on either side.
 
-That's it. No code changes. No UI changes. The system auto-discovers the new wallet, includes it in the scheduling capacity calculation, distributes new launches across the pool, and includes it in the fee-claim cycle.
+## User-facing behavior
 
-## How It Works
+**Admin (Sponsored tab)**
+- Form simplifies to a single field: **Influencer wallet address**.
+- "Launch time (1–72h ahead)" field is removed.
+- Submitting creates an invite link valid for 48 hours. The launches table row is created in `sponsor_pending` status with no `launch_datetime` yet.
+- Sponsored launches table: the "Launch time" column shows "Not yet picked" until the influencer claims.
 
-### 1. Wallet pool auto-discovery
+**Influencer (`/sponsored/:token`)**
+- Page now shows a **launch time picker** (datetime-local) with the same 1–72h-ahead constraint, alongside the existing token name/symbol/description/image/socials form.
+- Helper text clarifies the launch is on Pump.fun and the time will auto-shift forward by a few minutes if their chosen minute is full (same rule as the public schedule page).
+- On submit, `claim-sponsored-slot` runs the Pump.fun slot allocator, persists the (possibly adjusted) `launch_datetime`, and shows the final launch time + adjustment notice on the success screen.
+- "Link expires in" countdown still uses the 48h link expiry (no longer tied to launch time).
 
-A new shared module `pumpportalWalletPool.ts` scans environment variables on boot and builds an array of `{ id, pubkey, secretKey, apiKey }`. The naming convention is:
+## Technical changes
 
-```text
-Slot 1 (existing, unchanged):
-  PUMPPORTAL_CUSTODIAL_WALLET
-  PUMPPORTAL_CUSTODIAL_PRIVATE_KEY
-  PUMPPORTAL_API_KEY
+**`supabase/functions/create-sponsored-slot/index.ts`**
+- Drop `launch_datetime` from the request body and validation.
+- Insert row with `launch_datetime = null` (DB column currently `NOT NULL` — see migration below), `platform = 'pumpfun'`, `status = 'sponsor_pending'`.
+- `sponsor_link_expires_at` always = `now + 48h` (no more "min(48h, launch-1h)" clamp).
 
-Slot 2:
-  PUMPPORTAL_CUSTODIAL_WALLET_2
-  PUMPPORTAL_CUSTODIAL_PRIVATE_KEY_2
-  PUMPPORTAL_API_KEY_2
+**`supabase/functions/claim-sponsored-slot/index.ts`**
+- Accept `launch_datetime` in the request body. Validate 1–72h ahead.
+- Wrap the slot allocation + update in `withScheduleLock(supabase, "pumpfun", …)` and call `findNextAvailableSlot(supabase, "pumpfun", launch_datetime)` (same helpers used by `create-launch-pumpfun`).
+- Persist the adjusted time on the launches row alongside the existing token-detail update.
+- Return `adjusted_launch_datetime`, `original_launch_datetime`, `was_adjusted`, `offset_minutes` in the response.
 
-Slot N:
-  PUMPPORTAL_CUSTODIAL_WALLET_N
-  PUMPPORTAL_CUSTODIAL_PRIVATE_KEY_N
-  PUMPPORTAL_API_KEY_N
-```
+**Migration (`supabase/migrations/...`)**
+- `ALTER TABLE public.launches ALTER COLUMN launch_datetime DROP NOT NULL;` so `sponsor_pending` rows can exist without a time.
+- Update `get_sponsor_slot_by_token` RPC return type — `launch_datetime` becomes nullable. The RPC body itself doesn't change.
 
-The loader stops at the first numbered slot whose secrets are missing. Each slot must have all three; partial slots throw at boot with a clear error. Existing single-wallet deployments keep working with no changes (slot 1 = the legacy unsuffixed names).
+**Frontend types**
+- Regenerate `src/integrations/supabase/types.ts` so `launches.launch_datetime` is `string | null` and the RPC return type matches.
 
-The module is duplicated across `executor/src/` and `distributor/src/` (Node) since the two services are deployed separately, but they share the exact same file contents (kept in sync — small file).
+**`src/components/admin/SponsoredTab.tsx`**
+- Remove `launchDatetime` state, the date input, and the `minDateTime`/`maxDateTime` memos.
+- Submit body sends only `admin_wallet` + `influencer_wallet`.
+- In the table, render `Not yet picked` when `launch_datetime` is null.
 
-### 2. Capacity scales with the pool size
+**`src/pages/SponsoredPage.tsx`**
+- Add `launchDatetime` form state and a `datetime-local` input with `min = now+1h`, `max = now+72h`.
+- `useCountdown` for `launch_datetime` only renders after a successful claim (use the value returned by the function, not the slot row).
+- Pre-claim hero text: drop the "at [time]" line; add a short note that they pick their own launch time below and that it's a Pump.fun launch.
+- On submit, pass `launch_datetime` to `claim-sponsored-slot`.
+- Success card shows the final `adjusted_launch_datetime`, plus a small "shifted to the next open minute" note when `was_adjusted` is true.
 
-`supabase/functions/_shared/scheduleCapacity.ts` currently hard-codes `pumpfun: 1` per minute. We change it to read the pool size from a database setting and multiply: `pumpfun_cap = pool_size`. So:
+**No changes needed**
+- `cancel-sponsored-slot` (still keys off `launch_id`).
+- Executor / distributor / fee-claim paths (sponsored launches already flow through Pump.fun infra once `status` flips to `scheduled`).
+- `scheduleCapacity.ts` — reused as-is.
 
-- 1 wallet → 1 launch/min on Pump.fun
-- 2 wallets → 2 launches/min
-- 5 wallets → 5 launches/min
-
-Implementation: a tiny new `app_settings` table with a single row `(key='pumpportal_wallet_pool_size', value=integer)`. The workers update this row on boot whenever they detect a different pool size. The scheduling edge functions read it (cached for 30 s) when computing slot capacity. This keeps the edge functions stateless — they don't need access to the wallet env vars.
-
-### 3. Per-launch wallet assignment
-
-When the executor picks up a `scheduled` Pump.fun launch:
-
-1. It hashes `launch.id` to a number, `mod pool_size`, picking a wallet deterministically.
-2. It writes the chosen `pumpportal_wallet_pubkey` to the launch row **before** running the critical section.
-3. It uses that wallet's secret key + API key for funding, the Lightning create call, and the post-mint sweep.
-4. The custodial lock key becomes the wallet pubkey (already the case today — so concurrent launches on different wallets run in parallel automatically).
-
-Recovery (`recoverPumpfunSweep`) reads the persisted `pumpportal_wallet_pubkey` so it knows which wallet to sweep tokens from.
-
-### 4. Fee-claim cycle iterates the pool
-
-`claimPumpfunFeesBatch` becomes wallet-aware:
-
-- The `claim_pumpfun_launches_batch_for_worker` RPC takes an optional `p_wallet_pubkey` filter so each batch contains launches for exactly one wallet.
-- The distributor loops through every wallet in the pool, claiming + sweeping each one in turn (each under its own lock key, so two distributors can sweep two wallets in parallel).
-- Each wallet has its own creator-vault PDA, so the existing "balance check before claim" logic runs per wallet.
-
-### 5. Admin visibility (optional but cheap)
-
-The admin AccountingTab already shows fee-sweep history. We add a small "Wallet pool" panel showing each configured wallet, its current SOL balance, its creator-vault balance, and how many launches it owns. Read-only — no controls. This is the only UI change.
-
-## Database Changes
-
-Two small migrations:
-
-```sql
--- 1. Add per-launch wallet tracking
-alter table public.launches
-  add column pumpportal_wallet_pubkey text;
-
-create index if not exists idx_launches_pumpportal_wallet
-  on public.launches(pumpportal_wallet_pubkey)
-  where platform = 'pumpfun';
-
--- 2. App settings for cross-service config
-create table if not exists public.app_settings (
-  key text primary key,
-  value text not null,
-  updated_at timestamptz not null default now()
-);
-alter table public.app_settings enable row level security;
-create policy "Service role manages app_settings"
-  on public.app_settings for all
-  to service_role using (true) with check (true);
-create policy "App settings are readable by everyone"
-  on public.app_settings for select
-  to public using (true);
-
--- 3. Updated batch-claim RPC with optional wallet filter
-create or replace function public.claim_pumpfun_launches_batch_for_worker(
-  p_worker_id text,
-  p_limit integer default 25,
-  p_lock_expiry_seconds integer default 300,
-  p_wallet_pubkey text default null
-) returns setof public.launches ...
-  -- adds: and (p_wallet_pubkey is null
-  --            or pumpportal_wallet_pubkey = p_wallet_pubkey)
-```
-
-`pumpportal_wallet_pubkey` stays `null` for existing launches (they all use the legacy single wallet, which is slot 1 of the pool — backwards-compatible by definition).
-
-## Files Touched
-
-**New files:**
-- `executor/src/pumpportalWalletPool.ts` — pool loader + `getWalletForLaunch(launchId)` + `getAllWallets()`.
-- `distributor/src/pumpportalWalletPool.ts` — identical contents.
-- `supabase/migrations/<ts>_pumpportal_wallet_pool.sql` — schema + RPC update.
-
-**Modified:**
-- `executor/src/pumpportalCustodial.ts` — refactor module-level cached keypair into `getKeypairForWallet(pubkey)`. Helper functions take a wallet handle.
-- `executor/src/executePumpfunLightning.ts` — pick wallet via `getWalletForLaunch`, pass wallet handle into helpers, persist `pumpportal_wallet_pubkey`.
-- `executor/src/recoverPumpfunSweep.ts` — read `pumpportal_wallet_pubkey` from launch, use that wallet.
-- `executor/src/index.ts` — on boot, write current pool size to `app_settings`.
-- `distributor/src/claimPumpfunFeesBatch.ts` — outer loop over all wallets in pool; each iteration uses that wallet's keypair + API key, with the wallet pubkey as the lock key.
-- `distributor/src/claimPumpfunFees.ts` — same single-launch path: read launch's wallet column, use that wallet.
-- `distributor/src/index.ts` — write pool size to `app_settings` on boot.
-- `supabase/functions/_shared/scheduleCapacity.ts` — read `pumpportal_wallet_pool_size` from `app_settings` (cached) and use it as the per-minute cap.
-- `src/components/admin/AccountingTab.tsx` — small "Wallet pool" panel (read-only).
-
-## What Stays The Same
-
-- All existing secrets, RPC URLs, encryption keys: untouched.
-- The custodial lock RPC functions: unchanged (already keyed by string).
-- The launch flow on the user side: identical.
-- The fee-claim economics + thresholds: identical.
-- Single-wallet deployments: still work with zero changes.
-
-## Operational Story (the user-facing simplicity)
-
-After this lands, here's the entire process to add wallet #2:
-
-1. Create a new PumpPortal Lightning wallet, copy its API key + private key + public key.
-2. In the Lovable secrets panel, add three secrets: `PUMPPORTAL_API_KEY_2`, `PUMPPORTAL_CUSTODIAL_WALLET_2`, `PUMPPORTAL_CUSTODIAL_PRIVATE_KEY_2`.
-3. Restart the executor + distributor on Railway.
-
-The system immediately:
-- Reports pool size = 2 to the database.
-- Doubles the per-minute Pump.fun scheduling capacity in the UI.
-- Starts assigning new launches to wallets 1 or 2 (round-robin via launch-id hash).
-- Includes wallet 2 in every fee-claim cycle.
-
-To remove a wallet: delete the three secrets and restart. New launches stop using it; old launches still on it get swept whenever someone tops up its SOL.
-
-## Out of Scope
-
-- Auto-rebalancing SOL between wallets (operator's responsibility for now).
-- Failover when one wallet errors (each launch sticks to its assigned wallet — failure is per-launch, not per-wallet).
-- A UI to add/remove wallets without touching secrets (deliberately not building this — secrets stay the source of truth).
+## Out of scope
+- Letting influencers pick Bags vs Pump.fun (per request, sponsored stays Pump.fun only).
+- Letting influencers reschedule after claiming.

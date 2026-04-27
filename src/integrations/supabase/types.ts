@@ -148,7 +148,7 @@ export type Database = {
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
-          launch_datetime: string
+          launch_datetime: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
@@ -200,7 +200,7 @@ export type Database = {
           image_url?: string | null
           ipfs_metadata_url?: string | null
           is_sponsored?: boolean | null
-          launch_datetime: string
+          launch_datetime?: string | null
           max_contribution_lamports?: number | null
           min_contribution_lamports: number
           platform?: string
@@ -252,7 +252,7 @@ export type Database = {
           image_url?: string | null
           ipfs_metadata_url?: string | null
           is_sponsored?: boolean | null
-          launch_datetime?: string
+          launch_datetime?: string | null
           max_contribution_lamports?: number | null
           min_contribution_lamports?: number
           platform?: string
@@ -367,7 +367,7 @@ export type Database = {
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
-          launch_datetime: string
+          launch_datetime: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
@@ -432,7 +432,7 @@ export type Database = {
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
-          launch_datetime: string
+          launch_datetime: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
@@ -493,7 +493,7 @@ export type Database = {
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
-          launch_datetime: string
+          launch_datetime: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
@@ -559,7 +559,7 @@ export type Database = {
               image_url: string | null
               ipfs_metadata_url: string | null
               is_sponsored: boolean | null
-              launch_datetime: string
+              launch_datetime: string | null
               max_contribution_lamports: number | null
               min_contribution_lamports: number
               platform: string
@@ -625,7 +625,7 @@ export type Database = {
               image_url: string | null
               ipfs_metadata_url: string | null
               is_sponsored: boolean | null
-              launch_datetime: string
+              launch_datetime: string | null
               max_contribution_lamports: number | null
               min_contribution_lamports: number
               platform: string
@@ -686,7 +686,7 @@ export type Database = {
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
-          launch_datetime: string
+          launch_datetime: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
