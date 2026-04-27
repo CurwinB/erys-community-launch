@@ -372,9 +372,12 @@ async function collectAllCreatorFees(
     }
   );
   const json: any = await response.json().catch(() => ({}));
-  if (!response.ok || json?.errors) {
+  // PumpPortal returns 200 with `errors: []` on success. The empty array is
+  // truthy in JS, so we MUST check length, not the array itself.
+  const errorList = Array.isArray(json?.errors) ? json.errors : [];
+  if (!response.ok || errorList.length > 0) {
     const summary =
-      json?.errors?.join(" | ") ||
+      errorList.join(" | ") ||
       JSON.stringify(json).slice(0, 300) ||
       response.statusText;
     return {
