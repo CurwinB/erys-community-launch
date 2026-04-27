@@ -1,100 +1,53 @@
-# Global Footer + Policy & Contact Pages
+Why this keeps showing
 
-Right now the footer only lives on the homepage and has no legal links. Given Erys handles SOL escrow, token launches on Bags.fm/Pump.fun, and influencer sponsorships, we need clear policies that limit liability and a single contact channel: **info@erys.live**.
-
-## What we'll build
-
-### 1. Global `<Footer />` component
-- New `src/components/Footer.tsx`, mounted globally in `App.tsx` (just like `ConditionalNavbar`).
-- Hidden on `/admin/*` and `/sponsored/*` (same rule as the navbar) so internal/influencer flows stay clean.
-- Replaces the inline footer in `src/pages/Index.tsx`.
-
-Layout (responsive, matches existing dark/cyan aesthetic — bordered, mono accents, no emojis):
+The scanner is right to keep flagging this because the `launches` table still has a public RLS policy:
 
 ```text
-+---------------------------------------------------------------+
-| erys.                          Platform     Legal     Contact |
-| Community launch platform      Schedule     Terms     info@.. |
-| for Solana tokens.             Dashboard    Privacy   X / TG  |
-|                                How it works Risk              |
-+---------------------------------------------------------------+
-| (c) 2026 Erys  ·  Launch on Bags.fm or Pump.fun  ·  Not financial advice |
-+---------------------------------------------------------------+
+Policy: "Launches are viewable by everyone"
+Command: SELECT
+Role: public
+Using: true
 ```
 
-Columns:
-- **Platform**: Schedule a Launch, Dashboard, How it works (anchor `/#how-it-works`).
-- **Legal**: Terms of Service, Privacy Policy, Risk Disclosure.
-- **Contact**: `info@erys.live` (mailto), Contact page link, optional X/Telegram placeholders we can fill later.
+That means every row in `launches` is publicly readable. The app previously tried to reduce risk with column-level `REVOKE`/`GRANT` and frontend-safe column lists, but the underlying table still contains sensitive fields such as:
 
-Bottom strip keeps the existing "Every token launched through Erys is a real on-chain Solana token" line plus a "Not financial advice" disclaimer and copyright.
+- `escrow_wallet_encrypted_private_key`
+- `pumpfun_mint_keypair_encrypted`
+- `sponsor_link_token`
+- `worker_id`, `worker_locked_at`
+- internal execution / operational fields
 
-### 2. Policy pages
-All static, server-rendered React pages with `<Seo />`, consistent typography (`prose`-like styling using existing tokens), and a "Last updated" date.
+Also, the current frontend public column list still includes some internal fields like `sponsor_link_token`, `worker_id`, and `worker_locked_at`, so the scanner still sees real public exposure risk.
 
-- `src/pages/TermsPage.tsx` → `/terms`
-- `src/pages/PrivacyPage.tsx` → `/privacy`
-- `src/pages/RiskPage.tsx` → `/risk`
-- `src/pages/ContactPage.tsx` → `/contact`
+Plan to fix it properly
 
-Routes added to `App.tsx`. Navbar untouched; access is via the footer.
+1. Replace public table reads with a safe public API surface
+   - Create a safe public view or RPC for launch listings/details that only exposes fields the website actually needs.
+   - Exclude encrypted keys, sponsor tokens, worker locks, internal errors, and operational accounting fields.
+   - Keep public fields such as token name/symbol, image, launch time, status, public escrow wallet, platform, and public launch signature.
 
-### 3. Contact page
-Simple, no backend form (avoids spam + extra infra). It surfaces:
-- Primary email **info@erys.live** as a big `mailto:` button (copy-to-clipboard secondary action).
-- Expected response window ("within 2–3 business days").
-- What to include for different request types: refund inquiry, sponsored slot issue, security disclosure, press/partnerships.
-- Note that admin/legal requests must come from the wallet address tied to the launch (for verification).
+2. Lock down `public.launches`
+   - Drop the broad `"Launches are viewable by everyone"` SELECT policy.
+   - Revoke direct browser SELECT grants on `public.launches` from `anon` and `authenticated`.
+   - Keep full access for `service_role` so edge functions, executor, and distributor workers continue to work.
 
-### 4. Policy content (drafted in-plan, refined on build)
+3. Update the frontend to use the safe surface
+   - Update homepage launch lists to query the safe view/RPC instead of `launches` directly.
+   - Update individual launch pages to use the safe public launch read.
+   - Update contribution stat queries only as needed for public totals/recent activity.
 
-**Terms of Service** — covers:
-- Erys is a non-custodial scheduling/escrow platform; users transact directly with Bags.fm and Pump.fun, which are third-party protocols.
-- Eligibility: 18+, not in sanctioned jurisdictions, not a US person where local law restricts token participation.
-- No guarantee of token price, liquidity, or launch success. Refund mechanics apply only to failed launches per platform rules.
-- User responsibilities: securing their wallet, verifying launch details before contributing, complying with local tax law.
-- Prohibited uses: market manipulation, money laundering, impersonation, launching tokens that infringe IP or violate law.
-- Sponsored / influencer slots: influencers are independent; Erys does not endorse any token. Time-slot claims are first-come-first-served within capacity.
-- Limitation of liability + indemnity + arbitration / governing law placeholders (we'll mark `[Jurisdiction]` for the user to confirm).
-- Right to modify terms; continued use = acceptance.
+4. Preserve admin functionality safely
+   - The admin dashboard currently reads `launches` from the browser after checking `is_admin_wallet`, but that check is client-side and does not change database permissions.
+   - Move admin launch reads behind a service-role edge function/RPC that verifies the connected admin wallet server-side before returning admin-only fields.
+   - Keep sponsored link management working without exposing `sponsor_link_token` publicly.
 
-**Privacy Policy** — covers:
-- Data we collect: wallet addresses, on-chain transactions, IP/user-agent for abuse prevention, optional email if user contacts us, Dynamic Labs auth metadata.
-- Data we do NOT collect: private keys (custodial escrow keys are AES-256-GCM encrypted server-side per existing memory), passwords beyond Dynamic's auth.
-- Processors: Supabase (DB + edge functions), Dynamic Labs (wallet auth), Solana RPC providers, Bags.fm / Pump.fun / PumpPortal (launch execution).
-- Cookies / local storage: session auth only.
-- User rights: access, deletion, correction — request via info@erys.live.
-- Retention: launch records kept indefinitely for on-chain auditability; contact emails purged after resolution + 12 months.
+5. Verify and clear the finding
+   - Run the Supabase/security linter after the migration.
+   - Confirm public pages still load.
+   - Confirm admin sponsored links, launch management, and worker/executor flows still have the fields they need through service-role paths.
 
-**Risk Disclosure** — covers:
-- Crypto tokens are highly volatile and may go to zero.
-- Smart-contract / protocol risk on Bags.fm and Pump.fun.
-- Solana network risk (downtime, congestion, failed transactions).
-- Custodial escrow risk: although keys are encrypted, no system is perfectly secure.
-- Sponsored / influencer launches: influencers may have undisclosed positions; nothing on Erys is investment advice.
-- Refund timing depends on platform conditions and on-chain finality.
+Technical notes
 
-### 5. SEO + sitemap
-- Each new page gets a unique title + description via `<Seo />`.
-- Add `/terms`, `/privacy`, `/risk`, `/contact` to `public/sitemap.xml`.
-- `robots.txt` already allows them.
-
-## Files to add
-- `src/components/Footer.tsx`
-- `src/pages/TermsPage.tsx`
-- `src/pages/PrivacyPage.tsx`
-- `src/pages/RiskPage.tsx`
-- `src/pages/ContactPage.tsx`
-
-## Files to edit
-- `src/App.tsx` — register 4 new routes; mount `<Footer />` conditionally (hidden on `/admin` and `/sponsored`).
-- `src/pages/Index.tsx` — remove the inline `<footer>` block (now global).
-- `public/sitemap.xml` — add the 4 new URLs.
-
-## Open questions (we can default these unless you object)
-- Governing law / arbitration jurisdiction → default placeholder `[Jurisdiction TBD]` for you to fill before publishing.
-- Social links in the footer (X, Telegram, Discord) → leave hidden until you provide handles.
-- Cookie banner → not needed since we only use functional auth storage; if you later add analytics we'll revisit.
-
-## Disclaimer
-Drafted policies are a strong starting baseline tailored to Erys's flows but are **not a substitute for legal review**. Before going live we recommend a lawyer in your operating jurisdiction signs off, especially on the Terms and Risk Disclosure.
+- Column-level grants alone are not enough for this finding because the table-level RLS policy is still public and permissive.
+- The clean fix is: public users should not query `public.launches` directly. They should query a sanitized view/RPC.
+- Edge functions and backend workers can continue using `select("*")` because they use `SUPABASE_SERVICE_ROLE_KEY`, which should remain server-only.
