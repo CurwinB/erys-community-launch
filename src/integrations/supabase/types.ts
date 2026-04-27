@@ -1292,6 +1292,25 @@ export type Database = {
         Returns: undefined
       }
       is_admin_wallet: { Args: { p_wallet: string }; Returns: boolean }
+      list_my_contributions: {
+        Args: { p_wallet: string }
+        Returns: {
+          amount_lamports: number
+          basis_points: number
+          contributed_at: string
+          distribution_error: string
+          distribution_tx_signature: string
+          id: string
+          is_fee_claimer: boolean
+          launches: Json
+          refund_tx_signature: string
+          token_amount: number
+          token_delivery_wallet: string
+          tokens_distributed: boolean
+          tx_signature: string
+          wallet_address: string
+        }[]
+      }
       mark_pumpfun_fee_claim_attempt: {
         Args: { p_launch_id: string }
         Returns: undefined
