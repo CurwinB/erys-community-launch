@@ -75,6 +75,8 @@ interface SponsorFundingRow {
   escrow_wallet_public_key: string;
   sponsored_amount_lamports: number | null;
   sponsor_funding_attempts: number;
+  creator_delivery_wallet: string | null;
+  created_by_wallet: string;
 }
 
 async function claimNextSponsorFunding(
@@ -89,6 +91,79 @@ async function claimNextSponsorFunding(
     return null;
   }
   return (data?.[0] as SponsorFundingRow) || null;
+}
+
+/**
+ * Idempotently record the platform's 0.1 SOL drop as a contribution row
+ * for the influencer. Without this, the executor would launch with zero
+ * contributions and the influencer would never receive tokens for the
+ * seed SOL the platform spent on their behalf.
+ *
+ *   - wallet_address       = influencer's pump wallet (or created_by_wallet
+ *                            placeholder if they didn't provide one).
+ *   - token_delivery_wallet = same pump wallet (NULL otherwise — distributor
+ *                             falls back to wallet_address).
+ *   - amount_lamports      = the funded amount.
+ *   - tx_signature         = the funding tx (used as the dedupe key).
+ *   - is_fee_claimer       = true so the influencer joins the fee-share split,
+ *                            matching how a regular launch's creator is treated.
+ */
+async function recordSponsoredContribution(
+  row: SponsorFundingRow,
+  amountLamports: number,
+  signature: string | null,
+): Promise<void> {
+  if (!signature) {
+    console.warn(
+      `Skipping contribution insert for ${row.id}: missing tx signature.`,
+    );
+    return;
+  }
+
+  const walletAddress =
+    (row.creator_delivery_wallet || "").trim() || row.created_by_wallet;
+  if (!walletAddress) {
+    console.warn(
+      `Skipping contribution insert for ${row.id}: no wallet address available.`,
+    );
+    return;
+  }
+
+  // Idempotency: same tx_signature => same drop => bail.
+  const { data: existing, error: existingErr } = await supabase
+    .from("contributions")
+    .select("id")
+    .eq("launch_id", row.id)
+    .eq("tx_signature", signature)
+    .maybeSingle();
+  if (existingErr) {
+    console.warn(
+      `Could not check existing contribution for ${row.id}:`,
+      existingErr.message,
+    );
+  }
+  if (existing) {
+    return;
+  }
+
+  const { error: insertErr } = await supabase.from("contributions").insert({
+    launch_id: row.id,
+    wallet_address: walletAddress,
+    token_delivery_wallet: row.creator_delivery_wallet || null,
+    amount_lamports: amountLamports,
+    tx_signature: signature,
+    is_fee_claimer: true,
+  });
+  if (insertErr) {
+    console.error(
+      `Failed to record sponsored contribution for ${row.id}:`,
+      insertErr.message,
+    );
+  } else {
+    console.log(
+      `Recorded sponsored contribution for ${row.id}: ${walletAddress} (${amountLamports} lamports)`,
+    );
+  }
 }
 
 export async function fundAllPendingSponsoredEscrows(
@@ -149,6 +224,7 @@ export async function fundAllPendingSponsoredEscrows(
             recentSig ? ` (sig ${recentSig})` : ""
           }.`,
         );
+        await recordSponsoredContribution(row, existingBalance, recentSig);
         await markScheduled(row.id, recentSig);
         continue;
       }
@@ -186,6 +262,11 @@ export async function fundAllPendingSponsoredEscrows(
           } SOL)`,
         );
 
+        await recordSponsoredContribution(
+          row,
+          transferAmount,
+          pendingSignature,
+        );
         await markScheduled(row.id, pendingSignature);
       } catch (sendErr: any) {
         // The send/confirm path threw, but the tx may still have landed.
@@ -236,6 +317,13 @@ export async function fundAllPendingSponsoredEscrows(
               sigToStore ? ` (sig ${sigToStore})` : ""
             }.`,
           );
+          // Use whatever the escrow currently holds as the contribution
+          // amount — this is what the launch will actually spend.
+          const fundedBalance = await connection.getBalance(
+            escrowPubkey,
+            "confirmed",
+          );
+          await recordSponsoredContribution(row, fundedBalance, sigToStore);
           await markScheduled(row.id, sigToStore);
         } else {
           // Genuine failure — rethrow into the outer catch below for the

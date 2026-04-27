@@ -76,6 +76,7 @@ const SponsoredPage = () => {
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [launchDatetime, setLaunchDatetime] = useState("");
+  const [creatorDeliveryWallet, setCreatorDeliveryWallet] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -177,6 +178,18 @@ const SponsoredPage = () => {
         image_url = await uploadImage(imageFile);
       }
 
+      const trimmedDelivery = creatorDeliveryWallet.trim();
+      if (
+        trimmedDelivery &&
+        (trimmedDelivery.length < 32 ||
+          trimmedDelivery.length > 44 ||
+          !/^[1-9A-HJ-NP-Za-km-z]+$/.test(trimmedDelivery))
+      ) {
+        toast.error("Pump.fun wallet address looks invalid");
+        setSubmitting(false);
+        return;
+      }
+
       const { data, error } = await supabase.functions.invoke("claim-sponsored-slot", {
         body: {
           link_token: linkToken,
@@ -188,6 +201,7 @@ const SponsoredPage = () => {
           telegram_url: telegramUrl.trim() || undefined,
           website_url: websiteUrl.trim() || undefined,
           launch_datetime: launchIso,
+          creator_delivery_wallet: trimmedDelivery || undefined,
         },
       });
       if (error) throw error;
@@ -435,6 +449,24 @@ const SponsoredPage = () => {
                       className="rounded-none mt-1"
                     />
                   </div>
+                </div>
+
+                <div className="border border-primary/40 bg-card p-4 space-y-2">
+                  <Label htmlFor="delivery_wallet" className="text-sm font-semibold text-foreground">
+                    Pump.fun wallet (optional)
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Receive your token allocation at a wallet you control so you can
+                    trade immediately when the launch goes live on Pump.fun. Leave
+                    blank to skip — you can claim later via Erys.
+                  </p>
+                  <Input
+                    id="delivery_wallet"
+                    value={creatorDeliveryWallet}
+                    onChange={(e) => setCreatorDeliveryWallet(e.target.value)}
+                    placeholder="Enter Solana wallet address"
+                    className="rounded-none mt-1 font-mono text-xs"
+                  />
                 </div>
 
                 <Button

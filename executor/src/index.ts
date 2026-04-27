@@ -3,6 +3,7 @@ dotenv.config();
 
 import { executeAllPendingLaunches } from "./executeLaunch";
 import { fundAllPendingSponsoredEscrows } from "./fundSponsoredEscrow";
+import { sweepAllCancelledSponsorEscrows } from "./sweepCancelledSponsorEscrows";
 import { getAllWallets } from "./pumpportalWalletPool";
 import { supabase } from "./db";
 
@@ -66,6 +67,7 @@ async function main(): Promise<void> {
 
   const tick = async () => {
     await fundAllPendingSponsoredEscrows(WORKER_ID);
+    await sweepAllCancelledSponsorEscrows(WORKER_ID);
     await executeAllPendingLaunches(WORKER_ID);
   };
 
