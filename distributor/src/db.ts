@@ -266,6 +266,27 @@ export async function recordPumpfunFeeClaimFailure(
   }
 }
 
+// Record that the custodial wallet was too low on SOL to attempt a claim.
+// IMPORTANT: this does NOT stamp pumpfun_fees_last_claimed_at — we want the
+// launch to be re-eligible immediately as soon as the wallet is topped up,
+// rather than waiting another 10 minutes. The error string surfaces in the
+// admin Recovery panel so it's obvious what action is needed.
+export async function recordPumpfunWalletStarved(
+  launchId: string,
+  errorMessage: string
+): Promise<void> {
+  const { error } = await supabase.rpc("record_pumpfun_wallet_starved", {
+    p_launch_id: launchId,
+    p_error: errorMessage,
+  });
+  if (error) {
+    console.error(
+      `Error recording wallet-starved state for launch ${launchId}:`,
+      error.message
+    );
+  }
+}
+
 // Reset launches stuck in "executing" status whose scheduled launch_datetime
 // is more than 10 minutes in the past. Flips them to "execution_failed" so
 // the existing pg_cron retry job will pick them up and re-execute.

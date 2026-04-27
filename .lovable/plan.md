@@ -1,93 +1,57 @@
+## Why no sweeps have happened
 
-## The actual bottleneck
+The active Pump.fun launch (`ETEST` / `9caf31b8…`) has this stamped on its row in the database:
 
-The custodial wallet is **not** rate-limited by Solana — a Solana keypair can sign as fast as you can feed it transactions. The real chokepoints are:
+> `Custodial wallet balance 2045924 below required 2060000 for batch of 1 (need ~0.00206 SOL). Aborting cycle.`
 
-| Layer | Limit | Why it matters |
-|---|---|---|
-| `withCustodialLock` (advisory + row lock) | **1 claim at a time, globally** | Adding distributor replicas does NOT help fee claiming. They all queue on the same lock. |
-| PumpPortal Lightning API (single API key) | ~few req/sec, undocumented | Same key = same tenant. Parallelism here risks 429s. |
-| Custodial wallet SOL balance | Drains ~55k lamports per claim attempt | At 100+ launches every 10 min, the wallet bleeds SOL faster than fees come in for low-volume tokens. |
-| 10-min poll cadence | Per-launch, not global | If serial processing takes >10 min, the next cycle starts before the last finishes — backlog grows forever. |
+In plain English:
 
-**Today's effective ceiling:** ~30–60 fee claims per 10-min cycle (3–6/min through the lock), shared across all replicas. Beyond that, claims back up indefinitely.
+- The custodial wallet currently holds **0.002046 SOL**.
+- The new wallet-health gate (added in the last batch refactor) requires it to hold at least **0.002060 SOL** before it will even attempt a claim — that's the 0.002 SOL rent-exempt floor + ~55,000 lamports priority fee + 5,000 lamports fan-out tx fee.
+- The wallet is short by ~14,000 lamports (~$0.003), so every cycle the worker aborts immediately, never calls `collectCreatorFee`, never fans out to the escrow, and never sweeps to the treasury.
 
-## The fix — three layers
+That gate is doing exactly what we designed it to do (don't drain the wallet below rent-exempt), but our budget threshold is set higher than the wallet's normal idle balance, so it permanently locks itself out.
 
-### 1. Batch the wallet-touching work (biggest win, smallest change)
+There are also no other launches in the `launched` status (the other 7 are `execution_failed`), so this single under-funded wallet is the entire blocker.
 
-Right now each launch independently:
-- acquires the lock
-- calls `collectCreatorFee`
-- sweeps custodial → escrow
-- releases the lock
+## Fix — 3 parts
 
-Then **outside the lock**, the per-launch escrow → treasury transfer happens.
+### 1. Top up the custodial wallet (immediate unblock — manual)
 
-Change the distributor's fee loop to:
-1. Acquire the custodial lock **once per cycle**.
-2. Inside the lock, iterate over up to N (e.g. 25) eligible launches:
-   - Call `collectCreatorFee` for each (sequentially — PumpPortal limit).
-   - After all claims are submitted and confirmed, do **one** sweep of `custodial → a fan-out account` (or directly fan out to each launch's escrow with one multi-instruction tx per ~10 launches, since Solana tx size limits us to ~12 transfers per tx).
-3. Release the lock.
-4. Outside the lock, do the per-launch escrow → treasury transfers in parallel (each escrow is independent).
+The wallet `PUMPPORTAL_CUSTODIAL_WALLET` needs SOL added to it on-chain. Recommend topping up to **~0.05 SOL** so it has enough headroom for many claim cycles plus priority fee surges. This is a manual on-chain action you'll do from your funding wallet — no code change needed for this step.
 
-This collapses lock-hold time from `N × ~3s` to `~N × 0.5s + 1 sweep tx`, raising practical throughput ~5–10x with no new infrastructure.
+### 2. Make the budget gate self-healing instead of permanently aborting
 
-### 2. Wallet-health budget + circuit breaker
+Right now, when the gate fires, it stamps `pumpfun_last_claim_error` AND calls `recordPumpfunFeeClaimFailure`, which sets `pumpfun_fees_last_claimed_at = now()`. That means even after you top up, the launch won't be re-eligible for **10 minutes** because the throttle thinks a claim attempt just happened.
 
-Add a SOL-budget gate before each claim attempt:
+Change the under-budget path so it:
 
-- Read custodial balance once per cycle.
-- Compute `available = balance - floor - reserved_for_pending_launches`.
-- If `available < 50_000 lamports * candidate_count`, **skip claims** for this cycle and surface a "Custodial wallet low — pause" alert in the admin panel.
-- Add a `pumpfun_min_expected_fee_lamports` threshold (configurable). Skip launches whose last claim returned <X SOL — they're not worth the priority-fee burn. Stamp them with a longer throttle (e.g. 1 hour instead of 10 min).
+- Logs the warning and surfaces the error in the admin panel (so you can see "wallet needs SOL").
+- Does **NOT** stamp `pumpfun_fees_last_claimed_at` — leaves the launch immediately eligible the moment the wallet has funds.
+- Releases the row-locks cleanly so the next cycle picks the same launches up.
 
-This stops the wallet from dying under a long tail of zero-volume launches.
+Add a new dedicated DB function `record_pumpfun_wallet_starved` that only writes the error string + `pumpfun_last_claim_attempt_at`, leaving `pumpfun_fees_last_claimed_at` untouched.
 
-### 3. Wallet pool (future-proof, optional now)
+### 3. Surface custodial wallet balance in the admin panel
 
-The custodial wallet is single-tenant because Pump.fun's "creator" is set at launch time. To shard:
+You already have the `PumpfunFeeHealthPanel` component on the admin Recovery tab. Extend it to:
 
-- Introduce a `custodial_wallets` table: `pubkey`, `encrypted_privkey`, `is_active`, `current_load`.
-- At **launch creation time** (`executor/src/executePumpfunLightning.ts`), pick the least-loaded active wallet and use it as the creator.
-- Store `custodial_wallet_pubkey` on each launch row.
-- Each wallet gets its own `custodialLock` keyed by pubkey → claims for different wallets run truly in parallel.
-- PumpPortal supports multiple API keys (one per wallet) — we'd need one `PUMPPORTAL_API_KEY_<n>` secret per pool member.
+- Show the current custodial wallet on-chain SOL balance (read live from RPC via a small edge function `get-custodial-balance`).
+- Show a red warning banner when it's below the dynamic budget threshold (priority fee + tx reserve + floor for the count of currently-eligible launches).
+- Show a "Topup address" copy button so you can fund it in one click.
 
-Adding 3 wallets to the pool ≈ 3x claim throughput and 3x SOL headroom. We can add this incrementally — start with the table + selection logic, populate with one wallet, expand later.
+This way you'd never silently sit in this state again — the panel would say "Wallet underfunded, needs +0.05 SOL" the instant it happens.
 
-## Concrete changes
+## Files to change
 
-### Migrations
-- Add `pumpfun_low_volume_throttle_until` (timestamptz) to `launches` so we can back off chronically empty creator vaults to 1h instead of 10m.
-- (Pool prep) Add `custodial_wallets` table with RLS (service role only) and a `custodial_wallet_pubkey` column on `launches` (nullable, defaults to the env var wallet for backfill).
-- New RPC `claim_pumpfun_launches_batch_for_worker(worker_id, limit, ttl)` that returns up to `limit` launches in a single locked batch (FOR UPDATE SKIP LOCKED), so the distributor can grab a batch atomically.
+- **DB migration**: add `record_pumpfun_wallet_starved(p_launch_id uuid, p_error text)` RPC.
+- `distributor/src/db.ts`: add wrapper `recordPumpfunWalletStarved`.
+- `distributor/src/claimPumpfunFeesBatch.ts`: in the budget-gate branch, call `recordPumpfunWalletStarved` instead of `recordPumpfunFeeClaimFailure`, and `releaseLaunchLock` for each candidate so they're re-eligible immediately.
+- `supabase/functions/get-custodial-balance/index.ts`: new admin-only edge function returning the wallet balance + computed required threshold for currently-eligible launches.
+- `src/components/admin/PumpfunFeeHealthPanel.tsx`: poll the new edge function every 30s, render balance, threshold, and a copy-address button.
 
-### Distributor (`distributor/src/claimPumpfunFees.ts`, `index.ts`, `db.ts`)
-- New `claimPumpfunFeesBatch(launches[])` that holds the custodial lock once and processes all claims, then does a single fan-out sweep.
-- Add `getCustodialBalance()` precheck and skip-cycle if budget insufficient.
-- Apply long-throttle when a claim returns 0 lamports twice in a row.
-- Replace the per-launch `pollAndClaimFees` while-loop with a single batch call per 10-min tick.
+## What you do after this ships
 
-### Admin UI (`src/components/admin/PumpfunFeeHealthPanel.tsx`)
-- Show "Effective claim throughput (last hour)" and "Wallet runway (claims at current burn rate)".
-- Show count of launches in long-throttle vs active.
-- Add a "Top up custodial wallet" reminder when balance < 0.05 SOL.
-
-## What this gets you
-
-| Metric | Today | After batching | After pool (3 wallets) |
-|---|---|---|---|
-| Claims per 10-min cycle | ~30–60 | ~200–400 | ~600–1200 |
-| Custodial SOL bleed under 0-volume launches | Linear in launch count | Capped by long-throttle | Capped + spread |
-| Single-point-of-failure wallet | Yes | Yes | No |
-| New infra/secrets needed | None | None | 1 secret + 1 keypair per pool member |
-
-## Recommended sequencing
-
-1. **Now:** Migration for long-throttle column + batching RPC. Refactor distributor to batch. Wire the wallet-health gate. *(High impact, no new secrets, no new wallets.)*
-2. **Next:** Admin panel updates so you can see throughput and wallet runway.
-3. **When you cross ~50 active launches:** Add the `custodial_wallets` table + per-launch wallet assignment. Provision the first additional wallet + PumpPortal key.
-
-Approve this and I'll implement step 1 (batching + budget gate + long-throttle) in the next pass — that alone unlocks roughly 5–10x today's ceiling without touching wallets or secrets.
+1. Send ~0.05 SOL to the custodial wallet from your funding wallet.
+2. Within 30 seconds the next batch cycle will run, claim creator fees on `ETEST`, fan out to the escrow, and sweep to the platform treasury (`BAGS_PARTNER_WALLET`).
+3. From here on, the admin panel will warn you visually if the wallet ever drops below the budget again.

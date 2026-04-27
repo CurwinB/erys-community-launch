@@ -603,6 +603,10 @@ export type Database = {
         Args: { p_error: string; p_launch_id: string }
         Returns: undefined
       }
+      record_pumpfun_wallet_starved: {
+        Args: { p_error: string; p_launch_id: string }
+        Returns: undefined
+      }
       release_custodial_lock: { Args: { p_key: string }; Returns: boolean }
       release_custodial_row_lock: {
         Args: { p_key: string; p_worker: string }
