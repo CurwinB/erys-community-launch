@@ -287,7 +287,7 @@ export async function executeBagsLaunch(
 
   // STEP 2: Create fee-share config (handle bundles vs single transactions)
   console.log("Step 2: createBagsFeeShareConfig");
-  let configKeyStr: string;
+  let configKeyStr: string | undefined;
   if (launch.fee_share_config_key) {
     console.log(
       `Reusing existing fee_share_config_key from previous attempt: ${launch.fee_share_config_key}`,
@@ -377,7 +377,7 @@ export async function executeBagsLaunch(
       }
     }
 
-    if (!submitted) {
+    if (!submitted || !configKeyStr) {
       await setFailed(
         launch.id,
         `Fee-share submission failed after ${MAX_FEESHARE_ATTEMPTS} attempts: ${lastErr?.message ?? lastErr}`,
