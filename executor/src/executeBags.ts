@@ -287,65 +287,101 @@ export async function executeBagsLaunch(
 
   // STEP 2: Create fee-share config (handle bundles vs single transactions)
   console.log("Step 2: createBagsFeeShareConfig");
-  let configKeyStr: string;
+  let configKeyStr: string | undefined;
   if (launch.fee_share_config_key) {
     console.log(
       `Reusing existing fee_share_config_key from previous attempt: ${launch.fee_share_config_key}`,
     );
     configKeyStr = launch.fee_share_config_key;
   } else {
-    let cfgResult;
-    try {
-      cfgResult = await sdk.config.createBagsFeeShareConfig({
-        feeClaimers,
-        payer: escrowPubkey,
-        baseMint: tokenMint,
-        partner: new PublicKey(BAGS_PARTNER_WALLET),
-        partnerConfig: new PublicKey(BAGS_PARTNER_CONFIG),
-        additionalLookupTables,
-      });
-    } catch (err: any) {
-      await setFailed(
-        launch.id,
-        `createBagsFeeShareConfig failed: ${err.message}`,
+    // Wrap build → sign → submit in a rebuild-on-expiry retry loop. The Bags
+    // SDK bakes a recent blockhash into each tx at build time; if Jito takes
+    // too long to land the bundle the blockhash expires and the network
+    // rejects with "block height exceeded" / "blockhash not found". A signed
+    // VersionedTransaction's blockhash is immutable, so the only correct
+    // recovery is to rebuild the config (fresh blockhashes), re-sign, resend.
+    const MAX_FEESHARE_ATTEMPTS = 3;
+    const isExpiryError = (msg: string) =>
+      /block height exceeded|blockhash not found|TransactionExpiredBlockheightExceededError|expired/i.test(
+        msg,
       );
-      return;
+
+    let lastErr: any = null;
+    let submitted = false;
+
+    for (let attempt = 1; attempt <= MAX_FEESHARE_ATTEMPTS; attempt++) {
+      let cfgResult;
+      try {
+        cfgResult = await sdk.config.createBagsFeeShareConfig({
+          feeClaimers,
+          payer: escrowPubkey,
+          baseMint: tokenMint,
+          partner: new PublicKey(BAGS_PARTNER_WALLET),
+          partnerConfig: new PublicKey(BAGS_PARTNER_CONFIG),
+          additionalLookupTables,
+        });
+      } catch (err: any) {
+        // Build-time errors are not retryable (auth, schema, etc.)
+        await setFailed(
+          launch.id,
+          `createBagsFeeShareConfig failed: ${err.message}`,
+        );
+        return;
+      }
+
+      console.log(
+        `Fee-share attempt ${attempt}/${MAX_FEESHARE_ATTEMPTS}: ${cfgResult.transactions.length} txs, ${cfgResult.bundles.length} bundles`,
+      );
+      const candidateKey = cfgResult.meteoraConfigKey.toBase58();
+
+      try {
+        for (let bIdx = 0; bIdx < cfgResult.bundles.length; bIdx++) {
+          const bundle = cfgResult.bundles[bIdx];
+          const signed: VersionedTransaction[] = bundle.map((tx: VersionedTransaction) => {
+            tx.sign([escrowKeypair]);
+            return tx;
+          });
+          console.log(
+            `Sending Jito bundle ${bIdx + 1}/${cfgResult.bundles.length} (${signed.length} txs)`,
+          );
+          const sig = await sendBundleAndConfirm(signed, sdk);
+          console.log(`Bundle ${bIdx + 1} confirmed: ${sig}`);
+        }
+
+        for (let i = 0; i < cfgResult.transactions.length; i++) {
+          const sig = await signAndSendTransaction(
+            connection,
+            commitment,
+            cfgResult.transactions[i],
+            escrowKeypair,
+          );
+          console.log(
+            `Fee-share tx ${i + 1}/${cfgResult.transactions.length}: ${sig}`,
+          );
+        }
+
+        configKeyStr = candidateKey;
+        submitted = true;
+        break;
+      } catch (err: any) {
+        lastErr = err;
+        const msg = err?.message ?? String(err);
+        if (isExpiryError(msg) && attempt < MAX_FEESHARE_ATTEMPTS) {
+          console.warn(
+            `Fee-share submission expired on attempt ${attempt} (${msg}). Rebuilding with fresh blockhash...`,
+          );
+          continue;
+        }
+        await setFailed(launch.id, `Fee-share submission failed: ${msg}`);
+        return;
+      }
     }
 
-    console.log(
-      `Fee-share config: ${cfgResult.transactions.length} txs, ${cfgResult.bundles.length} bundles`,
-    );
-    configKeyStr = cfgResult.meteoraConfigKey.toBase58();
-
-    // Send bundles atomically via Jito (each bundle is signed and sent together)
-    try {
-      for (let bIdx = 0; bIdx < cfgResult.bundles.length; bIdx++) {
-        const bundle = cfgResult.bundles[bIdx];
-        const signed: VersionedTransaction[] = bundle.map((tx) => {
-          tx.sign([escrowKeypair]);
-          return tx;
-        });
-        console.log(
-          `Sending Jito bundle ${bIdx + 1}/${cfgResult.bundles.length} (${signed.length} txs)`,
-        );
-        const sig = await sendBundleAndConfirm(signed, sdk);
-        console.log(`Bundle ${bIdx + 1} confirmed: ${sig}`);
-      }
-
-      // Send any non-bundled transactions sequentially
-      for (let i = 0; i < cfgResult.transactions.length; i++) {
-        const sig = await signAndSendTransaction(
-          connection,
-          commitment,
-          cfgResult.transactions[i],
-          escrowKeypair,
-        );
-        console.log(
-          `Fee-share tx ${i + 1}/${cfgResult.transactions.length}: ${sig}`,
-        );
-      }
-    } catch (err: any) {
-      await setFailed(launch.id, `Fee-share submission failed: ${err.message}`);
+    if (!submitted || !configKeyStr) {
+      await setFailed(
+        launch.id,
+        `Fee-share submission failed after ${MAX_FEESHARE_ATTEMPTS} attempts: ${lastErr?.message ?? lastErr}`,
+      );
       return;
     }
 
