@@ -81,11 +81,12 @@ const AdminPage = () => {
   const bagsRevenueSol = lamportsToSol(
     claims.reduce((sum, c) => sum + Number(c.amount_lamports), 0),
   );
+  // Pump.fun: Erys takes 100% of creator fees.
   const pumpErysRevenueSol = launches
     .filter((l) => l.platform === "pumpfun")
     .reduce(
       (sum, l) =>
-        sum + lamportsToSol(Number(l.pumpfun_fees_claimed_total ?? 0) * 0.5),
+        sum + lamportsToSol(Number(l.pumpfun_fees_claimed_total ?? 0)),
       0,
     );
   const totalRevenueSol = bagsRevenueSol + pumpErysRevenueSol;
