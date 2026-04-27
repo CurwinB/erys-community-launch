@@ -352,6 +352,45 @@ export type Database = {
       }
     }
     Views: {
+      contributions_public: {
+        Row: {
+          amount_lamports: number | null
+          contributed_at: string | null
+          id: string | null
+          launch_id: string | null
+          wallet_address: string | null
+        }
+        Insert: {
+          amount_lamports?: number | null
+          contributed_at?: string | null
+          id?: string | null
+          launch_id?: string | null
+          wallet_address?: string | null
+        }
+        Update: {
+          amount_lamports?: number | null
+          contributed_at?: string | null
+          id?: string | null
+          launch_id?: string | null
+          wallet_address?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "contributions_launch_id_fkey"
+            columns: ["launch_id"]
+            isOneToOne: false
+            referencedRelation: "launches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "contributions_launch_id_fkey"
+            columns: ["launch_id"]
+            isOneToOne: false
+            referencedRelation: "launches_public"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       launches_public: {
         Row: {
           claimer_count: number | null
@@ -459,6 +498,32 @@ export type Database = {
       }
     }
     Functions: {
+      admin_list_contributions: {
+        Args: { p_admin_wallet: string }
+        Returns: {
+          amount_lamports: number
+          basis_points: number | null
+          contributed_at: string
+          distribution_error: string | null
+          distribution_tx_signature: string | null
+          id: string
+          is_fee_claimer: boolean | null
+          launch_id: string
+          refund_shortfall_lamports: number | null
+          refund_tx_signature: string | null
+          token_amount: number | null
+          token_delivery_wallet: string | null
+          tokens_distributed: boolean | null
+          tx_signature: string
+          wallet_address: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "contributions"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       admin_list_launches: {
         Args: { p_admin_wallet: string }
         Returns: {
@@ -1025,6 +1090,25 @@ export type Database = {
         Returns: undefined
       }
       is_admin_wallet: { Args: { p_wallet: string }; Returns: boolean }
+      list_my_contributions: {
+        Args: { p_wallet: string }
+        Returns: {
+          amount_lamports: number
+          basis_points: number
+          contributed_at: string
+          distribution_tx_signature: string
+          id: string
+          is_fee_claimer: boolean
+          launch_id: string
+          launches: Database["public"]["Views"]["launches_public"]["Row"]
+          refund_shortfall_lamports: number
+          refund_tx_signature: string
+          token_amount: number
+          token_delivery_wallet: string
+          tokens_distributed: boolean
+          wallet_address: string
+        }[]
+      }
       mark_pumpfun_fee_claim_attempt: {
         Args: { p_launch_id: string }
         Returns: undefined
