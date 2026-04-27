@@ -7,12 +7,10 @@ import {
   LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import bs58 from "bs58";
-import { decryptEscrowKey } from "./decrypt";
 import {
   Launch,
   claimPumpfunFeeBatchForWorker,
   releaseLaunchLock,
-  updatePumpfunFeesClaimed,
   recordPumpfunEmptyClaim,
   recordPumpfunFeeClaimFailure,
   recordPumpfunWalletStarved,
