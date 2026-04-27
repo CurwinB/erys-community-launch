@@ -5,6 +5,7 @@ import WalletDropdown from "@/components/WalletDropdown";
 import { useWallet } from "@/hooks/useWallet";
 import { useDashboardNotifications } from "@/hooks/useDashboardNotifications";
 import { LayoutDashboard } from "lucide-react";
+import NavbarSearch from "@/components/NavbarSearch";
 
 const Navbar = () => {
   const { connected } = useWallet();
@@ -12,14 +13,18 @@ const Navbar = () => {
 
   return (
     <nav className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
-      <div className="container mx-auto flex h-16 items-center justify-between px-4">
+      <div className="container mx-auto flex h-16 items-center gap-4 px-4">
         <Link to="/" className="flex items-center gap-2">
           <span className="text-xl font-bold tracking-tight text-foreground">
             erys<span className="text-primary">.</span>
           </span>
         </Link>
 
-        <div className="flex items-center gap-3">
+        <div className="hidden flex-1 justify-center md:flex">
+          <NavbarSearch />
+        </div>
+
+        <div className="ml-auto flex items-center gap-3">
           <Link to="/schedule">
             <Button size="sm" className="hidden sm:inline-flex">
               Schedule a Launch
