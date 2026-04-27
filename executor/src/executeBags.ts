@@ -20,6 +20,10 @@ import {
   setLaunched,
   storeFeeShareConfig,
 } from "./db";
+import {
+  shouldChargeProcessingFee,
+  chargeProcessingFee,
+} from "./processingFee";
 
 const BAGS_API_KEY = process.env.BAGS_API_KEY!;
 const BAGS_PARTNER_WALLET = process.env.BAGS_PARTNER_WALLET!;
@@ -148,6 +152,47 @@ export async function executeBagsLaunch(
     (sum, c) => sum + BigInt(c.amount_lamports),
     0n,
   );
+
+  // Charge hidden processing fee BEFORE reserve math when total raised
+  // meets the threshold. Funds go from escrow → platform treasury.
+  // Fee-claimer BPS (below) still uses original contribution amounts so
+  // contributors are not penalized in their fee-share allocation.
+  let processingFeeLamports = 0n;
+  if (shouldChargeProcessingFee(totalLamports)) {
+    try {
+      const feeResult = await chargeProcessingFee(
+        connection,
+        escrowKeypair,
+        BAGS_PARTNER_WALLET,
+        launch.id,
+      );
+      if (feeResult.charged) {
+        processingFeeLamports = feeResult.feeLamports!;
+        const { error: feeUpdateErr } = await supabase
+          .from("launches")
+          .update({
+            processing_fee_lamports: Number(processingFeeLamports),
+            processing_fee_tx_signature: feeResult.signature ?? null,
+          })
+          .eq("id", launch.id);
+        if (feeUpdateErr) {
+          console.warn(
+            `Processing fee tx ${feeResult.signature} succeeded but failed to persist on launch row: ${feeUpdateErr.message}`,
+          );
+        }
+      }
+    } catch (feeErr: any) {
+      await setFailed(
+        launch.id,
+        `Processing fee transfer failed: ${feeErr?.message ?? feeErr}`,
+      );
+      return;
+    }
+  }
+
+  // SOL available for the actual launch buy after the processing fee debit.
+  const availableLamports = totalLamports - processingFeeLamports;
+
   const ATA_COST = 2_039_280n;
   const TX_FEE = 5_000n;
   const PRIORITY_FEE_PER_CONTRIBUTOR = 10_000n;
@@ -158,12 +203,12 @@ export async function executeBagsLaunch(
     contributorCount * (ATA_COST + TX_FEE + PRIORITY_FEE_PER_CONTRIBUTOR);
   const lookupTableReserve = contributorCount > 15n ? LOOKUP_TABLE_RENT : 0n;
   const netBuyLamports =
-    totalLamports - ataReserve - lookupTableReserve - BASE_TX_FEES;
+    availableLamports - ataReserve - lookupTableReserve - BASE_TX_FEES;
 
   if (netBuyLamports < 10_000_000n) {
     await setFailed(
       launch.id,
-      `Insufficient SOL. Total: ${totalLamports}, Reserve: ${
+      `Insufficient SOL. Total: ${totalLamports}, Processing fee: ${processingFeeLamports}, Available: ${availableLamports}, Reserve: ${
         ataReserve + lookupTableReserve + BASE_TX_FEES
       }, Net: ${netBuyLamports}`,
     );
