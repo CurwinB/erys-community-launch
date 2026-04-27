@@ -8,12 +8,17 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { DynamicContextProvider } from "@dynamic-labs/sdk-react-core";
 import { SolanaWalletConnectors } from "@dynamic-labs/solana";
 import Navbar from "@/components/Navbar";
+import Footer from "@/components/Footer";
 import Index from "./pages/Index";
 import LaunchPage from "./pages/LaunchPage";
 import SchedulePage from "./pages/SchedulePage";
 import DashboardPage from "./pages/DashboardPage";
 import AdminPage from "./pages/AdminPage";
 import SponsoredPage from "./pages/SponsoredPage";
+import TermsPage from "./pages/TermsPage";
+import PrivacyPage from "./pages/PrivacyPage";
+import RiskPage from "./pages/RiskPage";
+import ContactPage from "./pages/ContactPage";
 import NotFound from "./pages/NotFound";
 import { useLocation } from "react-router-dom";
 
@@ -22,6 +27,13 @@ const ConditionalNavbar = () => {
   if (location.pathname.startsWith("/admin")) return null;
   if (location.pathname.startsWith("/sponsored")) return null;
   return <Navbar />;
+};
+
+const ConditionalFooter = () => {
+  const location = useLocation();
+  if (location.pathname.startsWith("/admin")) return null;
+  if (location.pathname.startsWith("/sponsored")) return null;
+  return <Footer />;
 };
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -80,9 +92,14 @@ const App = () => (
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/admin" element={<AdminPage />} />
             <Route path="/sponsored/:linkToken" element={<SponsoredPage />} />
+            <Route path="/terms" element={<TermsPage />} />
+            <Route path="/privacy" element={<PrivacyPage />} />
+            <Route path="/risk" element={<RiskPage />} />
+            <Route path="/contact" element={<ContactPage />} />
             <Route path="*" element={<NotFound />} />
             </Routes>
           </ErrorBoundary>
+          <ConditionalFooter />
         </BrowserRouter>
       </TooltipProvider>
     </QueryClientProvider>
