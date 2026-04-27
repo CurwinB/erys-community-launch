@@ -62,3 +62,12 @@ Because `collectCreatorFee` with `pool: "pump"` sweeps ALL of our wallet's creat
 **Empty-vault throttle:** `record_pumpfun_empty_claim` bumps `pumpfun_consecutive_empty_claims`; after 3 in a row, `pumpfun_low_volume_throttle_until` pushes the next attempt out by 1 hour. Resets on any non-zero claim.
 
 **Why this fixes the "one wallet" bottleneck:** lock contention (not signing speed) was the limiter. One lock acquisition + one priority fee per cycle scales to hundreds of launches without changing infrastructure. A multi-wallet pool is still possible later but no longer urgent.
+
+## Economic claim gate (added 2026-04-27)
+
+`collectCreatorFee` costs ~55–60k lamports per cycle (priority + base + sweep tx). To avoid bleeding gas on dust, the batch worker peeks at the on-chain creator vault PDA (seeds `["creator-vault", custodial_wallet]` under `PUMP_PROGRAM_ID = 6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P`) BEFORE making the API call.
+
+- Default threshold: **600,000 lamports** (~10× gas). Configurable via `PUMPFUN_MIN_CLAIM_LAMPORTS`.
+- Hard floor: **100,000 lamports** — never overridable.
+- If vault below threshold: skip the PumpPortal call, mark all batched launches as empty (which feeds the existing 3-strikes 1-hour throttle).
+- Vault balance is persisted to `launches.pumpfun_creator_vault_balance_lamports` and surfaced in the admin Pump.fun health panel so it's obvious why claims aren't firing.
