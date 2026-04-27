@@ -119,29 +119,20 @@ const SponsoredTab = ({ launches }: Props) => {
           Create sponsored slot
         </h3>
         <form onSubmit={handleCreate} className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor="influencer">Influencer wallet address</Label>
-              <Input
-                id="influencer"
-                value={influencerWallet}
-                onChange={(e) => setInfluencerWallet(e.target.value)}
-                placeholder="Solana wallet address"
-                className="rounded-none mt-1 font-mono text-xs"
-              />
-            </div>
-            <div>
-              <Label htmlFor="launch_dt">Launch time (1–72h ahead)</Label>
-              <Input
-                id="launch_dt"
-                type="datetime-local"
-                min={minDateTime}
-                max={maxDateTime}
-                value={launchDatetime}
-                onChange={(e) => setLaunchDatetime(e.target.value)}
-                className="rounded-none mt-1"
-              />
-            </div>
+          <div>
+            <Label htmlFor="influencer">Influencer wallet address</Label>
+            <Input
+              id="influencer"
+              value={influencerWallet}
+              onChange={(e) => setInfluencerWallet(e.target.value)}
+              placeholder="Solana wallet address"
+              className="rounded-none mt-1 font-mono text-xs"
+            />
+            <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed">
+              The influencer picks their own launch time (1–72h ahead) when they
+              claim the link. All sponsored launches go to Pump.fun. Link is
+              valid for 48 hours.
+            </p>
           </div>
           <Button type="submit" disabled={creating} className="rounded-none">
             {creating ? (
