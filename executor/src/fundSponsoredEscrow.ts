@@ -24,6 +24,51 @@ import { supabase } from "./db";
 const SPONSORED_AMOUNT_LAMPORTS = 100_000_000; // 0.1 SOL
 const TX_FEE_LAMPORTS = 5_000;
 const MAX_FUNDING_ATTEMPTS = 3;
+// When the escrow already holds at least this much SOL, treat it as funded
+// regardless of who funded it (covers the case where a previous attempt's
+// transfer landed on-chain but our confirmTransaction call threw).
+const ESCROW_FUNDED_THRESHOLD_LAMPORTS = 50_000_000; // 0.05 SOL — well below the 0.0999 SOL drop
+// How long to wait after a failed confirmTransaction before re-checking
+// whether the transaction actually landed on-chain.
+const POST_FAILURE_RECHECK_DELAY_MS = 8_000;
+
+async function findRecentInboundSignature(
+  connection: Connection,
+  pubkey: PublicKey,
+): Promise<string | null> {
+  try {
+    const sigs = await connection.getSignaturesForAddress(pubkey, { limit: 1 });
+    return sigs[0]?.signature ?? null;
+  } catch (err: any) {
+    console.warn(
+      `Could not fetch recent signatures for ${pubkey.toBase58()}:`,
+      err?.message ?? err,
+    );
+    return null;
+  }
+}
+
+async function markScheduled(
+  launchId: string,
+  signature: string | null,
+): Promise<void> {
+  const { error: updateErr } = await supabase
+    .from("launches")
+    .update({
+      status: "scheduled",
+      sponsored_tx_signature: signature,
+      sponsor_funding_error: null,
+      worker_locked_at: null,
+      worker_id: null,
+    })
+    .eq("id", launchId);
+  if (updateErr) {
+    console.error(
+      `Funded ${launchId} but failed to update DB:`,
+      updateErr.message,
+    );
+  }
+}
 
 interface SponsorFundingRow {
   id: string;
@@ -83,6 +128,31 @@ export async function fundAllPendingSponsoredEscrows(
       const transferAmount = amount - TX_FEE_LAMPORTS;
 
       const escrowPubkey = new PublicKey(row.escrow_wallet_public_key);
+
+      // Idempotency check: a previous attempt's transfer may have landed
+      // on-chain even though our client recorded a failure. If the escrow
+      // is already funded, skip the transfer and just mark the launch
+      // scheduled so we don't drain the source wallet a second time.
+      const existingBalance = await connection.getBalance(
+        escrowPubkey,
+        "confirmed",
+      );
+      if (existingBalance >= ESCROW_FUNDED_THRESHOLD_LAMPORTS) {
+        const recentSig = await findRecentInboundSignature(
+          connection,
+          escrowPubkey,
+        );
+        console.log(
+          `Escrow ${row.escrow_wallet_public_key} already holds ${
+            existingBalance / LAMPORTS_PER_SOL
+          } SOL — marking launch ${row.id} scheduled${
+            recentSig ? ` (sig ${recentSig})` : ""
+          }.`,
+        );
+        await markScheduled(row.id, recentSig);
+        continue;
+      }
+
       const tx = new Transaction().add(
         SystemProgram.transfer({
           fromPubkey: platformKeypair.publicKey,
@@ -97,38 +167,81 @@ export async function fundAllPendingSponsoredEscrows(
       tx.feePayer = platformKeypair.publicKey;
       tx.sign(platformKeypair);
 
-      const signature = await connection.sendRawTransaction(tx.serialize(), {
-        skipPreflight: false,
-        preflightCommitment: "confirmed",
-        maxRetries: 3,
-      });
+      let pendingSignature: string | null = null;
+      try {
+        pendingSignature = await connection.sendRawTransaction(tx.serialize(), {
+          skipPreflight: false,
+          preflightCommitment: "confirmed",
+          maxRetries: 3,
+        });
 
-      await connection.confirmTransaction(
-        { signature, blockhash, lastValidBlockHeight },
-        "confirmed",
-      );
-
-      console.log(
-        `Funded sponsored escrow for launch ${row.id}: ${signature} (${
-          transferAmount / LAMPORTS_PER_SOL
-        } SOL)`,
-      );
-
-      const { error: updateErr } = await supabase
-        .from("launches")
-        .update({
-          status: "scheduled",
-          sponsored_tx_signature: signature,
-          sponsor_funding_error: null,
-          worker_locked_at: null,
-          worker_id: null,
-        })
-        .eq("id", row.id);
-      if (updateErr) {
-        console.error(
-          `Funded ${row.id} but failed to update DB:`,
-          updateErr.message,
+        await connection.confirmTransaction(
+          { signature: pendingSignature, blockhash, lastValidBlockHeight },
+          "confirmed",
         );
+
+        console.log(
+          `Funded sponsored escrow for launch ${row.id}: ${pendingSignature} (${
+            transferAmount / LAMPORTS_PER_SOL
+          } SOL)`,
+        );
+
+        await markScheduled(row.id, pendingSignature);
+      } catch (sendErr: any) {
+        // The send/confirm path threw, but the tx may still have landed.
+        // Wait a moment, then check the escrow balance and (if we have one)
+        // the signature status before declaring failure.
+        const sendMsg = sendErr?.message ?? String(sendErr);
+        console.warn(
+          `Send/confirm failed for ${row.id}: ${sendMsg} — rechecking on-chain state...`,
+        );
+        await new Promise((r) =>
+          setTimeout(r, POST_FAILURE_RECHECK_DELAY_MS),
+        );
+
+        let landed = false;
+        if (pendingSignature) {
+          try {
+            const status = await connection.getSignatureStatus(
+              pendingSignature,
+              { searchTransactionHistory: true },
+            );
+            const conf = status.value?.confirmationStatus;
+            if (
+              !status.value?.err &&
+              (conf === "confirmed" || conf === "finalized")
+            ) {
+              landed = true;
+            }
+          } catch {
+            // ignore — fall through to balance check
+          }
+        }
+        if (!landed) {
+          const recheckBalance = await connection.getBalance(
+            escrowPubkey,
+            "confirmed",
+          );
+          if (recheckBalance >= ESCROW_FUNDED_THRESHOLD_LAMPORTS) {
+            landed = true;
+          }
+        }
+
+        if (landed) {
+          const sigToStore =
+            pendingSignature ??
+            (await findRecentInboundSignature(connection, escrowPubkey));
+          console.log(
+            `Recovered: escrow for launch ${row.id} is funded on-chain despite send error. Marking scheduled${
+              sigToStore ? ` (sig ${sigToStore})` : ""
+            }.`,
+          );
+          await markScheduled(row.id, sigToStore);
+        } else {
+          // Genuine failure — rethrow into the outer catch below for the
+          // existing attempts/error-recording path.
+          throw sendErr;
+        }
       }
     } catch (err: any) {
       const msg = err?.message ?? String(err);
