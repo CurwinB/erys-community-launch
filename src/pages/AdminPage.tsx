@@ -28,11 +28,9 @@ const AdminPage = () => {
     queryFn: async () => {
       const [launchesRes, contributionsRes, claimsRes] = await Promise.all([
         supabase.rpc("admin_list_launches", { p_admin_wallet: publicKey! }),
-        supabase
-          .from("contributions")
-          .select("*")
-          .order("contributed_at", { ascending: false })
-          .limit(1000),
+        supabase.rpc("admin_list_contributions", {
+          p_admin_wallet: publicKey!,
+        }),
         supabase
           .from("platform_fee_claims")
           .select("*")
