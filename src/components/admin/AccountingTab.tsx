@@ -57,7 +57,9 @@ type LedgerType =
   | "Pump.fun Fee Claimed"
   | "Creator Fee Paid"
   | "Refund Issued"
-  | "Gas & ATA Reserve";
+  | "Gas & ATA Reserve"
+  | "Processing Fee"
+  | "Processing Fee Received";
 
 const ALL_TYPES: LedgerType[] = [
   "Contribution",
@@ -67,6 +69,8 @@ const ALL_TYPES: LedgerType[] = [
   "Creator Fee Paid",
   "Refund Issued",
   "Gas & ATA Reserve",
+  "Processing Fee",
+  "Processing Fee Received",
 ];
 
 interface Launch {
@@ -80,6 +84,8 @@ interface Launch {
   pumpfun_fees_claimed_total: number | null;
   pumpfun_fees_last_claimed_at: string | null;
   pumpfun_launch_signature: string | null;
+  processing_fee_lamports?: number | null;
+  processing_fee_tx_signature?: string | null;
 }
 
 interface Contribution {
@@ -129,6 +135,8 @@ const TYPE_BADGE: Record<LedgerType, string> = {
   "Creator Fee Paid": "border-amber-400 text-amber-400",
   "Refund Issued": "border-destructive text-destructive",
   "Gas & ATA Reserve": "border-muted-foreground text-muted-foreground",
+  "Processing Fee": "border-purple-500 text-purple-500",
+  "Processing Fee Received": "border-purple-500 text-purple-500",
 };
 
 type SortKey = "date" | "type" | "amountSol" | "direction" | "platform";
@@ -286,9 +294,13 @@ const AccountingTab = ({ launches, contributions, claims }: Props) => {
           (s, c) => s + Number(c.amount_lamports),
           0,
         );
+        const processingFeeLamports = Number(l.processing_fee_lamports ?? 0);
         const tokenBuyLamports = Math.max(
           0,
-          totalContribLamports - ataReserveLamports - gasReserve,
+          totalContribLamports -
+            ataReserveLamports -
+            gasReserve -
+            processingFeeLamports,
         );
 
         out.push({
@@ -322,6 +334,52 @@ const AccountingTab = ({ launches, contributions, claims }: Props) => {
           txSignature: null,
           estimated: true,
         });
+
+        // Processing fee outflow + matching treasury inflow.
+        // For historical rows that didn't capture the fee on-chain but
+        // qualify by total contributions, mark as estimated.
+        const QUALIFIES_FOR_FEE = totalContribLamports >= 300_000_000;
+        const recordedFeeLamports = processingFeeLamports;
+        const feeLamportsToShow =
+          recordedFeeLamports > 0
+            ? recordedFeeLamports
+            : QUALIFIES_FOR_FEE
+              ? 60_000_000
+              : 0;
+        if (feeLamportsToShow > 0) {
+          const feeSig = l.processing_fee_tx_signature ?? null;
+          const isEstimated = recordedFeeLamports === 0;
+          out.push({
+            id: `procfee-out-${l.id}`,
+            date: l.launch_datetime,
+            type: "Processing Fee",
+            description: `Processing fee for ${l.token_name} launch`,
+            launchId: l.id,
+            tokenName: l.token_name,
+            tokenSymbol: l.token_symbol,
+            platform: l.platform,
+            wallet: l.escrow_wallet_public_key,
+            amountSol: lamportsToSol(feeLamportsToShow),
+            direction: "out",
+            txSignature: feeSig,
+            estimated: isEstimated,
+          });
+          out.push({
+            id: `procfee-in-${l.id}`,
+            date: l.launch_datetime,
+            type: "Processing Fee Received",
+            description: `Processing fee received from ${l.token_name} launch`,
+            launchId: l.id,
+            tokenName: l.token_name,
+            tokenSymbol: l.token_symbol,
+            platform: l.platform,
+            wallet: "Erys Platform Wallet",
+            amountSol: lamportsToSol(feeLamportsToShow),
+            direction: "in",
+            txSignature: feeSig,
+            estimated: isEstimated,
+          });
+        }
       }
     }
 
