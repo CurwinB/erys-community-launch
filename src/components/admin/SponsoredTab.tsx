@@ -23,7 +23,7 @@ interface SponsoredLaunch {
   token_name: string;
   token_symbol: string;
   status: string;
-  launch_datetime: string;
+  launch_datetime: string | null;
   created_by_wallet: string;
   sponsor_link_token: string | null;
   sponsor_link_expires_at: string | null;
@@ -50,9 +50,18 @@ const SponsoredTab = ({ launches }: Props) => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const sponsored = useMemo(
-    () => launches.filter((l) => l.is_sponsored).sort((a, b) =>
-      new Date(b.launch_datetime).getTime() - new Date(a.launch_datetime).getTime(),
-    ),
+    () =>
+      launches
+        .filter((l) => l.is_sponsored)
+        .sort((a, b) => {
+          const aTime = a.launch_datetime
+            ? new Date(a.launch_datetime).getTime()
+            : new Date(a.sponsor_link_expires_at || 0).getTime();
+          const bTime = b.launch_datetime
+            ? new Date(b.launch_datetime).getTime()
+            : new Date(b.sponsor_link_expires_at || 0).getTime();
+          return bTime - aTime;
+        }),
     [launches],
   );
 
@@ -210,7 +219,13 @@ const SponsoredTab = ({ launches }: Props) => {
                 <TableCell className="font-mono text-xs">
                   {l.token_symbol === "PENDING" ? "—" : l.token_symbol}
                 </TableCell>
-                <TableCell className="text-xs">{fmt(l.launch_datetime)}</TableCell>
+                <TableCell className="text-xs">
+                  {l.launch_datetime ? (
+                    fmt(l.launch_datetime)
+                  ) : (
+                    <span className="text-muted-foreground italic">Not yet picked</span>
+                  )}
+                </TableCell>
                 <TableCell className="text-xs">{fmt(l.sponsor_link_expires_at)}</TableCell>
                 <TableCell className="text-xs">{fmt(l.sponsor_link_claimed_at)}</TableCell>
                 <TableCell className="text-right">
