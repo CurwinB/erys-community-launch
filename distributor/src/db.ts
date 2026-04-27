@@ -342,12 +342,18 @@ export async function recordPumpfunCreatorVaultBalance(
 }
 
 // Reset launches stuck in "executing" status whose scheduled launch_datetime
-// is more than 10 minutes in the past. Flips them to "execution_failed" so
-// the existing pg_cron retry job will pick them up and re-execute.
-// Note: launches table has no updated_at column, so we use launch_datetime
-// as the staleness signal — better anyway since it's lifecycle-tied.
+// is well in the past AND no worker is actively holding the lock. Flips
+// them to "execution_failed" so the existing pg_cron retry job will pick
+// them up and re-execute.
+//
+// Two guards prevent stomping on in-flight executions:
+//   1. launch_datetime must be > 30 min old (covers fee-share rebuild
+//      retries + Bags index settle + launch tx + confirmation).
+//   2. worker_locked_at must be NULL or > 10 min old. The executor refreshes
+//      its lock per-claim; a fresh lock means a worker is actively running.
 export async function resetStaleExecutingLaunches(): Promise<void> {
-  const staleCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const launchCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const lockCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
   const { error } = await supabase
     .from("launches")
     .update({
@@ -355,7 +361,8 @@ export async function resetStaleExecutingLaunches(): Promise<void> {
       execution_error: "Reset from stale executing state by distributor",
     })
     .eq("status", "executing")
-    .lt("launch_datetime", staleCutoff);
+    .lt("launch_datetime", launchCutoff)
+    .or(`worker_locked_at.is.null,worker_locked_at.lt.${lockCutoff}`);
 
   if (error) {
     console.error("Error resetting stale executing launches:", error.message);
