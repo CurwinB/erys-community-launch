@@ -13,7 +13,10 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ChevronDown, ChevronRight, Download } from "lucide-react";
+import { ChevronDown, ChevronRight, Download, RotateCw } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "@/hooks/use-toast";
+import { useWallet } from "@/hooks/useWallet";
 import {
   formatSol,
   formatSolNumber,
@@ -58,6 +61,49 @@ interface Props {
 
 const LaunchesTab = ({ launches, contributions }: Props) => {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [retrying, setRetrying] = useState<Set<string>>(new Set());
+  const { walletAddress } = useWallet();
+
+  const handleRetry = async (launchId: string) => {
+    if (!walletAddress) {
+      toast({
+        title: "Connect wallet first",
+        variant: "destructive",
+      });
+      return;
+    }
+    setRetrying((prev) => new Set(prev).add(launchId));
+    try {
+      const { data, error } = await supabase.functions.invoke(
+        "retry-failed-launch",
+        { body: { launch_id: launchId, admin_wallet: walletAddress } },
+      );
+      if (error || (data as any)?.error) {
+        toast({
+          title: "Retry failed",
+          description: (data as any)?.error ?? error?.message ?? "Unknown",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Retry queued",
+          description: "Executor will pick it up on the next tick.",
+        });
+      }
+    } catch (err: any) {
+      toast({
+        title: "Retry failed",
+        description: err?.message ?? "Unknown",
+        variant: "destructive",
+      });
+    } finally {
+      setRetrying((prev) => {
+        const next = new Set(prev);
+        next.delete(launchId);
+        return next;
+      });
+    }
+  };
 
   const rows = useMemo(() => {
     return launches.map((l) => {
@@ -232,6 +278,18 @@ const LaunchesTab = ({ launches, contributions }: Props) => {
                         <span className="font-mono text-xs uppercase tracking-wider">
                           {launch.status}
                         </span>
+                        {launch.status === "execution_failed" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="rounded-none ml-2 h-6 px-2 text-[10px]"
+                            disabled={retrying.has(launch.id)}
+                            onClick={() => handleRetry(launch.id)}
+                          >
+                            <RotateCw className="h-3 w-3 mr-1" />
+                            {retrying.has(launch.id) ? "Retrying…" : "Retry"}
+                          </Button>
+                        )}
                       </TableCell>
                       <TableCell className="font-mono text-xs">
                         {formatDate(launch.launch_datetime)}
