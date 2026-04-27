@@ -1,116 +1,75 @@
-# Sponsored launches: pump wallet input + SOL recovery
+## What actually happened (full forensics)
 
-Two gaps in the sponsored flow today:
+Launch `643a4fe0` ("Etest"). I pulled every escrow tx from chain — here's the real sequence:
 
-1. **Influencers can't specify a pump wallet** — regular `SchedulePage` lets the creator enter "Receive your tokens at a different wallet?" so they can trade immediately on Pump.fun. The sponsored claim form has no equivalent. Worse: today no contribution row is written for the platform's 0.1 SOL, so the influencer doesn't actually receive tokens for it at distribution time at all.
-2. **No SOL recovery on sponsored failures** — when a sponsored launch ends up `cancelled` (funding-flow exception, IPFS failure, expired link after pre-funding, etc.), the 0.1 SOL sitting in the freshly-generated escrow wallet is orphaned. The Bags wallet is depleted with nothing to show for it.
+| Time | Tx | What | Result |
+|---|---|---|---|
+| 13:31:17 | `34Zb44…` | Sponsor seed in (0.0999 SOL from Bags wallet) | ✅ on-chain |
+| 13:32:44 | `2Z1dgS…` | Contributor `BvpGuDSL…` deposits 0.23 SOL | ✅ on-chain |
+| ~13:33 | `5wcFrb8…` | **Processing fee 0.06 SOL → treasury** | ✅ **finalized on-chain** |
+| ~13:33 | – | `confirmTransaction` throws `block height exceeded` | ❌ executor gives up |
+| 13:33:11 | `3uN7wc…` | Refund 0.0999 SOL → influencer `F46AiunP…` | ✅ |
+| 13:34:12 | `3p78gn…` | Refund 0.169 SOL → contributor `BvpGuDSL…` | ✅ |
 
-## What we'll build
+Final escrow balance: 890,880 lamports (~0.0009 SOL of dust).
 
-### 1. Pump wallet input on the sponsored claim form
+### So what was actually deducted vs lost
 
-- Add a new optional **"Pump.fun wallet"** input on `SponsoredPage.tsx`, modeled exactly on `SchedulePage`'s `creatorDeliveryWallet` — same validation copy, same hint ("Enter your Pump.fun wallet to trade immediately after launch").
-- Pass it to `claim-sponsored-slot` as `creator_delivery_wallet`.
+- **Processing fee 0.06 SOL**: deducted from the escrow, **landed in the platform treasury wallet** (`BAGS_PARTNER_WALLET`). Not "lost" — it's in our own wallet. Nobody else got it.
+- **Sponsor seed 0.0999 SOL**: refunded back to the influencer. Net for them: ~0.
+- **Contributor 0.23 SOL**: refunded 0.169 SOL — they're **short ~0.061 SOL**. That's the processing fee + 2 tx fees, which the refund worker pro-rated against escrow balance.
 
-### 2. Track the 0.1 SOL as the influencer's contribution
+The bug isn't "money disappeared" — it's that **the contributor effectively paid the processing fee for a launch that never happened.**
 
-So distribution actually delivers tokens for that seed SOL:
+### Why it happened
 
-- `executor/src/fundSponsoredEscrow.ts` — after the SOL transfer is confirmed (or detected as already-funded), insert a `contributions` row:
-  - `launch_id` = launch
-  - `wallet_address` = the influencer's pump wallet if provided; otherwise fall back to the launch's existing `created_by_wallet` (placeholder set at claim time)
-  - `token_delivery_wallet` = same pump wallet (NULL if none given)
-  - `amount_lamports` = the `sponsored_amount_lamports` (0.1 SOL)
-  - `tx_signature` = the funding tx (or recovered signature)
-  - `is_fee_claimer` = true (so the influencer is in the fee-share split, matching how a creator is treated on a regular launch)
-- Idempotent: skip insert if a contribution with that `tx_signature` already exists.
+`executor/src/processingFee.ts` does `sendRawTransaction` then `confirmTransaction`. When the RPC throws `block height exceeded` (network blip, slow inclusion), the function throws → the launch is marked `execution_failed` → the auto-refund worker runs → contributors are made roughly whole minus the already-debited fee. **The actual fee tx finalized 30s later**, but by then we'd already aborted.
 
-Migration: store `creator_delivery_wallet` somewhere usable by the executor. Cleanest path is a new nullable column `launches.creator_delivery_wallet text` populated by `claim-sponsored-slot` and read by the funding worker. (Reusing `created_by_wallet` would conflict with refund logic that treats it as the SOL-payer.)
+`fundSponsoredEscrow.ts` has the exact pattern needed — it polls `getSignatureStatuses` after a confirm timeout and re-checks balance before declaring failure. `processingFee.ts` never got that treatment, so it's the one fragile link in the chain.
 
-### 3. Auto-sweep cancelled sponsor escrows back to the Bags wallet
+## Fix
 
-New worker tick in the executor: `sweepCancelledSponsorEscrows.ts`.
+### 1. Harden `executor/src/processingFee.ts`
 
-- Claims one launch at a time via a new RPC `claim_sponsor_recovery_for_worker` matching launches where:
-  - `is_sponsored = true`
-  - `status = 'cancelled'`
-  - `sponsor_recovery_completed_at IS NULL`
-  - lock TTL respected
-- Loads the escrow keypair, queries on-chain balance, and if `> rent_exempt + tx_fee`, transfers everything (minus fee) back to the Bags wallet (`ERYS_PLATFORM_PRIVATE_KEY` pubkey).
-- Records `sponsor_recovery_completed_at`, `sponsor_recovery_tx_signature`, `sponsor_recovery_amount_lamports` on the launch.
-- Confirmation hardening identical to `fundSponsoredEscrow.ts`: if `confirmTransaction` times out, re-check status + re-check escrow balance before logging a failure. Records `sponsor_recovery_error` on hard failure with retry on next tick.
-- Wired into `executor/src/index.ts` main loop alongside the funding worker.
+- Wrap `confirmTransaction` in try/catch.
+- On timeout: poll `getSignatureStatuses([sig], {searchTransactionHistory:true})` for ~30s. If `confirmed`/`finalized` → return success with that sig.
+- If not landed and blockhash truly expired: build a fresh tx with new blockhash and retry up to 2x.
+- Only throw after all paths fail.
 
-### 4. Admin visibility
+### 2. Idempotency
 
-Surface the new fields in `SponsoredTab.tsx`:
-- Show "Recovered: 0.0995 SOL · `<sig>`" badge when `sponsor_recovery_tx_signature` is set.
-- Show recovery error (if any) in red.
+- Before charging, if `launches.processing_fee_tx_signature` is already set, query its on-chain status. If finalized → skip the charge and treat as already paid.
+- This makes execution-retry safe.
 
-## Technical details
+### 3. Make execution retryable for this failure class
 
-### DB migration
+- In `LaunchesTab` (admin), expose a "Retry execution" action for `execution_failed` rows. It clears `execution_error`, clears `worker_locked_at/worker_id`, and flips `status` back to `executing`. The hardened + idempotent code from #1 and #2 makes the retry safe — it won't double-charge or double-buy.
 
-```sql
--- new columns
-alter table public.launches
-  add column if not exists creator_delivery_wallet text,
-  add column if not exists sponsor_recovery_completed_at timestamptz,
-  add column if not exists sponsor_recovery_tx_signature text,
-  add column if not exists sponsor_recovery_amount_lamports bigint,
-  add column if not exists sponsor_recovery_attempts integer not null default 0,
-  add column if not exists sponsor_recovery_error text;
+### 4. Manual recovery for this specific launch (`643a4fe0`)
 
--- worker claim RPC
-create or replace function public.claim_sponsor_recovery_for_worker(
-  p_worker_id text,
-  p_lock_expiry_seconds int default 120
-) returns setof public.launches
-language sql security definer set search_path = public as $$
-  update public.launches
-  set worker_locked_at = now(), worker_id = p_worker_id
-  where id = (
-    select id from public.launches
-    where is_sponsored = true
-      and status = 'cancelled'
-      and sponsor_recovery_completed_at is null
-      and (
-        worker_locked_at is null
-        or worker_locked_at < now() - make_interval(secs => p_lock_expiry_seconds)
-      )
-    order by created_at asc
-    limit 1
-    for update skip locked
-  )
-  returning *;
-$$;
-```
+We can't relaunch this one — both contributors have already been refunded, and the influencer's pump wallet was never registered with Pump.fun. Options to make the contributor (`BvpGuDSL…`) whole:
+- Ship them ~0.061 SOL out of the treasury (the 0.06 we collected + ~0.001 in network fees they ate). This is the cleanest fix and a tiny amount.
+- A new admin "Refund processing fee" action could automate this for any future occurrence: pulls the missing amount from treasury back to the affected contributor.
 
-### Files
+I'll add the manual top-up call as a one-shot script (`/tmp/refund_processing_fee.ts`) we run after the code lands.
+
+## Files
 
 **Edit**
-- `src/pages/SponsoredPage.tsx` — add pump-wallet input + send `creator_delivery_wallet` in the invoke body
-- `supabase/functions/claim-sponsored-slot/index.ts` — accept + validate (base58, 32–44 chars) + persist `creator_delivery_wallet`
-- `executor/src/fundSponsoredEscrow.ts` — after success/recovery, insert contribution row idempotently
-- `executor/src/index.ts` — register the new sweep worker tick
-- `src/components/admin/SponsoredTab.tsx` — render recovery status + delivery wallet
-- `src/integrations/supabase/types.ts` — regenerated automatically after migration
+- `executor/src/processingFee.ts` — confirm-timeout polling + fresh-blockhash retries + idempotency check
+- `executor/src/executePumpfunLightning.ts` — pass existing `processing_fee_tx_signature` into `chargeProcessingFee` for skip-if-paid
+- `executor/src/executeBags.ts` — same idempotency hookup
+- `src/components/admin/LaunchesTab.tsx` — "Retry execution" button for `execution_failed` (only if not already there)
+- `supabase/functions/` — small edge function `retry-failed-launch` that does the status flip with admin auth
 
-**Create**
-- `executor/src/sweepCancelledSponsorEscrows.ts`
-- `supabase/migrations/<ts>_sponsor_recovery.sql` (the SQL above)
+**One-off**
+- `/tmp/refund_processing_fee.ts` — script to send ~0.061 SOL from treasury to `BvpGuDSL…` to close out this incident. Not committed.
 
-### Edge cases handled
-- Influencer leaves pump-wallet blank → contribution row uses `created_by_wallet`, no `token_delivery_wallet`, distribution still works (tokens go to the placeholder address).
-- Funding succeeded but contribution insert fails → next tick re-detects funded escrow, skips transfer (existing idempotency), retries contribution insert (uniqueness on `tx_signature`).
-- Sponsor link expires after pre-funding → status flips to `cancelled` via existing logic, sweep worker reclaims SOL.
-- Recovered launch is later un-cancelled by an admin → recovery row already wrote `completed_at`; we'll guard the sweep with both `status='cancelled'` AND `completed_at IS NULL`.
-- Bags wallet runs out: documented manual top-up requirement remains; nothing in this plan changes that.
+**No DB migration** — `processing_fee_tx_signature` already exists on `launches`.
 
-## Status (shipped)
-- Migration applied: new `creator_delivery_wallet` + `sponsor_recovery_*` columns and `claim_sponsor_recovery_for_worker` RPC.
-- `claim-sponsored-slot` now accepts and validates `creator_delivery_wallet`.
-- `SponsoredPage` renders an optional Pump.fun wallet input matching the `SchedulePage` UX.
-- `executor/src/fundSponsoredEscrow.ts` now writes a contribution row for the funded 0.1 SOL (idempotent on `tx_signature`), so the influencer receives tokens at distribution.
-- `executor/src/sweepCancelledSponsorEscrows.ts` is wired into the main poll tick to recover SOL stranded in cancelled sponsor escrows.
-- `SponsoredTab` shows the delivery wallet and a per-row recovery status.
+## Why this won't regress
+
+- The funding worker already runs the same recover-on-timeout pattern in production fine; we're literally porting it.
+- Idempotency check is one cheap RPC call; trivially skipped when the sig column is null.
+- Fee economics, threshold, distributor math: all unchanged.
+- Auto-refund behavior on truly-failed launches: unchanged.
