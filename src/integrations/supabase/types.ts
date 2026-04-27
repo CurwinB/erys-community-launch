@@ -142,6 +142,7 @@ export type Database = {
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
+          creator_delivery_wallet: string | null
           description: string | null
           distribution_completed: boolean | null
           distribution_completed_at: string | null
@@ -178,6 +179,11 @@ export type Database = {
           sponsor_link_claimed_at: string | null
           sponsor_link_expires_at: string | null
           sponsor_link_token: string | null
+          sponsor_recovery_amount_lamports: number | null
+          sponsor_recovery_attempts: number
+          sponsor_recovery_completed_at: string | null
+          sponsor_recovery_error: string | null
+          sponsor_recovery_tx_signature: string | null
           sponsored_amount_lamports: number | null
           sponsored_by: string | null
           sponsored_tx_signature: string | null
@@ -196,6 +202,7 @@ export type Database = {
           claimer_count?: number | null
           created_at?: string
           created_by_wallet: string
+          creator_delivery_wallet?: string | null
           description?: string | null
           distribution_completed?: boolean | null
           distribution_completed_at?: string | null
@@ -232,6 +239,11 @@ export type Database = {
           sponsor_link_claimed_at?: string | null
           sponsor_link_expires_at?: string | null
           sponsor_link_token?: string | null
+          sponsor_recovery_amount_lamports?: number | null
+          sponsor_recovery_attempts?: number
+          sponsor_recovery_completed_at?: string | null
+          sponsor_recovery_error?: string | null
+          sponsor_recovery_tx_signature?: string | null
           sponsored_amount_lamports?: number | null
           sponsored_by?: string | null
           sponsored_tx_signature?: string | null
@@ -250,6 +262,7 @@ export type Database = {
           claimer_count?: number | null
           created_at?: string
           created_by_wallet?: string
+          creator_delivery_wallet?: string | null
           description?: string | null
           distribution_completed?: boolean | null
           distribution_completed_at?: string | null
@@ -286,6 +299,11 @@ export type Database = {
           sponsor_link_claimed_at?: string | null
           sponsor_link_expires_at?: string | null
           sponsor_link_token?: string | null
+          sponsor_recovery_amount_lamports?: number | null
+          sponsor_recovery_attempts?: number
+          sponsor_recovery_completed_at?: string | null
+          sponsor_recovery_error?: string | null
+          sponsor_recovery_tx_signature?: string | null
           sponsored_amount_lamports?: number | null
           sponsored_by?: string | null
           sponsored_tx_signature?: string | null
@@ -518,6 +536,7 @@ export type Database = {
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
+          creator_delivery_wallet: string | null
           description: string | null
           distribution_completed: boolean | null
           distribution_completed_at: string | null
@@ -554,6 +573,11 @@ export type Database = {
           sponsor_link_claimed_at: string | null
           sponsor_link_expires_at: string | null
           sponsor_link_token: string | null
+          sponsor_recovery_amount_lamports: number | null
+          sponsor_recovery_attempts: number
+          sponsor_recovery_completed_at: string | null
+          sponsor_recovery_error: string | null
+          sponsor_recovery_tx_signature: string | null
           sponsored_amount_lamports: number | null
           sponsored_by: string | null
           sponsored_tx_signature: string | null
@@ -581,6 +605,7 @@ export type Database = {
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
+          creator_delivery_wallet: string | null
           description: string | null
           distribution_completed: boolean | null
           distribution_completed_at: string | null
@@ -617,6 +642,11 @@ export type Database = {
           sponsor_link_claimed_at: string | null
           sponsor_link_expires_at: string | null
           sponsor_link_token: string | null
+          sponsor_recovery_amount_lamports: number | null
+          sponsor_recovery_attempts: number
+          sponsor_recovery_completed_at: string | null
+          sponsor_recovery_error: string | null
+          sponsor_recovery_tx_signature: string | null
           sponsored_amount_lamports: number | null
           sponsored_by: string | null
           sponsored_tx_signature: string | null
@@ -644,6 +674,7 @@ export type Database = {
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
+          creator_delivery_wallet: string | null
           description: string | null
           distribution_completed: boolean | null
           distribution_completed_at: string | null
@@ -680,6 +711,11 @@ export type Database = {
           sponsor_link_claimed_at: string | null
           sponsor_link_expires_at: string | null
           sponsor_link_token: string | null
+          sponsor_recovery_amount_lamports: number | null
+          sponsor_recovery_attempts: number
+          sponsor_recovery_completed_at: string | null
+          sponsor_recovery_error: string | null
+          sponsor_recovery_tx_signature: string | null
           sponsored_amount_lamports: number | null
           sponsored_by: string | null
           sponsored_tx_signature: string | null
@@ -711,6 +747,7 @@ export type Database = {
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
+          creator_delivery_wallet: string | null
           description: string | null
           distribution_completed: boolean | null
           distribution_completed_at: string | null
@@ -747,6 +784,11 @@ export type Database = {
           sponsor_link_claimed_at: string | null
           sponsor_link_expires_at: string | null
           sponsor_link_token: string | null
+          sponsor_recovery_amount_lamports: number | null
+          sponsor_recovery_attempts: number
+          sponsor_recovery_completed_at: string | null
+          sponsor_recovery_error: string | null
+          sponsor_recovery_tx_signature: string | null
           sponsored_amount_lamports: number | null
           sponsored_by: string | null
           sponsored_tx_signature: string | null
@@ -774,6 +816,7 @@ export type Database = {
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
+          creator_delivery_wallet: string | null
           description: string | null
           distribution_completed: boolean | null
           distribution_completed_at: string | null
@@ -810,6 +853,11 @@ export type Database = {
           sponsor_link_claimed_at: string | null
           sponsor_link_expires_at: string | null
           sponsor_link_token: string | null
+          sponsor_recovery_amount_lamports: number | null
+          sponsor_recovery_attempts: number
+          sponsor_recovery_completed_at: string | null
+          sponsor_recovery_error: string | null
+          sponsor_recovery_tx_signature: string | null
           sponsored_amount_lamports: number | null
           sponsored_by: string | null
           sponsored_tx_signature: string | null
@@ -842,6 +890,7 @@ export type Database = {
               claimer_count: number | null
               created_at: string
               created_by_wallet: string
+              creator_delivery_wallet: string | null
               description: string | null
               distribution_completed: boolean | null
               distribution_completed_at: string | null
@@ -878,6 +927,11 @@ export type Database = {
               sponsor_link_claimed_at: string | null
               sponsor_link_expires_at: string | null
               sponsor_link_token: string | null
+              sponsor_recovery_amount_lamports: number | null
+              sponsor_recovery_attempts: number
+              sponsor_recovery_completed_at: string | null
+              sponsor_recovery_error: string | null
+              sponsor_recovery_tx_signature: string | null
               sponsored_amount_lamports: number | null
               sponsored_by: string | null
               sponsored_tx_signature: string | null
@@ -910,6 +964,7 @@ export type Database = {
               claimer_count: number | null
               created_at: string
               created_by_wallet: string
+              creator_delivery_wallet: string | null
               description: string | null
               distribution_completed: boolean | null
               distribution_completed_at: string | null
@@ -946,6 +1001,11 @@ export type Database = {
               sponsor_link_claimed_at: string | null
               sponsor_link_expires_at: string | null
               sponsor_link_token: string | null
+              sponsor_recovery_amount_lamports: number | null
+              sponsor_recovery_attempts: number
+              sponsor_recovery_completed_at: string | null
+              sponsor_recovery_error: string | null
+              sponsor_recovery_tx_signature: string | null
               sponsored_amount_lamports: number | null
               sponsored_by: string | null
               sponsored_tx_signature: string | null
@@ -973,6 +1033,7 @@ export type Database = {
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
+          creator_delivery_wallet: string | null
           description: string | null
           distribution_completed: boolean | null
           distribution_completed_at: string | null
@@ -1009,6 +1070,80 @@ export type Database = {
           sponsor_link_claimed_at: string | null
           sponsor_link_expires_at: string | null
           sponsor_link_token: string | null
+          sponsor_recovery_amount_lamports: number | null
+          sponsor_recovery_attempts: number
+          sponsor_recovery_completed_at: string | null
+          sponsor_recovery_error: string | null
+          sponsor_recovery_tx_signature: string | null
+          sponsored_amount_lamports: number | null
+          sponsored_by: string | null
+          sponsored_tx_signature: string | null
+          status: Database["public"]["Enums"]["launch_status"]
+          telegram_url: string | null
+          token_mint_address: string | null
+          token_name: string
+          token_symbol: string
+          total_tokens_distributed: number | null
+          twitter_url: string | null
+          website_url: string | null
+          worker_id: string | null
+          worker_locked_at: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "launches"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      claim_sponsor_recovery_for_worker: {
+        Args: { p_lock_expiry_seconds?: number; p_worker_id: string }
+        Returns: {
+          claimer_count: number | null
+          created_at: string
+          created_by_wallet: string
+          creator_delivery_wallet: string | null
+          description: string | null
+          distribution_completed: boolean | null
+          distribution_completed_at: string | null
+          escrow_wallet_encrypted_private_key: string
+          escrow_wallet_public_key: string
+          excluded_contributors: number | null
+          execution_attempts: number
+          execution_error: string | null
+          fee_share_config_key: string | null
+          id: string
+          image_url: string | null
+          ipfs_metadata_url: string | null
+          is_sponsored: boolean | null
+          launch_datetime: string | null
+          max_contribution_lamports: number | null
+          min_contribution_lamports: number
+          platform: string
+          processing_fee_lamports: number
+          processing_fee_tx_signature: string | null
+          pumpfun_consecutive_empty_claims: number
+          pumpfun_creator_fees_distributed: number | null
+          pumpfun_creator_vault_balance_lamports: number | null
+          pumpfun_creator_vault_checked_at: string | null
+          pumpfun_fees_claimed_total: number | null
+          pumpfun_fees_last_claimed_at: string | null
+          pumpfun_last_claim_attempt_at: string | null
+          pumpfun_last_claim_error: string | null
+          pumpfun_launch_signature: string | null
+          pumpfun_low_volume_throttle_until: string | null
+          pumpfun_mint_keypair_encrypted: string | null
+          pumpportal_wallet_pubkey: string | null
+          sponsor_funding_attempts: number
+          sponsor_funding_error: string | null
+          sponsor_link_claimed_at: string | null
+          sponsor_link_expires_at: string | null
+          sponsor_link_token: string | null
+          sponsor_recovery_amount_lamports: number | null
+          sponsor_recovery_attempts: number
+          sponsor_recovery_completed_at: string | null
+          sponsor_recovery_error: string | null
+          sponsor_recovery_tx_signature: string | null
           sponsored_amount_lamports: number | null
           sponsored_by: string | null
           sponsored_tx_signature: string | null
@@ -1036,6 +1171,7 @@ export type Database = {
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
+          creator_delivery_wallet: string | null
           description: string | null
           distribution_completed: boolean | null
           distribution_completed_at: string | null
@@ -1072,6 +1208,11 @@ export type Database = {
           sponsor_link_claimed_at: string | null
           sponsor_link_expires_at: string | null
           sponsor_link_token: string | null
+          sponsor_recovery_amount_lamports: number | null
+          sponsor_recovery_attempts: number
+          sponsor_recovery_completed_at: string | null
+          sponsor_recovery_error: string | null
+          sponsor_recovery_tx_signature: string | null
           sponsored_amount_lamports: number | null
           sponsored_by: string | null
           sponsored_tx_signature: string | null
