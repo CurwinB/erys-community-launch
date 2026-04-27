@@ -132,6 +132,7 @@ export async function executePumpfunLightningLaunch(
         escrowKeypair,
         TREASURY_WALLET,
         launch.id,
+        (launch as any).processing_fee_tx_signature ?? null,
       );
       if (feeResult.charged) {
         processingFeeLamports = feeResult.feeLamports!;
