@@ -1,135 +1,61 @@
-# Fix sponsored launch failure + public view 401s
+## What actually went wrong
 
-## Diagnosis
+Two separate things, on the same Bags wallet (`ERYS_PLATFORM_PRIVATE_KEY` — the wallet that receives partner-fee payouts and is also the configured source for sponsored escrow funding):
 
-Two independent bugs surfaced together:
+**Launch `0bac9d01` ("Test Erys")** — escrow `CPUQA9...` actually holds **0.099995 SOL on-chain** (one finalized inbound transfer `4CQYPsy4...`). Funding **succeeded**, but the executor recorded it as failed and cancelled the launch. Sequence:
 
-### Bug 1 — "Failed to send a request to the Edge Function" on Claim
+1. Attempt 1: Bags wallet sent 0.0999 SOL → tx landed on-chain, but `confirmTransaction` threw (RPC timeout / blockhash expiry / websocket drop). Executor's catch block recorded a failure. `attempts=1`.
+2. Attempt 2: blockhash refreshed → simulation now sees the Bags wallet at ~0.07 SOL (the 0.0999 SOL really was sent in attempt 1). Pre-flight rejects: `insufficient lamports 69760924, need 99995000`. `attempts=2`.
+3. Attempt 3: same → `attempts=3` → status flipped to `cancelled`.
 
-Logs for `claim-sponsored-slot`:
-```
-booted (time: 49ms)
-ERROR CPU Time exceeded
-LOG shutdown
-```
+**Launch `638c0f1a` ("Etest")** — escrow has 0 SOL, no on-chain history. Genuine failure caused entirely by the Bags wallet running out after attempt 1 above drained it. Correctly cancelled.
 
-The function crashes on **boot CPU budget**. Cause: the heavy esm.sh imports it doesn't really need:
-```ts
-import { Keypair, PublicKey, SystemProgram, Transaction } from "https://esm.sh/@solana/web3.js@1.91.1";
-import bs58 from "https://esm.sh/bs58@5.0.0";
-```
-`@solana/web3.js` pulls in BN.js, buffer-layout, tweetnacl, rpc-websockets… and exceeds Deno edge-runtime's startup quota.
+Root cause: the funding worker is not idempotent. If a tx silently lands, retries see depleted balance, fail, and burn the slot.
 
-### Bug 2 — Homepage 401 `permission denied for table launches`
+## Fix
 
-`launches_public` and `contributions_public` were created `WITH (security_invoker = on)`. Postgres re-applies RLS on the underlying tables using the caller's role — and we just locked those tables down with deny-all policies + revoked grants. So the views themselves return 401.
+### 1. Make `executor/src/fundSponsoredEscrow.ts` idempotent
 
-## Approach
+Before sending any transfer, check the **escrow** balance on-chain:
 
-**Move all on-chain work for sponsored claims to the Railway executor.** The edge function shrinks to "validate input + write a DB row." The executor — which already has a battle-tested Solana stack, the platform private key, and connection pooling — picks up the row, funds the escrow, and flips status to `scheduled`. This matches the rest of your architecture (executor handles every other on-chain step).
+- If `escrow balance >= transferAmount`, the escrow is already funded from a previous attempt. Skip the transfer entirely, mark `status='scheduled'` and clear lock fields. Try to populate `sponsored_tx_signature` from the escrow's most recent inbound signature (cheap `getSignaturesForAddress` with `limit:1`); fall back to leaving it null.
+- Otherwise, proceed with the transfer as today.
 
-UX impact: the claim button returns instantly with "Funding in progress…" and the page polls until status flips to `scheduled` (typically a few seconds), then shows the success card. If funding fails, status flips to `cancelled` with an error message.
+Also harden the failure path: when an exception fires *after* `sendRawTransaction` returned a signature (i.e. we have a sig but `confirmTransaction` threw), wait briefly and re-check the escrow balance + the signature status before recording failure. If the SOL is there, treat it as success.
 
-## Plan
+This way: a tx that secretly landed self-heals on the next tick instead of cancelling the slot.
 
-### 1. Database migration
+### 2. Recover the stuck launch `0bac9d01` ("Test Erys")
 
-- Add new enum value: `ALTER TYPE launch_status ADD VALUE 'sponsor_pending_funding'`.
-- New columns on `launches`:
-  - `sponsor_funding_attempts int default 0`
-  - `sponsor_funding_error text`
-- Recreate the public views **without** `security_invoker` so they bypass the locked-down base tables while still hiding sensitive columns:
+Migration that flips it back into the funding pipeline:
 
 ```sql
-DROP VIEW IF EXISTS public.launches_public CASCADE;
-CREATE VIEW public.launches_public AS
-SELECT id, token_name, token_symbol, description, image_url,
-       twitter_url, telegram_url, website_url,
-       token_mint_address, ipfs_metadata_url, escrow_wallet_public_key,
-       launch_datetime, min_contribution_lamports, max_contribution_lamports,
-       status, created_by_wallet, created_at, platform,
-       pumpfun_launch_signature, distribution_completed,
-       distribution_completed_at, total_tokens_distributed,
-       is_sponsored, sponsored_amount_lamports, claimer_count
-FROM public.launches;
-GRANT SELECT ON public.launches_public TO anon, authenticated;
-```
-Same shape for `contributions_public`. Recreate `get_launch_public(uuid)` (CASCADE drops it).
-
-Sensitive columns stay hidden because they're never in the SELECT list, and the base table still denies any direct query.
-
-- Add a new claim RPC for the executor:
-
-```sql
-CREATE FUNCTION claim_sponsor_funding_for_worker(p_worker_id text, p_lock_expiry_seconds int default 120)
-  RETURNS SETOF launches
-  LANGUAGE sql SECURITY DEFINER
-AS $$
-  UPDATE launches SET worker_locked_at = now(), worker_id = p_worker_id
-  WHERE id = (
-    SELECT id FROM launches
-    WHERE status = 'sponsor_pending_funding'
-      AND (worker_locked_at IS NULL OR worker_locked_at < now() - make_interval(secs => p_lock_expiry_seconds))
-    ORDER BY created_at ASC
-    LIMIT 1 FOR UPDATE SKIP LOCKED
-  ) RETURNING *;
-$$;
-REVOKE EXECUTE ON FUNCTION claim_sponsor_funding_for_worker(text, int) FROM public, anon, authenticated;
+UPDATE launches
+   SET status = 'sponsor_pending_funding',
+       sponsor_funding_attempts = 0,
+       sponsor_funding_error = null,
+       worker_locked_at = null,
+       worker_id = null
+ WHERE id = '0bac9d01-f5fc-484a-90e3-0d5133368bdd'
+   AND status = 'cancelled';
 ```
 
-### 2. Slim down `supabase/functions/claim-sponsored-slot/index.ts`
+After deploy, the next executor tick will see the escrow already holds 0.099995 SOL → mark `scheduled` immediately, no new transfer. Sponsor link works again.
 
-Remove the `@solana/web3.js` and `bs58` imports entirely. The function now:
+The other launch (`638c0f1a` "Etest") stays cancelled — its escrow is genuinely empty and no SOL was actually moved to it.
 
-1. Validates input + 1–72h window.
-2. Looks up the `sponsor_pending` row by token, checks expiry.
-3. Generates escrow + mint keypairs (existing inline `crypto.subtle` code — no esm.sh deps).
-4. Encrypts both keys with AES-GCM (existing inline code).
-5. Uploads metadata JSON to storage (unchanged).
-6. Allocates Pump.fun slot under `withScheduleLock` (unchanged).
-7. Updates the row with all token fields + `status = 'sponsor_pending_funding'`. **No Solana RPC, no transaction signing.**
-8. Returns `{success, launch_id, launch_url, mint_address, adjusted_launch_datetime, was_adjusted, offset_minutes, status: 'sponsor_pending_funding'}`.
+### 3. Bags wallet needs a top-up (out of band, no code change)
 
-### 3. New executor handler `executor/src/fundSponsoredEscrow.ts`
-
-In each poll tick (called from `index.ts` alongside `executeAllPendingLaunches`):
-
-1. `claim_sponsor_funding_for_worker(WORKER_ID)` to lock one row.
-2. Decrypt nothing — we just need the `escrow_wallet_public_key` (already plaintext).
-3. Build + sign a 0.1 SOL transfer from `ERYS_PLATFORM_PRIVATE_KEY` to the escrow using `@solana/web3.js` (already a dependency on Railway).
-4. Send + confirm.
-5. On success: update row with `sponsored_tx_signature` and `status = 'scheduled'`.
-6. On failure: increment `sponsor_funding_attempts`, write `sponsor_funding_error`. After 3 attempts, set `status = 'cancelled'` so the link can be regenerated.
-
-Reuses existing `executor/src/db.ts` + Solana connection.
-
-### 4. Frontend `src/pages/SponsoredPage.tsx`
-
-After `supabase.functions.invoke("claim-sponsored-slot", …)` returns success:
-- Show "Funding your launch…" state with a spinner.
-- Poll `get_launch_public(launch_id)` every 2s (max 60s).
-  - When `status = 'scheduled'` → show success card (existing UX).
-  - When `status = 'cancelled'` → show error: "Funding failed. Please contact support."
-  - On timeout → show "Still funding — your launch will appear at /launch/{id} shortly" with a link.
-
-### 5. Mark security finding fixed
-
-After deploy, the homepage and launch page reads work again, no sensitive column is exposed, and the claim flow works end-to-end.
+The Bags wallet is currently at ~0.07 SOL. Once partner-fee claims run, it'll refill from launch fees, but in the meantime it can't fund another sponsored slot. You can either wait for fee claims to top it up or send it some SOL manually. Not a code fix — just calling it out so we don't pretend the next sponsor claim will magically work without enough balance.
 
 ## Files to change
 
-- `supabase/migrations/<new>_sponsor_funding_async_and_views.sql` — enum, columns, recreated views, claim RPC, recreated `get_launch_public`
-- `supabase/functions/claim-sponsored-slot/index.ts` — strip web3.js/bs58, remove transaction code, set `sponsor_pending_funding`
-- `executor/src/fundSponsoredEscrow.ts` (new) — Solana transfer worker
-- `executor/src/index.ts` — call the new handler in the poll loop
-- `src/pages/SponsoredPage.tsx` — async funding poll UX
-- `src/integrations/supabase/types.ts` — auto-regenerated
+- `executor/src/fundSponsoredEscrow.ts` — add pre-send escrow-balance check; harden post-send failure path with a balance/sig recheck before recording failure
+- `supabase/migrations/<new>_recover_stuck_sponsored_launch.sql` — single UPDATE for `0bac9d01`
 
-## Verification after deploy
+## Verification
 
-1. Homepage `launches_public` queries return 200 with rows.
-2. Live contribution feed loads on launch pages.
-3. Sponsored claim form: button click → instant "Funding…" state → success card within ~5–10s.
-4. Edge function logs show fast boot, no CPU timeout.
-5. Executor logs show "Funded sponsored escrow: {signature}".
-6. Security scanner stays green — sensitive columns still absent from views; base tables still deny direct anon SELECT.
+1. Executor logs show `Escrow already funded for launch 0bac9d01..., marking scheduled` on the next tick.
+2. `launches` row for `0bac9d01` shows `status='scheduled'`, escrow balance unchanged at 0.099995 SOL.
+3. Sponsor landing page for that link transitions out of "Funding…" into the success card.
+4. Future sponsor claims either fund cleanly or, if a tx silently lands, self-heal next tick instead of cancelling.
