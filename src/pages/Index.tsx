@@ -119,15 +119,15 @@ const Index = () => {
       />
       {/* Hero */}
       <section className="border-b border-border">
-        <div className="container mx-auto px-4 py-10 md:py-16">
-          <div className="mx-auto max-w-3xl text-center">
-            <div className="mb-4 inline-flex items-center gap-2 rounded-sm border border-primary/30 bg-primary/5 px-3 py-1.5">
-              <span className="text-xs font-medium text-primary">Launch on Bags.fm or Pump.fun</span>
+        <div className="container mx-auto px-4 py-5 md:py-8">
+          <div className="mx-auto max-w-2xl text-center">
+            <div className="mb-2 inline-flex items-center gap-2 rounded-sm border border-primary/30 bg-primary/5 px-2 py-1">
+              <span className="text-[10px] font-medium text-primary">Launch on Bags.fm or Pump.fun</span>
             </div>
-            <h1 className="text-3xl font-bold tracking-tight text-foreground md:text-5xl">
+            <h1 className="text-xl font-bold tracking-tight text-foreground md:text-2xl">
               The Community Launch Platform for Solana Tokens.
             </h1>
-            <div className="mt-6 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+            <div className="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
               <Link to="/schedule">
                 <Button size="lg" className="w-full sm:w-auto">
                   Schedule a Launch
