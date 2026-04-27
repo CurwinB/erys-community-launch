@@ -13,6 +13,7 @@ import {
 import { ExternalLink, Loader2, RefreshCw, AlertTriangle, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { formatSolNumber, lamportsToSol, truncate } from "@/lib/adminFormat";
+import { useWallet } from "@/hooks/useWallet";
 
 interface PumpfunLaunchRow {
   id: string;
@@ -50,23 +51,21 @@ function timeAgo(iso: string | null): string {
 
 const PumpfunFeeHealthPanel = () => {
   const queryClient = useQueryClient();
+  const { publicKey } = useWallet();
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [custodialBalance, setCustodialBalance] = useState<number | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
 
   const { data: rows = [], isLoading } = useQuery({
-    queryKey: ["pumpfun-fee-health"],
+    queryKey: ["pumpfun-fee-health", publicKey],
+    enabled: !!publicKey,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("launches")
-        .select(
-          "id, token_name, token_symbol, token_mint_address, pumpfun_fees_claimed_total, pumpfun_fees_last_claimed_at, pumpfun_last_claim_attempt_at, pumpfun_last_claim_error, pumpfun_creator_vault_balance_lamports, pumpfun_creator_vault_checked_at"
-        )
-        .eq("platform", "pumpfun")
-        .eq("status", "launched")
-        .order("created_at", { ascending: false });
+      const { data, error } = await supabase.rpc(
+        "admin_list_pumpfun_fee_health",
+        { p_admin_wallet: publicKey! },
+      );
       if (error) throw error;
-      return (data ?? []) as PumpfunLaunchRow[];
+      return (data ?? []) as unknown as PumpfunLaunchRow[];
     },
     refetchInterval: 30_000,
   });

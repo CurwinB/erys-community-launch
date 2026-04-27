@@ -13,24 +13,21 @@ import RecoveryTab from "@/components/admin/RecoveryTab";
 import AccountingTab from "@/components/admin/AccountingTab";
 import SponsoredTab from "@/components/admin/SponsoredTab";
 import { lamportsToSol } from "@/lib/adminFormat";
-import { LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
+import { useWallet } from "@/hooks/useWallet";
 
 const ACTIVE_STATUSES = new Set(["scheduled", "executing"]);
 
 const AdminPage = () => {
   const { isAdmin } = useIsAdmin();
+  const { publicKey } = useWallet();
 
   const { data, isLoading } = useQuery({
-    queryKey: ["admin-dashboard"],
-    enabled: isAdmin,
+    queryKey: ["admin-dashboard", publicKey],
+    enabled: isAdmin && !!publicKey,
     queryFn: async () => {
       const [launchesRes, contributionsRes, claimsRes] = await Promise.all([
-        supabase
-          .from("launches")
-          .select(LAUNCH_PUBLIC_COLUMNS)
-          .order("launch_datetime", { ascending: false })
-          .limit(1000),
+        supabase.rpc("admin_list_launches", { p_admin_wallet: publicKey! }),
         supabase
           .from("contributions")
           .select("*")
