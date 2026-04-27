@@ -17,12 +17,19 @@ type SlotState =
       kind: "ready";
       slot: {
         id: string;
-        launch_datetime: string;
+        launch_datetime: string | null;
         sponsor_link_expires_at: string;
         sponsored_amount_lamports: number;
       };
     }
-  | { kind: "success"; launchUrl: string; tokenName: string; launchDatetime: string };
+  | {
+      kind: "success";
+      launchUrl: string;
+      tokenName: string;
+      launchDatetime: string;
+      wasAdjusted: boolean;
+      offsetMinutes: number;
+    };
 
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleString(undefined, {
@@ -59,12 +66,24 @@ const SponsoredPage = () => {
   const [telegramUrl, setTelegramUrl] = useState("");
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [imageFile, setImageFile] = useState<File | null>(null);
+  const [launchDatetime, setLaunchDatetime] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const slot = state.kind === "ready" ? state.slot : null;
-  const launchCountdown = useCountdown(slot?.launch_datetime ?? null);
   const expiryCountdown = useCountdown(slot?.sponsor_link_expires_at ?? null);
+
+  const minDateTime = useMemo(() => {
+    const d = new Date(Date.now() + 60 * 60 * 1000);
+    // datetime-local expects "YYYY-MM-DDTHH:mm" in local time.
+    const tzOffsetMs = d.getTimezoneOffset() * 60 * 1000;
+    return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 16);
+  }, []);
+  const maxDateTime = useMemo(() => {
+    const d = new Date(Date.now() + 72 * 60 * 60 * 1000);
+    const tzOffsetMs = d.getTimezoneOffset() * 60 * 1000;
+    return new Date(d.getTime() - tzOffsetMs).toISOString().slice(0, 16);
+  }, []);
 
   useEffect(() => {
     if (!linkToken) {
@@ -132,6 +151,16 @@ const SponsoredPage = () => {
       toast.error("Token name and symbol are required");
       return;
     }
+    if (!launchDatetime) {
+      toast.error("Pick a launch time");
+      return;
+    }
+    const launchIso = new Date(launchDatetime).toISOString();
+    const diffHours = (new Date(launchIso).getTime() - Date.now()) / (1000 * 60 * 60);
+    if (diffHours < 1 || diffHours > 72) {
+      toast.error("Launch time must be 1–72 hours from now");
+      return;
+    }
     setSubmitting(true);
     try {
       let image_url: string | undefined;
@@ -149,6 +178,7 @@ const SponsoredPage = () => {
           twitter_url: twitterUrl.trim() || undefined,
           telegram_url: telegramUrl.trim() || undefined,
           website_url: websiteUrl.trim() || undefined,
+          launch_datetime: launchIso,
         },
       });
       if (error) throw error;
@@ -159,7 +189,9 @@ const SponsoredPage = () => {
         kind: "success",
         launchUrl: fullUrl,
         tokenName: tokenName.trim(),
-        launchDatetime: state.slot.launch_datetime,
+        launchDatetime: data.adjusted_launch_datetime || launchIso,
+        wasAdjusted: Boolean(data.was_adjusted),
+        offsetMinutes: Number(data.offset_minutes ?? 0),
       });
     } catch (err: any) {
       toast.error(err.message || "Failed to submit");
