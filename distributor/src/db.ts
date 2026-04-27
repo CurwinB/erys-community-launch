@@ -126,6 +126,36 @@ export async function recordPumpfunEmptyClaim(launchId: string): Promise<void> {
   }
 }
 
+// Record a treasury sweep: SOL transferred from the shared PumpPortal custodial
+// wallet directly to the platform treasury. Logs the on-chain signature so
+// every cent that leaves the custodial wallet is auditable, and stamps the
+// related launch row as having a healthy fee-claim cycle.
+export async function recordPumpfunFeeTreasurySweep(args: {
+  launchId: string | null;
+  sourceWallet: string;
+  treasuryWallet: string;
+  amountLamports: number;
+  txSignature: string;
+  notes?: string | null;
+}): Promise<void> {
+  const { error } = await supabase.rpc("record_pumpfun_fee_treasury_sweep", {
+    p_launch_id: args.launchId,
+    p_source_wallet: args.sourceWallet,
+    p_treasury_wallet: args.treasuryWallet,
+    p_amount_lamports: args.amountLamports,
+    p_tx_signature: args.txSignature,
+    p_notes: args.notes ?? null,
+  });
+  if (error) {
+    console.error(
+      `Error recording Pump.fun treasury sweep for launch ${
+        args.launchId ?? "(none)"
+      }:`,
+      error.message
+    );
+  }
+}
+
 // Release a worker lock. Always called in a finally so crashed workers don't
 // hold rows hostage; the SQL claim functions also self-heal locks older than
 // the expiry window as a backstop.

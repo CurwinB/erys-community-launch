@@ -7,15 +7,14 @@ import {
   LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import bs58 from "bs58";
-import { decryptEscrowKey } from "./decrypt";
 import {
   Launch,
   claimPumpfunFeeBatchForWorker,
   releaseLaunchLock,
-  updatePumpfunFeesClaimed,
   recordPumpfunEmptyClaim,
   recordPumpfunFeeClaimFailure,
   recordPumpfunWalletStarved,
+  recordPumpfunFeeTreasurySweep,
 } from "./db";
 import { withCustodialLock } from "./custodialLock";
 
@@ -36,9 +35,6 @@ const BATCH_SIZE = parseInt(process.env.PUMPFUN_FEE_BATCH_SIZE || "50", 10);
 const SINGLE_CLAIM_PRIORITY_FEE_LAMPORTS = 55_000;
 const TX_FEE_RESERVE = 5_000;
 const CUSTODIAL_SOL_FLOOR_LAMPORTS = 2_000_000n; // 0.002 SOL
-// Max SystemProgram.transfer instructions per single tx — well within Solana's
-// 1232-byte tx size and 64 account limits.
-const MAX_FANOUT_PER_TX = 10;
 
 let cachedCustodialKeypair: Keypair | null = null;
 function getCustodialKeypair(): Keypair {
@@ -66,7 +62,6 @@ function getCustodialKeypair(): Keypair {
 
 interface PerLaunchResult {
   launch: Launch;
-  escrowKeypair: Keypair;
   claimedLamports: number; // share of the batch-claim total attributed to this launch
   vaultEmpty: boolean;
   errored?: string;
@@ -100,6 +95,23 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
     console.error("PUMPPORTAL_API_KEY not set; skipping batched fee claim");
     return;
   }
+  if (!ERYS_PLATFORM_WALLET) {
+    console.error(
+      "BAGS_PARTNER_WALLET (treasury) not set; skipping batched fee claim"
+    );
+    return;
+  }
+  let treasuryPubkey: PublicKey;
+  try {
+    treasuryPubkey = new PublicKey(ERYS_PLATFORM_WALLET);
+  } catch (err: any) {
+    console.error(
+      `BAGS_PARTNER_WALLET is not a valid Solana address: ${
+        err?.message ?? err
+      }`
+    );
+    return;
+  }
 
   let custodialKeypair: Keypair;
   try {
@@ -118,28 +130,17 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
 
   const connection = new Connection(SOLANA_RPC_URL, "confirmed");
 
-  // Decrypt all escrow keys up front. Failures are recorded and excluded.
+  // We no longer need escrow keys for the sweep — claimed creator fees are
+  // sent directly from the custodial wallet to the platform treasury. We
+  // still iterate through the claimed launches so we can attribute the sweep
+  // proportionally and stamp per-launch accounting rows.
   const candidates: PerLaunchResult[] = [];
   for (const launch of launches) {
-    try {
-      const decrypted = decryptEscrowKey(launch.escrow_wallet_encrypted_private_key);
-      const escrowKeypair = Keypair.fromSecretKey(new Uint8Array(decrypted));
-      candidates.push({
-        launch,
-        escrowKeypair,
-        claimedLamports: 0,
-        vaultEmpty: false,
-      });
-    } catch (err: any) {
-      console.error(
-        `Failed to decrypt escrow key for launch ${launch.id}: ${err?.message ?? err}`
-      );
-      await recordPumpfunFeeClaimFailure(
-        launch.id,
-        `Failed to decrypt escrow key: ${err?.message ?? err}`
-      );
-      await releaseLaunchLock(launch.id);
-    }
+    candidates.push({
+      launch,
+      claimedLamports: 0,
+      vaultEmpty: false,
+    });
   }
 
   if (candidates.length === 0) return;
@@ -152,7 +153,8 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
   const lockKey = custodialKeypair.publicKey.toBase58();
   let preBalance = 0n;
   let postClaimBalance = 0n;
-  let totalClaimedLamports = 0n;
+  let sweepableLamports = 0n;
+  let sweepSignature: string | null = null;
   try {
     await withCustodialLock(
       lockKey,
@@ -162,10 +164,11 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
         preBalance = BigInt(
           await connection.getBalance(custodialKeypair.publicKey, "confirmed")
         );
-        const fanoutTxCount = Math.ceil(candidates.length / MAX_FANOUT_PER_TX);
+        // We send a single SystemProgram.transfer to the treasury, so reserve
+        // exactly one tx fee on top of the claim priority fee + floor.
         const requiredForClaims =
           BigInt(SINGLE_CLAIM_PRIORITY_FEE_LAMPORTS) +
-          BigInt(fanoutTxCount) * BigInt(TX_FEE_RESERVE) +
+          BigInt(TX_FEE_RESERVE) +
           CUSTODIAL_SOL_FLOOR_LAMPORTS;
         if (preBalance < requiredForClaims) {
           const msg = `Custodial wallet balance ${preBalance} below required ${requiredForClaims} for batch of ${candidates.length} (need ~${
@@ -203,116 +206,75 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
         postClaimBalance = BigInt(
           await connection.getBalance(custodialKeypair.publicKey, "confirmed")
         );
-        const delta = postClaimBalance - preBalance;
-        // The single claim tx burned its own priority fee from the custodial
-        // wallet, so gross claimed = delta + priority fee.
-        totalClaimedLamports =
-          delta + BigInt(SINGLE_CLAIM_PRIORITY_FEE_LAMPORTS);
-        if (totalClaimedLamports <= 0n) {
-          console.log("All vaults empty this cycle — nothing to fan out.");
-          // Mark every launch as an empty claim so chronically empty ones
-          // back off to the 1h throttle.
+
+        // SWEEP RULE: send everything above the rent-exempt floor + one tx
+        // fee from the custodial wallet straight to the treasury. This
+        // captures both newly claimed fees AND any leftover SOL from prior
+        // cycles (e.g. successful claims whose downstream sweep failed). We
+        // do not need per-launch escrow routing — the platform takes 100% of
+        // Pump.fun creator fees, so the funds belong directly to treasury.
+        sweepableLamports =
+          postClaimBalance -
+          CUSTODIAL_SOL_FLOOR_LAMPORTS -
+          BigInt(TX_FEE_RESERVE);
+        if (sweepableLamports <= 0n) {
+          console.log(
+            `Nothing sweepable this cycle (post=${postClaimBalance}, floor=${CUSTODIAL_SOL_FLOOR_LAMPORTS})`
+          );
           for (const c of candidates) c.vaultEmpty = true;
           return;
         }
         console.log(
-          `Total claimed this batch: ${
-            Number(totalClaimedLamports) / LAMPORTS_PER_SOL
-          } SOL across ${candidates.length} launches`
+          `Sweeping ${
+            Number(sweepableLamports) / LAMPORTS_PER_SOL
+          } SOL from custodial → treasury (${treasuryPubkey.toBase58()})`
         );
 
-        // Attribute the gross claim equally across launches. We can't tell
-        // per-launch shares from a single batched claim, but since the
-        // platform takes 100% of creator fees anyway, the per-launch
-        // attribution only affects accounting/auditing rows in `launches`.
-        // Equal-share is the honest default given the API's batching.
-        const share = totalClaimedLamports / BigInt(candidates.length);
-        const remainder = totalClaimedLamports - share * BigInt(candidates.length);
-        candidates.forEach((c, i) => {
-          c.claimedLamports = Number(share + (i === 0 ? remainder : 0n));
-        });
-        const fundedRecipients = candidates.filter((c) => c.claimedLamports > 0);
-
-        // Sanity: cap total fan-out to what's actually in the wallet above
-        // the floor + tx fees we'll need.
-        const txCount = Math.ceil(
-          fundedRecipients.length / MAX_FANOUT_PER_TX
-        );
-        const maxFanout =
-          postClaimBalance -
-          CUSTODIAL_SOL_FLOOR_LAMPORTS -
-          BigInt(txCount) * BigInt(TX_FEE_RESERVE);
-        if (maxFanout <= 0n) {
-          console.error(
-            `Custodial balance too low after claims to fan out (post=${postClaimBalance})`
+        try {
+          const tx = new Transaction().add(
+            SystemProgram.transfer({
+              fromPubkey: custodialKeypair.publicKey,
+              toPubkey: treasuryPubkey,
+              lamports: Number(sweepableLamports),
+            })
           );
-          for (const c of fundedRecipients) {
-            await recordPumpfunFeeClaimFailure(
-              c.launch.id,
-              `Insufficient custodial balance after batch claims to sweep`
-            );
-          }
-          return;
-        }
-
-        // If for some reason the total claimed exceeds what's sweepable
-        // (e.g. we over-attributed because of float in concurrent priority
-        // fees), scale down proportionally.
-        let scaleNum = 1;
-        let scaleDen = 1;
-        if (totalClaimedLamports > maxFanout) {
-          scaleNum = Number(maxFanout);
-          scaleDen = Number(totalClaimedLamports);
-          console.warn(
-            `Scaling fan-out by ${scaleNum}/${scaleDen} to fit custodial balance`
-          );
-        }
-
-        for (let i = 0; i < fundedRecipients.length; i += MAX_FANOUT_PER_TX) {
-          const slice = fundedRecipients.slice(i, i + MAX_FANOUT_PER_TX);
-          const tx = new Transaction();
-          for (const c of slice) {
-            const lamports =
-              scaleDen === 1
-                ? c.claimedLamports
-                : Math.floor((c.claimedLamports * scaleNum) / scaleDen);
-            if (lamports <= 0) continue;
-            // Mutate so the post-lock split uses the actually-sent amount.
-            c.claimedLamports = lamports;
-            tx.add(
-              SystemProgram.transfer({
-                fromPubkey: custodialKeypair.publicKey,
-                toPubkey: c.escrowKeypair.publicKey,
-                lamports,
-              })
-            );
-          }
-          if (tx.instructions.length === 0) continue;
           tx.feePayer = custodialKeypair.publicKey;
-          try {
-            const { blockhash, lastValidBlockHeight } =
-              await connection.getLatestBlockhash("confirmed");
-            tx.recentBlockhash = blockhash;
-            tx.sign(custodialKeypair);
-            const sig = await connection.sendRawTransaction(tx.serialize(), {
-              preflightCommitment: "confirmed",
-            });
-            await connection.confirmTransaction(
-              { signature: sig, blockhash, lastValidBlockHeight },
-              "confirmed"
-            );
-            console.log(
-              `Fan-out tx ${i / MAX_FANOUT_PER_TX + 1}/${txCount} sent: ${sig}`
-            );
-          } catch (err: any) {
-            console.error(
-              `Fan-out tx failed:`,
-              err?.message ?? err
-            );
-            for (const c of slice) {
-              c.errored = `Fan-out failed: ${err?.message ?? err}`;
-              await recordPumpfunFeeClaimFailure(c.launch.id, c.errored);
-            }
+          const { blockhash, lastValidBlockHeight } =
+            await connection.getLatestBlockhash("confirmed");
+          tx.recentBlockhash = blockhash;
+          tx.sign(custodialKeypair);
+          sweepSignature = await connection.sendRawTransaction(
+            tx.serialize(),
+            { preflightCommitment: "confirmed" }
+          );
+          await connection.confirmTransaction(
+            {
+              signature: sweepSignature,
+              blockhash,
+              lastValidBlockHeight,
+            },
+            "confirmed"
+          );
+          console.log(
+            `Treasury sweep landed: https://solscan.io/tx/${sweepSignature}`
+          );
+
+          // Attribute the sweep equally across the batched launches so
+          // per-launch accounting totals stay meaningful.
+          const share =
+            sweepableLamports / BigInt(Math.max(candidates.length, 1));
+          const remainder =
+            sweepableLamports - share * BigInt(candidates.length);
+          candidates.forEach((c, i) => {
+            c.claimedLamports = Number(share + (i === 0 ? remainder : 0n));
+          });
+        } catch (err: any) {
+          sweepSignature = null;
+          const msg = `Treasury sweep failed: ${err?.message ?? err}`;
+          console.error(msg);
+          for (const c of candidates) {
+            c.errored = msg;
+            await recordPumpfunFeeClaimFailure(c.launch.id, msg);
           }
         }
       },
@@ -329,8 +291,7 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
     return;
   }
 
-  // ===== Outside the custodial lock: per-launch escrow → platform =====
-  // These run in parallel because each escrow is independent.
+  // ===== Outside the custodial lock: per-launch accounting =====
   await Promise.all(
     candidates.map(async (c) => {
       try {
@@ -339,8 +300,15 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
           await recordPumpfunEmptyClaim(c.launch.id);
           return;
         }
-        if (c.claimedLamports <= 0) return;
-        await sweepEscrowToPlatform(c, connection);
+        if (c.claimedLamports <= 0 || !sweepSignature) return;
+        await recordPumpfunFeeTreasurySweep({
+          launchId: c.launch.id,
+          sourceWallet: custodialKeypair.publicKey.toBase58(),
+          treasuryWallet: treasuryPubkey.toBase58(),
+          amountLamports: c.claimedLamports,
+          txSignature: sweepSignature,
+          notes: `Batch sweep across ${candidates.length} launch(es)`,
+        });
       } finally {
         await releaseLaunchLock(c.launch.id);
       }
@@ -348,9 +316,9 @@ export async function claimPumpfunFeesBatch(): Promise<void> {
   );
 
   console.log(
-    `Batch complete. Processed ${candidates.length} launch(es); claimed ~${
-      Number(totalClaimedLamports) / LAMPORTS_PER_SOL
-    } SOL gross.`
+    `Batch complete. Processed ${candidates.length} launch(es); swept ${
+      Number(sweepableLamports) / LAMPORTS_PER_SOL
+    } SOL to treasury.`
   );
 }
 
@@ -400,50 +368,4 @@ async function collectAllCreatorFees(
     }
   }
   return { success: true };
-}
-
-async function sweepEscrowToPlatform(
-  c: PerLaunchResult,
-  connection: Connection
-): Promise<void> {
-  const distributable = c.claimedLamports - TX_FEE_RESERVE;
-  if (distributable <= 0) {
-    console.log(
-      `Claimed amount too small after tx fees for launch ${c.launch.id}; skipping treasury transfer`
-    );
-    return;
-  }
-  try {
-    const tx = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: c.escrowKeypair.publicKey,
-        toPubkey: new PublicKey(ERYS_PLATFORM_WALLET),
-        lamports: distributable,
-      })
-    );
-    tx.feePayer = c.escrowKeypair.publicKey;
-    const { blockhash, lastValidBlockHeight } =
-      await connection.getLatestBlockhash("confirmed");
-    tx.recentBlockhash = blockhash;
-    tx.sign(c.escrowKeypair);
-    const sig = await connection.sendRawTransaction(tx.serialize(), {
-      preflightCommitment: "confirmed",
-    });
-    await connection.confirmTransaction(
-      { signature: sig, blockhash, lastValidBlockHeight },
-      "confirmed"
-    );
-    console.log(
-      `Treasury transfer for ${c.launch.token_symbol}: https://solscan.io/tx/${sig}`
-    );
-    await updatePumpfunFeesClaimed(c.launch.id, c.claimedLamports);
-  } catch (err: any) {
-    console.error(
-      `Failed escrow→platform for launch ${c.launch.id}: ${err?.message ?? err}`
-    );
-    await recordPumpfunFeeClaimFailure(
-      c.launch.id,
-      `Escrow→platform transfer failed: ${err?.message ?? err}`
-    );
-  }
 }

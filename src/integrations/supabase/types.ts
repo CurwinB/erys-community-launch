@@ -283,6 +283,39 @@ export type Database = {
         }
         Relationships: []
       }
+      pumpfun_fee_sweeps: {
+        Row: {
+          amount_lamports: number
+          created_at: string
+          id: string
+          launch_id: string | null
+          notes: string | null
+          source_wallet: string
+          treasury_wallet: string
+          tx_signature: string
+        }
+        Insert: {
+          amount_lamports: number
+          created_at?: string
+          id?: string
+          launch_id?: string | null
+          notes?: string | null
+          source_wallet: string
+          treasury_wallet: string
+          tx_signature: string
+        }
+        Update: {
+          amount_lamports?: number
+          created_at?: string
+          id?: string
+          launch_id?: string | null
+          notes?: string | null
+          source_wallet?: string
+          treasury_wallet?: string
+          tx_signature?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
@@ -619,6 +652,17 @@ export type Database = {
         Args: { p_error: string; p_launch_id: string }
         Returns: undefined
       }
+      record_pumpfun_fee_treasury_sweep: {
+        Args: {
+          p_amount_lamports: number
+          p_launch_id: string
+          p_notes?: string
+          p_source_wallet: string
+          p_treasury_wallet: string
+          p_tx_signature: string
+        }
+        Returns: string
+      }
       record_pumpfun_wallet_starved: {
         Args: { p_error: string; p_launch_id: string }
         Returns: undefined
@@ -628,6 +672,7 @@ export type Database = {
         Args: { p_key: string; p_worker: string }
         Returns: boolean
       }
+      reset_all_pumpfun_fee_throttles: { Args: never; Returns: number }
       try_acquire_custodial_lock: { Args: { p_key: string }; Returns: boolean }
       try_acquire_custodial_row_lock: {
         Args: { p_key: string; p_ttl_seconds?: number; p_worker: string }

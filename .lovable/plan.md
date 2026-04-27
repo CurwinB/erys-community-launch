@@ -1,31 +1,70 @@
-## Confirmed answer: there are zero creator fees to sweep yet
+You’re right. The evidence points to two real bugs on our side, not “no fees.”
 
-I queried the DB. The state of the world is:
+What I found:
+- `ETEST` is in the DB as `platform = pumpfun`, `status = launched`, with mint `JAQch38sjEK752q98NVMWMbmNuuZsjoENHVYc9b8Ceay`.
+- The preview is getting `401 permission denied for table launches` on launch queries. That is why the UI can falsely show missing/no launched tokens. The processing-fee columns were added to the frontend select list, but the browser roles were not granted column-level SELECT for the new safe columns.
+- The Pump.fun fee worker is fragile: it measures only the balance delta from the latest `collectCreatorFee` call and then fans out through escrow wallets. If the PumpPortal custodial wallet already has accumulated claimed SOL, or if a claim succeeds but the delta accounting is too small/negative after fees, the surplus can sit in the PumpPortal wallet and never get swept to treasury.
+- Admin revenue/accounting still treats Pump.fun claimed fees as a 50% Erys share in places, even though the current business rule/code comments say Erys takes 100% of Pump.fun creator fees.
 
-- **One** Pump.fun launch in `launched` status: `ETEST` (id `9caf31b8-…`), launch sig `3T5aZSxFsTG1…ZroZfHC`, launched ~16h ago.
-- The other 7 ETEST attempts on Pump.fun and 10 on Bags are all `execution_failed`. None of those will ever produce fees.
-- `platform_fee_claims` is **empty (0 rows, 0 lamports)**.
-- `ETEST.pumpfun_fees_last_claimed_at = 2026-04-27 10:02:18Z` (~7 minutes ago) with **no error**, **no throttle**, **no worker lock**, and `pumpfun_fees_claimed_total = 0`.
+Plan to fix it:
 
-That last bullet is the whole story: the distributor **is** picking up ETEST every 10 minutes, calling `collectCreatorFee`, and recording the claim attempt successfully — but every claim returns **zero lamports**, so `recordPumpfunEmptyClaim` fires, `pumpfun_fees_last_claimed_at` is stamped, and there's nothing to fan out or sweep. Hence no rows in `platform_fee_claims`.
+1. Restore launch visibility in the app/admin UI
+   - Add a Supabase migration granting browser roles SELECT on the newly added safe launch columns:
+     - `processing_fee_lamports`
+     - `processing_fee_tx_signature`
+     - `pumpfun_last_claim_attempt_at`
+     - `pumpfun_last_claim_error`
+     - any other Pump.fun health columns the admin panel reads
+   - Keep encrypted private-key columns revoked.
+   - This fixes the “No launched Pump.fun tokens” / missing launch screen issue caused by permission-denied queries.
 
-## Why every claim is empty
+2. Replace the Pump.fun fee sweep path with a direct treasury sweep
+   - Update `distributor/src/claimPumpfunFeesBatch.ts` so after `collectCreatorFee` it computes:
+     ```text
+     sweepable = current PumpPortal custodial balance - custodial floor - tx fee reserve
+     ```
+   - If `sweepable > 0`, send it directly from the PumpPortal custodial wallet to `BAGS_PARTNER_WALLET`.
+   - This sweeps both newly claimed fees and any SOL already stuck in the PumpPortal wallet above the reserved floor.
+   - Keep the custodial lock around claim + sweep so no executor/fee worker can race the shared wallet.
 
-Because **nobody has traded the ETEST token**. Pump.fun creator fees only accrue when there's buy/sell volume after launch. ETEST is a test token with the platform's own contributions and presumably no organic trading on the bonding curve, so the creator vault is permanently empty and `collectCreatorFee` returns a 200 with `errors: []` and no balance delta. After 3 consecutive empty cycles the launch will be throttled to once-an-hour by `record_pumpfun_empty_claim` (it isn't yet — `pumpfun_low_volume_throttle_until` is null — meaning the consecutive-empty counter is also being reset cleanly, probably because the distributor was redeployed recently with the truthy-array fix).
+3. Add explicit Pump.fun treasury-sweep accounting
+   - Add a `pumpfun_fee_sweeps` table with:
+     - amount lamports sent to treasury
+     - sweep transaction signature
+     - source custodial wallet
+     - treasury wallet
+     - related launch id when attributable
+     - timestamps and optional notes
+   - Add a service-role-only insert/update policy.
+   - Add a DB function like `record_pumpfun_fee_treasury_sweep(...)` that atomically:
+     - inserts the sweep ledger row
+     - updates launch claim/sweep totals
+     - clears stale Pump.fun claim errors
+     - releases/refreshes throttles correctly
 
-## Why the panel said "No launched Pump.fun tokens"
+4. Fix Pump.fun admin revenue math
+   - Update `PlatformRevenueTab`, `AccountingTab`, and admin metric revenue calculations so Pump.fun fee revenue is treated as 100% of swept/claimed Pump.fun fees, not 50%.
+   - Show actual treasury sweep tx signatures where available instead of only estimated rows.
 
-Look at the screenshot: it actually lists ETEST in the table — the empty-state text is for the second table beneath ("Launches needing recovery"). The panel is healthy. The custodial wallet at 0.0519 SOL is fine; it just hasn't spent anything because no claim has had a non-zero delta.
+5. Force the stuck `ETEST` balance through the fixed path
+   - Clear the claim throttle/worker lock for the launched `ETEST` row so the next distributor cycle immediately retries.
+   - Because the new logic sweeps existing custodial surplus, it should move the stuck PumpPortal-wallet SOL to treasury even if the next `collectCreatorFee` call itself returns no new fees.
 
-## What this means for the previous "truthy errors" diagnosis
+6. Validate after implementation
+   - Confirm the frontend launch queries no longer return 401.
+   - Confirm `ETEST` appears as launched in the Pump.fun health panel.
+   - Confirm the distributor logs a custodial-to-treasury transfer.
+   - Confirm DB accounting rows/totals update after the sweep.
+   - Confirm admin revenue/accounting no longer halves Pump.fun fees.
 
-The bug fix (`errorList.length > 0` instead of `json?.errors`) was real and worth shipping — without it, every successful 200 OK was being treated as a failure and stamping `pumpfun_last_claim_error`. The currently-clean error column on ETEST confirms the fix is now in production. But it was never the reason no sweeps happened in real life: the underlying reason is that **no creator fees have ever accrued because there's been no trading on any of our launched tokens**.
-
-## What to do
-
-No code change. To prove the pipeline end-to-end, do one of:
-
-1. **Generate trading volume on ETEST** — buy and sell some of it on pump.fun. Within 10 minutes the next claim cycle picks up real lamports, fans out to the escrow, and sweeps escrow → `BAGS_PARTNER_WALLET`, populating `platform_fee_claims`.
-2. **Wait for a real launch with organic volume.** Same outcome.
-
-If after step 1 you still see `pumpfun_fees_claimed_total = 0` and an empty `platform_fee_claims`, then there's a real bug to chase. Until then, the system is working — there's just nothing to sweep.
+Technical details:
+- Files expected to change:
+  - `distributor/src/claimPumpfunFeesBatch.ts`
+  - `distributor/src/db.ts`
+  - `src/pages/AdminPage.tsx`
+  - `src/components/admin/PumpfunFeeHealthPanel.tsx`
+  - `src/components/admin/PlatformRevenueTab.tsx`
+  - `src/components/admin/AccountingTab.tsx`
+  - `src/lib/constants.ts`
+  - new Supabase migration for grants/accounting table/RPC/throttle reset
+- No changes to public contribution or scheduling UI.

@@ -64,11 +64,13 @@ const PlatformRevenueTab = ({ bagsClaims, launches }: Props) => {
     [launches],
   );
 
+  // Pump.fun: Erys takes 100% of creator fees. Treat the recorded
+  // pumpfun_fees_claimed_total as the platform share in full.
   const pumpTotalErysSol = useMemo(
     () =>
       pumpRows.reduce(
         (sum, l) =>
-          sum + lamportsToSol(Number(l.pumpfun_fees_claimed_total ?? 0) * 0.5),
+          sum + lamportsToSol(Number(l.pumpfun_fees_claimed_total ?? 0)),
         0,
       ),
     [pumpRows],
@@ -94,8 +96,8 @@ const PlatformRevenueTab = ({ bagsClaims, launches }: Props) => {
         amount_sol: lamportsToSol(total).toFixed(4),
         tx_signature: "",
         token: l.token_symbol,
-        erys_share_sol: lamportsToSol(total * 0.5).toFixed(4),
-        creator_share_sol: lamportsToSol(total * 0.5).toFixed(4),
+        erys_share_sol: lamportsToSol(total).toFixed(4),
+        creator_share_sol: "0.0000",
       };
     });
     exportToCsv("erys-platform-revenue", [...bagsRows, ...pumpExportRows]);
@@ -206,8 +208,7 @@ const PlatformRevenueTab = ({ bagsClaims, launches }: Props) => {
                   <TableHead>Token</TableHead>
                   <TableHead>Launch Date</TableHead>
                   <TableHead className="text-right">Total Fees</TableHead>
-                  <TableHead className="text-right">Erys Share</TableHead>
-                  <TableHead className="text-right">Creator Share</TableHead>
+                  <TableHead className="text-right">Erys Share (100%)</TableHead>
                   <TableHead>Last Claimed</TableHead>
                 </TableRow>
               </TableHeader>
@@ -215,7 +216,7 @@ const PlatformRevenueTab = ({ bagsClaims, launches }: Props) => {
                 {pumpRows.length === 0 && (
                   <TableRow>
                     <TableCell
-                      colSpan={6}
+                      colSpan={5}
                       className="text-center text-muted-foreground py-6 font-mono text-sm"
                     >
                       No Pump.fun fees claimed
@@ -236,10 +237,7 @@ const PlatformRevenueTab = ({ bagsClaims, launches }: Props) => {
                         {formatSol(total)}
                       </TableCell>
                       <TableCell className="font-mono text-right text-success">
-                        {formatSolNumber(lamportsToSol(total * 0.5))}
-                      </TableCell>
-                      <TableCell className="font-mono text-right">
-                        {formatSolNumber(lamportsToSol(total * 0.5))}
+                        {formatSolNumber(lamportsToSol(total))}
                       </TableCell>
                       <TableCell className="font-mono text-xs">
                         {formatDate(l.pumpfun_fees_last_claimed_at)}
