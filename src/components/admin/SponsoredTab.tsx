@@ -45,7 +45,6 @@ const SponsoredTab = ({ launches }: Props) => {
   const queryClient = useQueryClient();
 
   const [influencerWallet, setInfluencerWallet] = useState("");
-  const [launchDatetime, setLaunchDatetime] = useState("");
   const [creating, setCreating] = useState(false);
   const [createdLink, setCreatedLink] = useState<{ link: string; expires: string } | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -56,15 +55,6 @@ const SponsoredTab = ({ launches }: Props) => {
     ),
     [launches],
   );
-
-  const minDateTime = useMemo(() => {
-    const d = new Date(Date.now() + 60 * 60 * 1000);
-    return d.toISOString().slice(0, 16);
-  }, []);
-  const maxDateTime = useMemo(() => {
-    const d = new Date(Date.now() + 72 * 60 * 60 * 1000);
-    return d.toISOString().slice(0, 16);
-  }, []);
 
   const copyText = async (text: string, key: string) => {
     await navigator.clipboard.writeText(text);
@@ -78,8 +68,8 @@ const SponsoredTab = ({ launches }: Props) => {
       toast.error("Connect your admin wallet first");
       return;
     }
-    if (!influencerWallet.trim() || !launchDatetime) {
-      toast.error("Influencer wallet and launch time are required");
+    if (!influencerWallet.trim()) {
+      toast.error("Influencer wallet is required");
       return;
     }
     setCreating(true);
@@ -88,14 +78,12 @@ const SponsoredTab = ({ launches }: Props) => {
         body: {
           admin_wallet: walletAddress,
           influencer_wallet: influencerWallet.trim(),
-          launch_datetime: new Date(launchDatetime).toISOString(),
         },
       });
       if (error) throw error;
       if (!data?.success) throw new Error(data?.error || "Failed");
       setCreatedLink({ link: data.sponsor_link, expires: data.expires_at });
       setInfluencerWallet("");
-      setLaunchDatetime("");
       queryClient.invalidateQueries({ queryKey: ["admin-dashboard"] });
       toast.success("Sponsored slot created");
     } catch (err: any) {
