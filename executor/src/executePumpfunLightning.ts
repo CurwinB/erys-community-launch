@@ -8,6 +8,7 @@ import {
   setFailed,
   setLaunched,
   storeBasisPoints,
+  supabase,
 } from "./db";
 import {
   setFailedNoRefund,
@@ -22,9 +23,14 @@ import {
   lamportsToSol,
 } from "./pumpportalCustodial";
 import { withCustodialLock } from "./custodialLock";
+import {
+  shouldChargeProcessingFee,
+  chargeProcessingFee,
+} from "./processingFee";
 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
 const PUMPPORTAL_API_KEY = process.env.PUMPPORTAL_API_KEY!;
+const TREASURY_WALLET = process.env.BAGS_PARTNER_WALLET!;
 const WORKER_ID =
   process.env.WORKER_ID || process.env.RAILWAY_REPLICA_ID || "executor-default";
 
@@ -96,6 +102,47 @@ export async function executePumpfunLightningLaunch(
     0n
   );
 
+  const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+
+  // Charge hidden processing fee BEFORE the custodial-lock critical section
+  // when total raised meets threshold. Funds go escrow → platform treasury.
+  // Token-distribution BPS (below) still uses original contribution amounts.
+  let processingFeeLamports = 0n;
+  if (shouldChargeProcessingFee(totalLamports)) {
+    try {
+      const feeResult = await chargeProcessingFee(
+        connection,
+        escrowKeypair,
+        TREASURY_WALLET,
+        launch.id,
+      );
+      if (feeResult.charged) {
+        processingFeeLamports = feeResult.feeLamports!;
+        const { error: feeUpdateErr } = await supabase
+          .from("launches")
+          .update({
+            processing_fee_lamports: Number(processingFeeLamports),
+            processing_fee_tx_signature: feeResult.signature ?? null,
+          })
+          .eq("id", launch.id);
+        if (feeUpdateErr) {
+          console.warn(
+            `Processing fee tx ${feeResult.signature} succeeded but failed to persist on launch row: ${feeUpdateErr.message}`,
+          );
+        }
+      }
+    } catch (feeErr: any) {
+      await setFailed(
+        launch.id,
+        `Processing fee transfer failed: ${feeErr?.message ?? feeErr}`,
+      );
+      return;
+    }
+  }
+
+  // SOL available for the actual launch buy after the processing fee debit.
+  const availableLamports = totalLamports - processingFeeLamports;
+
   // Reserves identical to the Local-API path so distributor math stays
   // unchanged. ATA cost + tx fee + per-contributor priority dust.
   const ATA_COST = 2_039_280n;
@@ -106,17 +153,19 @@ export async function executePumpfunLightningLaunch(
     contributorCount * (ATA_COST + TX_FEE + PRIORITY_FEE_PER_CONTRIBUTOR);
   const fundingTxFee = 5_000n; // escrow → custodial transfer tx
   const initialBuyLamports =
-    totalLamports - ataReserve - fundingTxFee - CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
+    availableLamports - ataReserve - fundingTxFee - CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
 
   if (initialBuyLamports < 10_000_000n) {
     await setFailed(
       launch.id,
-      `Insufficient SOL after reserves. Net buy: ${initialBuyLamports} lamports`
+      `Insufficient SOL after processing fee + reserves. Total: ${totalLamports}, Fee: ${processingFeeLamports}, Available: ${availableLamports}, Net buy: ${initialBuyLamports}`
     );
     return;
   }
 
   // ---- Persist proportional basis points BEFORE moving funds ----
+  // Always uses the ORIGINAL totalLamports so token shares are based on
+  // each contributor's actual deposit, not the post-fee available amount.
   const totalNum = Number(totalLamports);
   for (const c of contributions) {
     const bps = Math.floor(
@@ -124,8 +173,6 @@ export async function executePumpfunLightningLaunch(
     );
     await storeBasisPoints(c.id, bps);
   }
-
-  const connection = new Connection(SOLANA_RPC_URL, "confirmed");
 
   // ============================================================
   // CRITICAL SECTION: serialize all custodial-wallet operations.
