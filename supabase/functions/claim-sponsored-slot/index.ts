@@ -51,10 +51,39 @@ Deno.serve(async (req) => {
       telegram_url,
       website_url,
       launch_datetime,
+      creator_delivery_wallet,
     } = await req.json();
 
     if (!link_token || !token_name || !token_symbol || !launch_datetime) {
       return errorResponse("Missing required fields", 400);
+    }
+
+    // Optional creator_delivery_wallet: where the influencer wants their
+    // tokens delivered after launch. Validated as a plausible base58
+    // Solana pubkey; an empty/undefined value is allowed.
+    let normalizedDeliveryWallet: string | null = null;
+    if (
+      creator_delivery_wallet !== undefined &&
+      creator_delivery_wallet !== null &&
+      creator_delivery_wallet !== ""
+    ) {
+      if (typeof creator_delivery_wallet !== "string") {
+        return errorResponse("creator_delivery_wallet must be a string", 400);
+      }
+      const trimmed = creator_delivery_wallet.trim();
+      if (trimmed.length < 32 || trimmed.length > 44) {
+        return errorResponse(
+          "creator_delivery_wallet must be a valid Solana wallet address",
+          400,
+        );
+      }
+      if (!/^[1-9A-HJ-NP-Za-km-z]+$/.test(trimmed)) {
+        return errorResponse(
+          "creator_delivery_wallet contains invalid characters",
+          400,
+        );
+      }
+      normalizedDeliveryWallet = trimmed;
     }
 
     // Validate launch time is 1-72h ahead
@@ -178,6 +207,7 @@ Deno.serve(async (req) => {
           status: "sponsor_pending_funding",
           sponsor_funding_attempts: 0,
           sponsor_funding_error: null,
+          creator_delivery_wallet: normalizedDeliveryWallet,
         })
         .eq("id", launch.id);
       if (updateError) {
