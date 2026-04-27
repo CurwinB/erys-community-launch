@@ -457,6 +457,21 @@ const SponsoredPage = () => {
           </>
         )}
 
+        {state.kind === "funding" && (
+          <Card className="rounded-none border-primary/40 bg-card p-8 text-center">
+            <Loader2 className="mx-auto h-10 w-10 text-primary animate-spin mb-4" />
+            <h1 className="text-2xl font-bold mb-2">Funding your launch…</h1>
+            <p className="text-muted-foreground mb-2">
+              We're transferring{" "}
+              <span className="text-foreground font-semibold">{seedSol} SOL</span>{" "}
+              from the Erys treasury to your launch escrow on Solana.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              This usually takes 5–15 seconds. Don't close this tab.
+            </p>
+          </Card>
+        )}
+
         {state.kind === "success" && (
           <Card className="rounded-none border-primary/40 bg-card p-8 text-center">
             <div className="mx-auto h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
