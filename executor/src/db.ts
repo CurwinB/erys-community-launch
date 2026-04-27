@@ -35,6 +35,8 @@ export interface Launch {
   pumpfun_launch_signature: string | null;
   worker_locked_at: string | null;
   worker_id: string | null;
+  processing_fee_lamports: number;
+  processing_fee_tx_signature: string | null;
 }
 
 export interface Contribution {
