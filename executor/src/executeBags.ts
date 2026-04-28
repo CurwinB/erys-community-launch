@@ -975,7 +975,17 @@ export async function executeBagsLaunch(
         // contributor SOL is still in escrow. Auto-refund regardless of
         // error class — keeping funds locked never helps and the fee-share
         // config PDA stays on-chain harmlessly.
-        const reason = `createLaunchTransaction failed after ${attempt} attempt(s) (configKey=${configKeyStr}, retry can reuse config): ${msg}`;
+        const fingerprint = JSON.stringify({
+          mint: tokenMint.toBase58(),
+          metadataUrl: ipfsMetadataUrl,
+          configKey: configKeyStr,
+          launchWallet: escrowPubkey.toBase58(),
+          initialBuyLamports: Number(netBuyLamports),
+          claimerCount: feeClaimers.length,
+          bpsSum: feeClaimers.reduce((s, c) => s + c.userBps, 0),
+          usedLut: !!additionalLookupTables,
+        });
+        const reason = `createLaunchTransaction failed after ${attempt} attempt(s) (configKey=${configKeyStr}, retry can reuse config): ${msg} | fingerprint=${fingerprint}`;
         await setFailed(launch.id, reason);
         return;
       }
