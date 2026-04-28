@@ -1,55 +1,135 @@
-## What happened
+## What failed this time
 
-Yes — the launch ran on Railway (the executor service polling `executing` launches). It did not fail in the Supabase edge function.
+Latest Bags launch:
 
-**Latest launch** `e9d37218…` ("Erys test" / ETEST, 22:23 UTC) failed with:
+```text
+af4dc71d-2b37-4f8c-a52e-c09d093ae87f
+Token: Erys test / ETEST
+Status: execution_failed
+Mint reserved: 8xGh78mVhi9hXyioGNjtLyTF98XGPYG825XgTwsuBAGS
+Error: createBagsFeeShareConfig says "Config already exists" but did not return the existing config key
 ```
-createBagsFeeShareConfig failed: Config already exists
+
+Yes, this still went through Railway. The Supabase `execute-launch` edge function only queued it:
+
+```text
+Queued launch af4dc71d... for execution on Railway
 ```
 
-**The previous one** (`9c4049bd…`) failed with `Reset from stale executing state by distributor` — the distributor's janitor flipped it back to `execution_failed` before the new fee-share retry loop could finish. So we have two related bugs to fix.
+The actual failure happened in the Railway executor during Bags fee-share config creation.
 
-## Root causes
+## Simple explanation
 
-### Bug 1 — "Config already exists" (the one you just hit)
-- Step 0 of `executeBags.ts` *always* mints a fresh token AND clears `fee_share_config_key` to `null`.
-- On the previous attempt the fee-share Jito bundle did land on-chain, but either Step 3/4 failed afterwards or the worker lock was released before we persisted the key. The config PDA is now live for that mint, but our DB has `null`.
-- On retry, Step 0 mints a *new* mint, then Step 2 calls `createBagsFeeShareConfig` — and Bags' API refuses because for the claimer set + partner combo a config already exists (Bags dedupes by claimer hash, not by mint).
-- Code currently treats this as fatal → `setFailed`.
+This is not a normal launch transaction failure. It is failing before the actual token launch buy.
 
-### Bug 2 — Distributor resets in-flight launches
-- The distributor service has a janitor that flips long-`executing` launches back to `execution_failed` ("Reset from stale executing state").
-- The new fee-share retry loop with rebuilds can take >Xs across 3 attempts. The janitor's stale threshold killed the previous launch mid-retry.
+Bags has a fee-share config step before launch. Our code asks Bags:
 
-### Why no Railway log lines appear above
-The edge-function log dump only shows `execute-launch` enqueueing — actual execution logs live in the Railway executor logs (not in Supabase). The error string in `launches.execution_error` is the authoritative trail.
+```text
+For this mint + contributor wallets + fee splits + partner wallet, create the fee-share config.
+```
 
-## Proposed fix
+Bags replied:
 
-### A. Handle "Config already exists" gracefully (`executor/src/executeBags.ts`)
-1. In the Step 2 catch block, detect the substring `Config already exists` (case-insensitive).
-2. When detected: call `sdk.config.createBagsFeeShareConfig` again with the same args to get the deterministic `meteoraConfigKey` from the SDK response (it returns the key even when txs aren't needed), OR derive the PDA client-side from `(baseMint, partner, partnerConfig, claimerHash)`. Prefer asking the SDK first.
-3. If we get the key, persist via `storeFeeShareConfig` and continue to Step 3 — no resubmit needed.
-4. If we still can't recover the key, fall through to `setFailed` with a clear message.
+```text
+That config already exists.
+```
 
-### B. Stop clobbering `fee_share_config_key` in Step 0
-- Only `update({ fee_share_config_key: null })` if the freshly-minted `tokenMint` differs from the previously stored `token_mint_address`. If we ended up with the same mint (idempotent path), keep the existing key.
-- Even simpler: never null it out; rely on Bug-A recovery to repopulate when the mint changes.
+The previous fix correctly detected that message, but it depended on the Bags SDK returning the existing config key inside the error. I inspected the SDK behavior: the SDK actually throws away the successful response when `needsCreation=false` and only throws a plain `Error('Config already exists')`. So our recovery branch had nothing to recover.
 
-### C. Raise the distributor's stale-`executing` threshold
-- Find the janitor in `distributor/src/` that emits "Reset from stale executing state" and bump the timeout to comfortably exceed worst-case fee-share retries (≥10 minutes), plus require that `worker_locked_at` is null OR older than the threshold (so an actively-locked worker is never stomped).
+That is why the same failure happened again.
 
-### D. Manual recovery for `e9d37218…`
-- The on-chain fee-share config exists for mint `ATd5uFp7qQLJRPr2Ngk7VYCsbpv6cWTjaXRXkN2VBAGS`. After the code fix, retrying the launch via the existing `retry-failed-launch` edge function will:
-  - Step 0 mints a *new* mint (fresh PDA → no collision), OR
-  - If we hit the same combo again, the new "already exists" handler recovers the key.
-- No SOL was debited (`processing_fee_lamports = 0`, no signature stored), so retry is safe.
+## Important extra issue found
+
+Because `setFailed()` automatically runs refunds, this failed launch has already refunded contributors:
+
+```text
+Contribution total: 270,000,000 lamports
+Refunded contributors: 2/2
+Total refund shortfall: 7,433,124 lamports
+```
+
+So this specific launch should not simply be retried as-is unless we intentionally re-fund/handle the escrow. The current auto-refund behavior is too aggressive for Bags failures after on-chain setup has started, because Bags config creation can spend escrow SOL even though the token launch did not finish.
+
+## Plan to fix properly
+
+### 1. Bypass the SDK bug for fee-share config creation
+
+Update `executor/src/executeBags.ts` so Step 2 calls Bags' REST endpoint directly for fee-share config creation, instead of using `sdk.config.createBagsFeeShareConfig()` for this specific step.
+
+The Bags API response includes:
+
+```text
+needsCreation: true/false
+meteoraConfigKey: <key>
+transactions: [...]
+bundles: [...]
+```
+
+New behavior:
+
+- If `needsCreation=true`: decode/sign/send the returned transactions/bundles like today.
+- If `needsCreation=false`: store `meteoraConfigKey` immediately and continue to launch.
+- If Bags returns an API error: fail with the full Bags error payload.
+
+This directly fixes the current repeated `Config already exists` failure.
+
+### 2. Derive/store the config key as a final fallback
+
+Add a deterministic fallback for the known on-chain Bags fee-share PDA:
+
+```text
+seed: "fee_share_config"
+baseMint: token mint
+quoteMint: WSOL
+program: BAGS_FEE_SHARE_V2_PROGRAM_ID
+```
+
+If Bags ever says the config exists but the response is malformed, derive the config PDA, check it exists on-chain, store it in `launches.fee_share_config_key`, and continue.
+
+### 3. Stop auto-refunding Bags launches too early
+
+Change `setFailed()` usage for Bags execution after Step 0/Step 2 begins.
+
+For failures where an on-chain Bags setup may already exist, mark the launch `execution_failed` but do not auto-refund immediately. This prevents the platform from draining escrow before we can retry/recover the existing fee-share config.
+
+Use a safer pattern:
+
+```text
+Before Bags on-chain setup: setFailed() with auto-refund is OK
+After Bags on-chain setup starts: setFailedNoRefund() or a Bags-specific no-refund failure path
+```
+
+The existing `setFailedNoRefund()` function is currently described around Pump.fun, but it is generic enough to reuse or rename for clarity.
+
+### 4. Add better executor logs
+
+Add logs for:
+
+- Bags `needsCreation` value
+- `meteoraConfigKey`
+- number of returned transactions/bundles
+- whether config was created, reused, or PDA-derived
+- whether failure is refund-safe or no-refund
+
+This will make Railway logs decisive next time.
+
+### 5. Recovery for the failed launch
+
+After the code fix:
+
+- Do not blindly retry `af4dc71d...` because contributors have already been refunded and there is a partial refund shortfall.
+- Either create a fresh test launch with fresh funding, or manually reconcile/re-fund the escrow before retrying this exact launch.
+- For any existing failed launch that still has funds and hit `Config already exists`, the new code can reuse the existing Bags config and proceed.
 
 ## Files to change
-- `executor/src/executeBags.ts` — Step 0 conditional clear + Step 2 "already exists" recovery branch.
-- `distributor/src/...` (whichever file owns the stale-executing janitor) — bump threshold + respect active worker lock.
 
-## After approval
-1. Implement A + B + C above.
-2. Trigger `retry-failed-launch` for `e9d37218-29a1-4372-abee-3b613b6eea38`.
-3. Watch Railway executor logs for the next tick; confirm Step 2 now either skips or recovers cleanly.
+- `executor/src/executeBags.ts`
+  - Replace Step 2 SDK fee-share config call with direct REST handling.
+  - Handle `needsCreation=false` as success.
+  - Add PDA fallback and better logs.
+  - Use no-refund failure after on-chain setup starts.
+
+- `executor/src/db.ts`
+  - Add or clarify a no-refund failure helper for Bags partial/on-chain setup failures.
+
+No database schema change is required.
