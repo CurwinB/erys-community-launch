@@ -436,55 +436,82 @@ const TOTAL_BPS = 10_000;
 const MAX_CLAIMERS = 100;
 
 /**
- * Build a deterministic fee-claimers array.
- * - First entry is the creator (contributions[0]) and gets at least CREATOR_MIN_BPS.
- * - Remaining contributors get share proportional to their lamport amount.
- * - Final pass adjusts the creator's BPS so the total is exactly TOTAL_BPS.
- * - Capped at MAX_CLAIMERS entries (Bags limit).
+ * Build a deterministic fee-claimers array per the official Bags docs.
+ *
+ * Bags requires that the launch creator is explicitly included in the
+ * `feeClaimers` array. We put the launch wallet (escrow) FIRST with at
+ * least CREATOR_MIN_BPS, then distribute the remainder proportionally
+ * across contributors by lamport amount. Final pass adjusts the creator's
+ * BPS so the total is exactly TOTAL_BPS (10000).
+ *
+ * Capped at MAX_CLAIMERS entries (Bags limit). If the same wallet appears
+ * as both creator and a contributor, we merge them into a single entry to
+ * avoid Bags rejecting duplicate claimers.
  */
 function buildFeeClaimers(
+  creatorWallet: PublicKey,
   contributions: Contribution[],
 ): Array<{ user: PublicKey; userBps: number }> {
-  const capped = contributions.slice(0, MAX_CLAIMERS);
-  const totalLamports = capped.reduce(
+  // Reserve slot 0 for the creator. Cap remaining contributors so total
+  // entries (creator + contributors) never exceed MAX_CLAIMERS.
+  const creatorStr = creatorWallet.toBase58();
+  const contributorEntries = contributions
+    .filter((c) => (c.token_delivery_wallet || c.wallet_address) !== creatorStr)
+    .slice(0, MAX_CLAIMERS - 1);
+
+  const totalLamports = contributorEntries.reduce(
     (sum, c) => sum + BigInt(c.amount_lamports),
     0n,
   );
   const totalNum = Number(totalLamports);
 
-  // Initial proportional allocation (floored), creator gets the floor minimum
-  const allocations: number[] = capped.map((c, idx) => {
-    const raw = Math.floor(
-      (Number(BigInt(c.amount_lamports)) / totalNum) * TOTAL_BPS,
-    );
-    return idx === 0 ? Math.max(CREATOR_MIN_BPS, raw) : raw;
-  });
-
-  // Adjust creator to make sum exactly TOTAL_BPS
-  const sumExceptCreator = allocations
-    .slice(1)
-    .reduce((a, b) => a + b, 0);
-  allocations[0] = TOTAL_BPS - sumExceptCreator;
-
-  // Safety: if creator ended up below floor due to many small contributors,
-  // pull from the largest non-creator until creator is at the floor.
-  if (allocations[0] < CREATOR_MIN_BPS) {
-    let deficit = CREATOR_MIN_BPS - allocations[0];
-    // Iterate from largest contributor downward (already sorted desc by db.ts)
-    for (let i = 1; i < allocations.length && deficit > 0; i++) {
-      const take = Math.min(allocations[i] - 1, deficit);
-      if (take > 0) {
-        allocations[i] -= take;
-        allocations[0] += take;
-        deficit -= take;
-      }
-    }
+  // If there are no other contributors, creator gets all 10000 BPS.
+  if (contributorEntries.length === 0 || totalNum === 0) {
+    return [{ user: creatorWallet, userBps: TOTAL_BPS }];
   }
 
-  return capped.map((c, idx) => ({
-    user: new PublicKey(c.token_delivery_wallet || c.wallet_address),
-    userBps: allocations[idx],
-  }));
+  // Allocate (TOTAL_BPS - CREATOR_MIN_BPS) proportionally across contributors.
+  const distributable = TOTAL_BPS - CREATOR_MIN_BPS;
+  const contributorBps = contributorEntries.map((c) =>
+    Math.floor((Number(BigInt(c.amount_lamports)) / totalNum) * distributable),
+  );
+  const sumContrib = contributorBps.reduce((a, b) => a + b, 0);
+  const creatorBps = TOTAL_BPS - sumContrib;
+
+  const result: Array<{ user: PublicKey; userBps: number }> = [
+    { user: creatorWallet, userBps: creatorBps },
+  ];
+  contributorEntries.forEach((c, i) => {
+    if (contributorBps[i] > 0) {
+      result.push({
+        user: new PublicKey(c.token_delivery_wallet || c.wallet_address),
+        userBps: contributorBps[i],
+      });
+    }
+  });
+
+  // If rounding dropped some BPS into the creator slot only, that's fine.
+  // Re-balance to ensure exact 10000 (defensive).
+  const finalSum = result.reduce((s, r) => s + r.userBps, 0);
+  if (finalSum !== TOTAL_BPS) {
+    result[0].userBps += TOTAL_BPS - finalSum;
+  }
+  return result;
+}
+
+/**
+ * Strict preflight validation per Bags' documented limits. Failing locally
+ * with a clear error is far better than getting a Bags 500 with no body.
+ */
+function validateBagsMetadata(launch: Launch): string | null {
+  const name = launch.token_name?.trim() ?? "";
+  const symbol = launch.token_symbol?.trim() ?? "";
+  const description = launch.description?.trim() ?? "";
+  if (!name || name.length > 32) return `Invalid name length (${name.length}); must be 1..32`;
+  if (!symbol || symbol.length > 10) return `Invalid symbol length (${symbol.length}); must be 1..10`;
+  if (description.length > 1000) return `Description too long (${description.length}); max 1000`;
+  if (!launch.image_url) return `Missing image_url`;
+  return null;
 }
 
 export async function executeBagsLaunch(
