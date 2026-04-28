@@ -673,11 +673,11 @@ export async function executeBagsLaunch(
         }
 
         for (let i = 0; i < txs.length; i++) {
-          const sig = await signAndSendTransaction(
+          const sig = await sendVersionedTransactionWithHttpConfirm(
             connection,
-            commitment,
             txs[i],
             escrowKeypair,
+            `fee-share-tx-${i + 1}`,
           );
           console.log(`Fee-share tx ${i + 1}/${txs.length}: ${sig}`);
         }
@@ -721,7 +721,9 @@ export async function executeBagsLaunch(
   await new Promise((r) => setTimeout(r, 10_000));
 
   // STEP 3: createLaunchTransaction
-  console.log("Step 3: createLaunchTransaction");
+  console.log(
+    `Step 3: createLaunchTransaction (mint=${tokenMint.toBase58()} configKey=${configKeyStr} netBuyLamports=${netBuyLamports.toString()} claimers=${feeClaimers.length})`,
+  );
   let launchTx: VersionedTransaction;
   try {
     launchTx = await sdk.tokenLaunch.createLaunchTransaction({
@@ -732,9 +734,12 @@ export async function executeBagsLaunch(
       configKey: new PublicKey(configKeyStr),
     });
   } catch (err: any) {
-    await setFailed(
+    // Fee-share config is already on-chain at this point — auto-refund would
+    // drain escrow without unwinding that on-chain state. Use no-refund so
+    // the next retry can reuse the stored fee_share_config_key.
+    await setFailedNoRefund(
       launch.id,
-      `createLaunchTransaction failed: ${err.message}`,
+      `createLaunchTransaction failed (configKey=${configKeyStr}): ${describeBagsError(err)}`,
     );
     return;
   }
@@ -742,16 +747,21 @@ export async function executeBagsLaunch(
   // STEP 4: sign + send launch tx
   console.log("Step 4: sign + send launch tx");
   try {
-    const sig = await signAndSendTransaction(
+    const sig = await sendVersionedTransactionWithHttpConfirm(
       connection,
-      commitment,
       launchTx,
       escrowKeypair,
+      "bags-launch-tx",
     );
     console.log(`Bags launch confirmed: ${sig}`);
     console.log(`Solscan: https://solscan.io/tx/${sig}`);
     await setLaunched(launch.id);
   } catch (err: any) {
-    await setFailed(launch.id, `Launch tx failed: ${err.message}`);
+    // Same reasoning: by Step 4 the fee-share config exists on-chain. Don't
+    // auto-refund; allow manual recovery / retry with the same config key.
+    await setFailedNoRefund(
+      launch.id,
+      `Launch tx failed (configKey=${configKeyStr}): ${describeBagsError(err)}`,
+    );
   }
 }
