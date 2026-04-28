@@ -824,13 +824,13 @@ export async function executeBagsLaunch(
   // STEP 4: sign + send launch tx
   console.log("Step 4: sign + send launch tx");
   try {
-    // Per Bags docs: use the SDK helper. It signs with our keypair, sends,
-    // and confirms using the SDK's commitment ("processed").
-    const sig = await signAndSendTransaction(
+    // HTTP-polling helper instead of the SDK's signAndSendTransaction —
+    // see comment on sendVersionedTxWithPolling for why.
+    const sig = await sendVersionedTxWithPolling(
       connection,
-      commitment,
       launchTx,
       escrowKeypair,
+      "launch-tx",
     );
     console.log(`Bags launch confirmed: ${sig}`);
     console.log(`Solscan: https://solscan.io/tx/${sig}`);
