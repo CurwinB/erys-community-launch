@@ -1,48 +1,50 @@
-## What's actually wrong
+## Goal
 
-The launch `017ef269...` (ETEST, 14:28 UTC) failed at Step 2 with `Transaction did not pass signature verification`. Both contributions are still in escrow on-chain (0.21 + 0.06 SOL), unrefunded.
+On mobile (<640px), replace the tall single-column launch cards with a compact horizontal list row, so users can scan ~20 launches per page before needing to paginate — mirroring the dense desktop grid we already optimized.
 
-The refund UI **is still there** — under the **Recovery** tab, every contributor row has a "Refund" button and there's a "Refund All Pending Contributors" button. The launch is in `execution_failed`, which is included in the recovery list, so it should appear.
+Tablet/desktop layout is unchanged.
 
-What changed and why it feels like refunds disappeared:
+## What the user will see
 
-1. **Auto-refund was removed for ALL Bags failure paths.** In the previous fix, every Bags failure now calls `setFailedNoRefund` (executeBags.ts lines 854, 863, 892, 914). Before, Step 1/Step 2 pre-flight failures (where nothing landed on-chain) triggered automatic contributor refunds. Now nothing happens automatically — admin must go to Recovery tab and click Refund.
-2. **The "obvious" Refund action on the main Launches tab does not exist** — that tab only has a "Retry" button. So when a launch fails, the eye-catching action looks like Retry, and refund is hidden one tab over.
-3. The Step 2 no-refund decision is **wrong for this specific failure mode**: signature-verification rejection is a pre-flight error, the tx never hit the chain, no fee-share PDA was created. It is safe (and was previously the default) to auto-refund here.
+Mobile (current): One large card per launch (~400px tall with image, countdown, escrow grid, min contribution, and a full-width Participate button). User sees ~1.5 launches per screen.
 
-## The plan
+Mobile (new): A compact list row per launch (~72–88px tall):
 
-### 1. Auto-refund Step 2 pre-flight failures (executor)
+```text
+┌────────────────────────────────────────────────┐
+│ [img] Erys test  BAGS         LIVE  20:02 →   │
+│       $ETEST                  0.26◎ · 2 ppl    │
+└────────────────────────────────────────────────┘
+```
 
-In `executor/src/executeBags.ts`, distinguish between:
-- **Pre-flight / never-landed errors** (signature verification, simulation rejected, blockhash never used, "Config already exists" returned by Bags before submit) → `setFailedAndRefund`
-- **Possibly-landed errors** (timeout/expiry after send, unknown send error after some signatures broadcast) → keep `setFailedNoRefund`
+- Left: 40px token image + name/symbol + small platform chip
+- Right: LIVE dot, compact countdown (HH:MM:SS or "20m"), escrow + contributor count in mono
+- Whole row is tappable → `/launch/:id`
+- Long-press / tap a small copy icon (kept on the right, smaller) to copy share link
+- For completed launches: show only image, name, BAGS/PUMP chip, and a muted "Launched" label (no escrow/contributors since those are 0 anyway)
 
-Add a small `isPreflightOnlyError(msg)` helper that matches:
-- `Transaction did not pass signature verification`
-- `Simulation failed`
-- `Config already exists` (returned synchronously from `createBagsFeeShareConfig` before any tx is built)
-- `createLaunchTransaction failed: Request failed with status 4xx` (Bags API rejected before any tx landed)
+This lets ~20 rows fit per page on a typical phone with normal scrolling, matching the desktop pagination size of 20.
 
-Use it at the four `setFailedNoRefund` call sites to choose refund vs. no-refund.
+## Technical changes
 
-### 2. Add a "Refund Contributors" action on the Launches tab
+**`src/components/LaunchCard.tsx`**
+- Add a new `variant?: "card" | "row"` prop (default `"card"`).
+- When `variant === "row"`, render a compact horizontal layout instead of the existing vertical card. The row uses the same data and same `Link` target, so no behavior change.
+- Compact countdown: reuse `CountdownTimer` with a new `size="xs"` (or render inline using the same target date with a tighter format). If adding a size to `CountdownTimer` is too invasive, render a minimal inline countdown directly in the row using a small `useEffect` tick (already a pattern in the project).
+- Keep copy-link button as a 28px icon-only button on the right of the row.
+- Keep the LIVE pulse dot on the row for scheduled launches.
 
-Edit `src/components/admin/LaunchesTab.tsx` so any row with `status === 'execution_failed'` (and at least one un-refunded contribution) gets a **Refund Contributors** button next to Retry. Clicking it opens a confirmation dialog and then bulk-calls the existing `refund-contributor` edge function for each pending contribution (same logic the Recovery tab already uses). This makes the action discoverable from the screen admins land on first.
+**`src/pages/Index.tsx`**
+- Use `useIsMobile()` (already in `src/hooks/use-mobile.tsx`) to switch rendering:
+  - Mobile: render `paginatedLaunches` (and `paginatedCompleted`) inside a `flex flex-col divide-y divide-border border border-border bg-card` container, passing `variant="row"` to `LaunchCard`.
+  - Desktop/tablet: keep the existing responsive grid (`sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5`) with `variant="card"` (default).
+- Pagination already uses `LAUNCHES_PER_PAGE = 20`, so no change there. The pagination footer stays the same on both layouts.
+- Update the loading skeletons on mobile to be short row skeletons (~72px) instead of 288px card skeletons, so the perceived layout matches.
 
-### 3. One-time recovery for `017ef269...`
-
-Once the UI button ships, click "Refund Contributors" on that row to return 0.21 SOL to `BvpGuD…9rxV` and 0.06 SOL to `62aKWr…ubaV` from the escrow `escrow_wallet_public_key`. No code change needed beyond #2; the existing `refund-contributor` function handles it.
-
-### 4. Clarify the failure message
-
-The current `execution_error` text is a wall of SDK boilerplate. In the executor, when we catch a `SendTransactionError`, log `err.logs` separately and store a short, human first sentence in `execution_error` (e.g. `"Bags fee-share tx rejected pre-flight: signature verification failed (no on-chain state). Safe to refund."`). Full details still go to Railway logs.
-
-## Files to edit
-
-- `executor/src/executeBags.ts` — add `isPreflightOnlyError`, route Step 2/3/4 failures to refund vs. no-refund, shorten error message.
-- `src/components/admin/LaunchesTab.tsx` — add "Refund Contributors" button + confirmation dialog for `execution_failed` rows.
+**`src/components/CountdownTimer.tsx`** (only if needed)
+- Add an `xs` size variant that renders a single inline string like `20:02` or `2d 04:11` without the boxed day/hr/min/sec labels, for use inside the compact row.
 
 ## Out of scope
 
-- Root-causing the underlying signature verification error itself (that's the prior open thread on Bags pre-built tx signing). This plan is specifically about restoring the refund path so stuck SOL can always be returned regardless of what failed.
+- No changes to desktop layout, pagination logic, data fetching, or routes.
+- No changes to launch detail page, admin views, or backend.

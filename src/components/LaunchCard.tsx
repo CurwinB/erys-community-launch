@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Users, Coins, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import CountdownTimer from "@/components/CountdownTimer";
@@ -17,6 +17,7 @@ interface LaunchCardProps {
   status: "scheduled" | "launched";
   platform?: "bags" | "pumpfun";
   animationDelay?: number;
+  variant?: "card" | "row";
 }
 
 const LaunchCard = ({
@@ -31,6 +32,7 @@ const LaunchCard = ({
   status,
   platform = "bags",
   animationDelay = 0,
+  variant = "card",
 }: LaunchCardProps) => {
   const isLive = status === "scheduled";
   const [copied, setCopied] = useState(false);
@@ -43,6 +45,25 @@ const LaunchCard = ({
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  if (variant === "row") {
+    return (
+      <RowVariant
+        id={id}
+        tokenName={tokenName}
+        tokenSymbol={tokenSymbol}
+        imageUrl={imageUrl}
+        launchDatetime={launchDatetime}
+        totalEscrowLamports={totalEscrowLamports}
+        contributorCount={contributorCount}
+        status={status}
+        platform={platform}
+        animationDelay={animationDelay}
+        copied={copied}
+        onCopy={handleCopy}
+      />
+    );
+  }
 
   return (
     <div
@@ -139,3 +160,122 @@ const LaunchCard = ({
 };
 
 export default LaunchCard;
+
+function formatCompactCountdown(target: string): string {
+  const diff = new Date(target).getTime() - Date.now();
+  if (diff <= 0) return "00:00";
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
+  const minutes = Math.floor((diff / (1000 * 60)) % 60);
+  const seconds = Math.floor((diff / 1000) % 60);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (days > 0) return `${days}d ${pad(hours)}:${pad(minutes)}`;
+  if (hours > 0) return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  return `${pad(minutes)}:${pad(seconds)}`;
+}
+
+interface RowVariantProps {
+  id: string;
+  tokenName: string;
+  tokenSymbol: string;
+  imageUrl?: string | null;
+  launchDatetime: string;
+  totalEscrowLamports: number;
+  contributorCount: number;
+  status: "scheduled" | "launched";
+  platform: "bags" | "pumpfun";
+  animationDelay: number;
+  copied: boolean;
+  onCopy: (e: React.MouseEvent) => void;
+}
+
+const RowVariant = ({
+  id,
+  tokenName,
+  tokenSymbol,
+  imageUrl,
+  launchDatetime,
+  totalEscrowLamports,
+  contributorCount,
+  status,
+  platform,
+  animationDelay,
+  copied,
+  onCopy,
+}: RowVariantProps) => {
+  const isLive = status === "scheduled";
+  const [countdown, setCountdown] = useState(() => formatCompactCountdown(launchDatetime));
+
+  useEffect(() => {
+    if (!isLive) return;
+    const id = setInterval(() => setCountdown(formatCompactCountdown(launchDatetime)), 1000);
+    return () => clearInterval(id);
+  }, [launchDatetime, isLive]);
+
+  return (
+    <Link
+      to={`/launch/${id}`}
+      className="group flex items-center gap-3 bg-card px-3 py-2.5 transition-colors hover:bg-muted/30 opacity-0 animate-fade-in"
+      style={{ animationDelay: `${animationDelay}ms` }}
+    >
+      <div className="h-10 w-10 flex-shrink-0 overflow-hidden rounded-sm bg-muted">
+        {imageUrl ? (
+          <img src={imageUrl} alt={tokenName} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-sm font-bold text-muted-foreground">
+            {tokenSymbol.charAt(0)}
+          </div>
+        )}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <h3 className="truncate text-sm font-semibold text-foreground">{tokenName}</h3>
+          {platform === "pumpfun" ? (
+            <span className="flex-shrink-0 rounded-sm border border-[#00FF88]/30 bg-[#00FF88]/10 px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wider text-[#00FF88]">
+              Pump
+            </span>
+          ) : (
+            <span className="flex-shrink-0 rounded-sm border border-primary/30 bg-primary/10 px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wider text-primary">
+              Bags
+            </span>
+          )}
+        </div>
+        <div className="mt-0.5 flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
+          <span className="truncate">${tokenSymbol}</span>
+          {isLive && (
+            <>
+              <span className="text-border">·</span>
+              <span className="text-foreground">{formatSol(totalEscrowLamports)}◎</span>
+              <span className="text-border">·</span>
+              <span>{contributorCount}</span>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-shrink-0 items-center gap-2">
+        {isLive ? (
+          <div className="flex flex-col items-end">
+            <div className="flex items-center gap-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse-glow" />
+              <span className="text-[9px] font-medium uppercase tracking-wider text-success">Live</span>
+            </div>
+            <span className="font-mono text-xs font-semibold text-primary">{countdown}</span>
+          </div>
+        ) : (
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Launched</span>
+        )}
+        <button
+          type="button"
+          onClick={onCopy}
+          aria-label="Copy launch link"
+          title={copied ? "Copied" : "Copy link"}
+          className="flex h-7 w-7 items-center justify-center border border-border text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+        </button>
+      </div>
+    </Link>
+  );
+};
