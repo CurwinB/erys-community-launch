@@ -9,7 +9,6 @@ import {
   BAGS_FEE_SHARE_V2_MAX_CLAIMERS_NON_LUT,
   BAGS_FEE_SHARE_V2_PROGRAM_ID,
   WRAPPED_SOL_MINT,
-  sendBundleAndConfirm,
   waitForSlotsToPass,
 } from "@bagsfm/bags-sdk";
 import { decryptEscrowKey } from "./decrypt";
@@ -51,13 +50,64 @@ const BAGS_REBROADCAST_EVERY_MS = 5_000;
 const BAGS_PER_ATTEMPT_TIMEOUT_MS = 90_000;
 const BAGS_MAX_BLOCKHASH_REFRESH_ATTEMPTS = 3;
 
+function isNonZeroSignature(sig: Uint8Array): boolean {
+  return sig.some((byte) => byte !== 0);
+}
+
+function logTransactionSignatureState(
+  tx: VersionedTransaction,
+  signer: PublicKey,
+  label: string,
+): void {
+  const requiredSigners = tx.message.header.numRequiredSignatures;
+  const existingSignatures = tx.signatures.filter(isNonZeroSignature).length;
+  const staticAccountKeys: PublicKey[] =
+    (tx.message as any).staticAccountKeys ?? (tx.message as any).accountKeys ?? [];
+  const signerIndex = staticAccountKeys
+    .slice(0, requiredSigners)
+    .findIndex((key) => key.equals(signer));
+  const signerHasSignature =
+    signerIndex >= 0 && isNonZeroSignature(tx.signatures[signerIndex]);
+
+  console.log(
+    `[${label}] signatures ${existingSignatures}/${requiredSigners}; escrowRequired=${
+      signerIndex >= 0
+    }; escrowSigned=${signerHasSignature}`,
+  );
+}
+
+async function describeSolanaSendError(
+  err: any,
+  connection: Connection,
+): Promise<string> {
+  const parts = [err?.message ?? String(err)];
+  const logs = err?.logs;
+  if (Array.isArray(logs) && logs.length > 0) {
+    parts.push(`logs=${JSON.stringify(logs)}`);
+  } else if (typeof err?.getLogs === "function") {
+    try {
+      const fetchedLogs = await err.getLogs(connection);
+      if (Array.isArray(fetchedLogs) && fetchedLogs.length > 0) {
+        parts.push(`logs=${JSON.stringify(fetchedLogs)}`);
+      }
+    } catch {
+      /* logs unavailable */
+    }
+  }
+  if (err?.code) parts.push(`code=${err.code}`);
+  return parts.join(" | ").slice(0, 1500);
+}
+
 /**
- * Sign + send + HTTP-confirm a VersionedTransaction using the escrow keypair.
+ * Sign + send + HTTP-confirm a transaction we fully own/build locally.
  * - Re-signs with a fresh recent blockhash on each attempt so we don't get
  *   stuck on `block height exceeded` after a slow leader.
  * - Polls `getSignatureStatuses` and rebroadcasts the same signed bytes
  *   periodically; Solana de-dupes so it costs us nothing extra.
  * - Throws on permanent on-chain errors instead of retrying.
+ *
+ * Do NOT use this for transactions returned by Bags. Those may include
+ * Bags/program-side signatures tied to the original message + blockhash.
  */
 async function sendVersionedTransactionWithHttpConfirm(
   connection: Connection,
@@ -101,10 +151,9 @@ async function sendVersionedTransactionWithHttpConfirm(
       });
     } catch (sendErr: any) {
       lastErr = sendErr;
+      const details = await describeSolanaSendError(sendErr, connection);
       console.warn(
-        `[${label}] sendRawTransaction attempt ${attempt} failed: ${
-          sendErr?.message ?? sendErr
-        }`,
+        `[${label}] sendRawTransaction attempt ${attempt} failed: ${details}`,
       );
       continue;
     }
@@ -185,6 +234,106 @@ async function sendVersionedTransactionWithHttpConfirm(
     `[${label}] failed after ${BAGS_MAX_BLOCKHASH_REFRESH_ATTEMPTS} blockhash-refresh attempts. Last signature: ${
       lastSignature ?? "<none>"
     }. Last error: ${lastErr?.message ?? lastErr}`,
+  );
+}
+
+/**
+ * Sign + send + HTTP-confirm a prebuilt transaction returned by Bags.
+ *
+ * Critical difference from the local sender above: we NEVER mutate the
+ * message/blockhash and NEVER wipe signatures. Bags transactions can already
+ * contain required signatures. Replacing the blockhash or signature array
+ * invalidates them and causes `Transaction did not pass signature verification`.
+ */
+async function sendBagsPrebuiltTransactionWithHttpConfirm(
+  connection: Connection,
+  tx: VersionedTransaction,
+  signer: Keypair,
+  label: string,
+): Promise<string> {
+  logTransactionSignatureState(tx, signer.publicKey, `${label}:before-sign`);
+  tx.sign([signer]);
+  logTransactionSignatureState(tx, signer.publicKey, `${label}:after-sign`);
+
+  const rawTx = tx.serialize();
+  let signature: string;
+  try {
+    signature = await connection.sendRawTransaction(rawTx, {
+      preflightCommitment: "confirmed",
+      skipPreflight: false,
+    });
+  } catch (sendErr: any) {
+    const details = await describeSolanaSendError(sendErr, connection);
+    throw new Error(`[${label}] sendRawTransaction failed: ${details}`);
+  }
+
+  console.log(`[${label}] submitted ${signature}`);
+
+  const start = Date.now();
+  let lastRebroadcast = start;
+  while (Date.now() - start < BAGS_PER_ATTEMPT_TIMEOUT_MS) {
+    await new Promise((r) => setTimeout(r, BAGS_POLL_INTERVAL_MS));
+    try {
+      const statuses = await connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: false,
+      });
+      const status = statuses?.value?.[0];
+      if (status) {
+        if (status.err) {
+          throw new Error(
+            `tx ${signature} on-chain error: ${JSON.stringify(status.err)}`,
+          );
+        }
+        if (
+          status.confirmationStatus === "confirmed" ||
+          status.confirmationStatus === "finalized"
+        ) {
+          return signature;
+        }
+      }
+    } catch (pollErr: any) {
+      if (/on-chain error/.test(pollErr?.message ?? "")) {
+        throw pollErr;
+      }
+      console.warn(
+        `[${label}] getSignatureStatuses transient error: ${
+          pollErr?.message ?? pollErr
+        }`,
+      );
+    }
+
+    if (Date.now() - lastRebroadcast >= BAGS_REBROADCAST_EVERY_MS) {
+      lastRebroadcast = Date.now();
+      try {
+        await connection.sendRawTransaction(rawTx, {
+          preflightCommitment: "confirmed",
+          skipPreflight: true,
+        });
+      } catch {
+        /* leader may already have it */
+      }
+    }
+  }
+
+  try {
+    const finalStatuses = await connection.getSignatureStatuses([signature], {
+      searchTransactionHistory: true,
+    });
+    const final = finalStatuses?.value?.[0];
+    if (
+      final &&
+      !final.err &&
+      (final.confirmationStatus === "confirmed" ||
+        final.confirmationStatus === "finalized")
+    ) {
+      return signature;
+    }
+  } catch {
+    /* fall through */
+  }
+
+  throw new Error(
+    `[${label}] tx ${signature} not confirmed within ${BAGS_PER_ATTEMPT_TIMEOUT_MS}ms; rebuild from Bags before retrying`,
   );
 }
 
@@ -517,7 +666,7 @@ export async function executeBagsLaunch(
     const isExpiryError = (msg: string) =>
       /block height exceeded|blockhash not found|TransactionExpiredBlockheightExceededError|expired/i.test(
         msg,
-      );
+      ) || /not confirmed within/i.test(msg);
 
     const restBody = {
       payer: escrowPubkey.toBase58(),
@@ -659,21 +808,24 @@ export async function executeBagsLaunch(
       try {
         for (let bIdx = 0; bIdx < bundles.length; bIdx++) {
           const bundle = bundles[bIdx];
-          const signed: VersionedTransaction[] = bundle.map(
-            (tx: VersionedTransaction) => {
-              tx.sign([escrowKeypair]);
-              return tx;
-            },
-          );
           console.log(
-            `Sending Jito bundle ${bIdx + 1}/${bundles.length} (${signed.length} txs)`,
+            `Sending Bags bundle ${bIdx + 1}/${bundles.length} (${bundle.length} txs) via HTTP polling`,
           );
-          const sig = await sendBundleAndConfirm(signed, sdk);
-          console.log(`Bundle ${bIdx + 1} confirmed: ${sig}`);
+          for (let txIdx = 0; txIdx < bundle.length; txIdx++) {
+            const sig = await sendBagsPrebuiltTransactionWithHttpConfirm(
+              connection,
+              bundle[txIdx],
+              escrowKeypair,
+              `fee-share-bundle-${bIdx + 1}-tx-${txIdx + 1}`,
+            );
+            console.log(
+              `Bundle ${bIdx + 1} tx ${txIdx + 1}/${bundle.length}: ${sig}`,
+            );
+          }
         }
 
         for (let i = 0; i < txs.length; i++) {
-          const sig = await sendVersionedTransactionWithHttpConfirm(
+          const sig = await sendBagsPrebuiltTransactionWithHttpConfirm(
             connection,
             txs[i],
             escrowKeypair,
@@ -747,7 +899,7 @@ export async function executeBagsLaunch(
   // STEP 4: sign + send launch tx
   console.log("Step 4: sign + send launch tx");
   try {
-    const sig = await sendVersionedTransactionWithHttpConfirm(
+    const sig = await sendBagsPrebuiltTransactionWithHttpConfirm(
       connection,
       launchTx,
       escrowKeypair,
