@@ -898,7 +898,7 @@ export async function executeBagsLaunch(
   // STEP 4: sign + send launch tx
   console.log("Step 4: sign + send launch tx");
   try {
-    const sig = await sendVersionedTransactionWithHttpConfirm(
+    const sig = await sendBagsPrebuiltTransactionWithHttpConfirm(
       connection,
       launchTx,
       escrowKeypair,
