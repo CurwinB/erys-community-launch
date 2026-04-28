@@ -606,6 +606,11 @@ const SchedulePage = () => {
               }`}
             >
               Launch on Bags.fm
+              {!bagsEnabled && (
+                <span className="ml-2 inline-flex items-center rounded-sm border border-border bg-background px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-muted-foreground">
+                  Paused
+                </span>
+              )}
             </button>
             <button
               type="button"
@@ -617,6 +622,11 @@ const SchedulePage = () => {
               }`}
             >
               Launch on Pump.fun
+              {!pumpfunEnabled && (
+                <span className="ml-2 inline-flex items-center rounded-sm border border-border bg-background px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-muted-foreground">
+                  Paused
+                </span>
+              )}
             </button>
           </div>
           <p className="text-xs leading-relaxed text-muted-foreground">
@@ -626,6 +636,13 @@ const SchedulePage = () => {
           </p>
         </div>
 
+        {!currentPlatformEnabled ? (
+          <PlatformPausedCard
+            platform={platform}
+            otherEnabled={otherPlatformEnabled}
+            onSwitch={() => setPlatform(platform === "bags" ? "pumpfun" : "bags")}
+          />
+        ) : (
         <form onSubmit={handleSubmit} className="mt-8 space-y-6">
           <div className="space-y-4 border border-border bg-card p-6">
             <div className="space-y-2">
