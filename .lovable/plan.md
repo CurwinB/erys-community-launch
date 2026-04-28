@@ -1,94 +1,86 @@
 ## Goal
 
-Stop second-guessing Bags. Follow their documented example **exactly** for `executor/src/executeBags.ts` Steps 0 → 3, and let any failure surface naturally instead of being masked by retries against a payload Bags never asked us to mutate.
+Give admins a switch (per platform) to temporarily disable new Bags or Pump.fun launches. When disabled, the Schedule Launch page shows a polished "We're upgrading this experience" message instead of the form, and the create-launch edge functions reject new submissions as a safety net.
 
-## Why our current code is fighting Bags
+## UX
 
-The official Bags "Launch a Token" example (from `docs.bags.fm/how-to-guides/launch-token`) does exactly this for Step 3:
+**Schedule page (`/schedule`)**
+- The platform tab (Bags / Pump.fun) still toggles freely.
+- If the selected platform is disabled:
+  - The form is hidden.
+  - A trust-inspiring card appears in its place:
+    > **Bags.fm launches are temporarily paused**
+    > We're upgrading our Bags.fm integration to deliver a smoother, more reliable launch experience. New Bags launches are paused for a few hours while we ship improvements. Pump.fun launches remain fully open — switch above to launch now, or check back shortly.
+  - A subtle pulsing dot + "Maintenance in progress" label.
+  - CTA button: "Switch to Pump.fun" (or vice versa) when the other platform is enabled.
+- If both are disabled, show a single global maintenance card with no switch CTA.
+- The disabled-platform tab button gets a small "Paused" badge so the state is obvious before the user clicks.
 
-```ts
-const tokenInfoResponse = await sdk.tokenLaunch.createTokenInfoAndMetadata({ ... });
-// ...fee-share config...
-const tokenLaunchTransaction = await sdk.tokenLaunch.createLaunchTransaction({
-  metadataUrl: tokenInfoResponse.tokenMetadata,   // ← exactly what Bags returned
-  tokenMint,
-  launchWallet: keypair.publicKey,
-  initialBuyLamports: launchParams.initialBuyAmountLamports,
-  configKey,
-});
-```
+**Admin page (`/admin`)**
+- Add a new top-of-page **Platform Status** panel (above the existing tabs, next to MetricCards) with two switches:
+  - "Bags.fm launches enabled" — on/off + last-changed timestamp + who toggled it
+  - "Pump.fun launches enabled" — same
+- Toggling shows a confirm dialog ("Disable Bags launches? Users will see a maintenance message on the Schedule page.") before applying, then a toast.
 
-The Bags `CreateTokenInfoResponse` schema (`/api-reference/create-token-info`) defines exactly two URL-ish fields: `tokenMint` and `tokenMetadata`. There is no `metadataUri`/`metadataUrl`/`uri` on the response — Bags expects you to pass `tokenMetadata` straight back, untouched.
+## Technical Plan
 
-Our code currently:
-- Calls `pickBestMetadataUrl(tokenInfo)` which **rewrites the URL to `dweb.link` / `cf-ipfs` / `pinata`**.
-- On retries, calls `rotateMetadataGateway()` which **mutates the URL again**.
-- Pre-warms the URL via `fetch()` from Railway and retries up to 5 times across ~110s.
+### 1. Storage (migration)
 
-Bags' backend likely validates the metadata URL against the host **it pinned to** (the `ipfs.io` URL it returned). When we hand it `dweb.link/ipfs/<cid>`, Bags' validator either rejects it or its own fetcher fails — and we get the opaque 500. Every retry rotates to *another* gateway Bags didn't return, so all 5 attempts fail the same way.
+Use the existing `app_settings` table. Add two keys (no schema change needed):
+- `launches_bags_enabled` → `"true"` / `"false"` (default `"true"`)
+- `launches_pumpfun_enabled` → `"true"` / `"false"` (default `"true"`)
 
-The Bags changelog also confirms: when you let `createTokenInfoAndMetadata` upload, "we use the provided URL as-is" downstream. They want their URL back.
+Migration also seeds defaults via `INSERT … ON CONFLICT DO NOTHING`.
 
-## What changes
+Add two SECURITY DEFINER RPCs:
+- `get_launch_platform_status()` → returns `{ bags_enabled boolean, pumpfun_enabled boolean }`. `GRANT EXECUTE … TO anon, authenticated` (public — read only, no secrets).
+- `set_launch_platform_status(p_admin_wallet text, p_platform text, p_enabled boolean)` → checks `is_admin_wallet(p_admin_wallet)`, upserts the matching key, returns the new status. Grant to `authenticated`.
 
-### `executor/src/executeBags.ts`
+`app_settings` already has a public SELECT policy, so the RPC is essentially a typed wrapper, but using RPC keeps the admin-write path locked down.
 
-1. **Step 0 — pass `tokenInfo.tokenMetadata` through verbatim.** Delete the URL rewrite. Store the literal Bags-returned URL in `ipfs_metadata_url`.
+### 2. Frontend — schedule page
 
-2. **Step 3 — call `createLaunchTransaction` with the exact same five fields the Bags example uses, in the same order:**
-   ```ts
-   launchTx = await sdk.tokenLaunch.createLaunchTransaction({
-     metadataUrl: tokenInfo.tokenMetadata,
-     tokenMint,
-     launchWallet: escrowPubkey,
-     initialBuyLamports: Number(netBuyLamports),
-     configKey: new PublicKey(configKeyStr),
-   });
-   ```
+In `src/pages/SchedulePage.tsx`:
+- New `useQuery(["launch-platform-status"])` calling `supabase.rpc("get_launch_platform_status")` with a 30s `staleTime` and `refetchOnWindowFocus`.
+- Derive `bagsEnabled` / `pumpfunEnabled`.
+- Replace the form rendering with conditional logic:
+  - If selected platform disabled → render new `<PlatformPausedCard platform={platform} otherEnabled={…} onSwitch={…} />` instead of the form + submit button.
+  - Tab buttons get a "Paused" pill when disabled (still clickable so users can read the message).
+- New component: `src/components/schedule/PlatformPausedCard.tsx` — dark card matching brand (bg `#111`, accent `#00D4FF` for Bags, `#00FF88` for Pump), pulsing dot, headline, body copy, and conditional "Switch to {other}" button.
+- Block `handleSubmit` early with a toast if the platform is disabled (defense-in-depth in case status is stale).
 
-3. **Delete the gateway machinery** — no longer needed:
-   - `IPFS_GATEWAYS`
-   - `extractIpfsCid`
-   - `pickBestMetadataUrl`
-   - `rotateMetadataGateway`
-   - `verifyMetadataReachable`
-   - the `node-fetch` import (verify nothing else in the file uses it; if so, leave it).
+### 3. Frontend — admin page
 
-4. **Simplify the Step 3 retry loop.** Bags' docs treat `createLaunchTransaction` as a one-shot call. Keep a small safety net for genuine transport blips, but stop hammering:
-   - `MAX_LAUNCH_TX_ATTEMPTS = 3`
-   - Backoff: `5s, 15s` (≈20s span). Fits comfortably inside the existing lock.
-   - Retry **only** on network-level errors (`ECONNRESET`, `ETIMEDOUT`, `ENOTFOUND`, `EAI_AGAIN`, `fetch failed`, `socket hang up`) and HTTP `429`/`503`.
-   - **Treat HTTP `500` as terminal** — Bags returning 500 means the payload is bad (or their service is genuinely broken); retrying won't fix either, and our logs prove 5 attempts produce 5 identical 500s.
-   - On exhaustion or terminal error: still call `setFailed` (auto-refund) when no on-chain SOL was committed, which is always true at this point. Drop the `setFailedNoRefund` branch for Step 3 — there is no scenario at Step 3 where keeping contributor SOL in escrow is the right answer.
+- New component: `src/components/admin/PlatformStatusPanel.tsx`.
+  - Uses `useQuery` + `useMutation` against the two RPCs.
+  - Two rows: platform label, enabled `Switch`, "last updated" timestamp.
+  - Wrap toggle in `AlertDialog` confirm.
+  - On success: invalidate `["launch-platform-status"]` and `["admin-platform-status"]`.
+- Mount in `AdminPage.tsx` between `<MetricCards />` and `<Tabs>`.
 
-5. **Keep the diagnostic logging** of `tokenInfo` keys + the Step 3 payload (`metadataUrl`, `tokenMint`, `launchWallet`, `initialBuyLamports`, `configKey`, `claimerCount`). These are cheap and let us correlate any future Bags 500 with their support team.
+### 4. Backend — edge function guards
 
-### `executor/src/db.ts`
+In `supabase/functions/create-launch/index.ts` and `supabase/functions/create-launch-pumpfun/index.ts`, near the top of the handler (before any wallet/escrow work):
+- Read the matching `app_settings` row via the service-role client.
+- If disabled, return HTTP 503 with `{ error: "platform_paused", message: "Bags launches are temporarily paused for maintenance. Please try again shortly." }`.
+- The frontend surfaces this message in the existing error toast as a fallback.
 
-6. **Revert `claim_executing_launch_for_worker` lock from 240s → 120s.** With the simplified retry budget (≤25s for Step 3) we no longer need the extended window, and 120s matches what every other path expects.
+### 5. Types
 
-### Files NOT changed
+After the migration, `src/integrations/supabase/types.ts` is auto-regenerated to include the new RPCs — no manual edits.
 
-- `executor/src/executeLaunch.ts` — unchanged.
-- DB schema, RPCs, edge functions, UI — unchanged.
-- Refund logic — unchanged (already correct).
+## Out of Scope
 
-## Recovery for the stuck launch `049c3955…`
+- No change to in-flight launches (already-scheduled launches still execute normally; this only blocks **new** launch creation).
+- No change to contributions on existing launches.
+- No per-user overrides or scheduled maintenance windows — single global toggle per platform.
 
-After deploying:
-1. Click **Retry** in admin. The new code will:
-   - Call `createTokenInfoAndMetadata` for a fresh mint + Bags-canonical URL.
-   - Reuse the existing `fee_share_config_key` PDA (already on-chain, harmless).
-   - Call `createLaunchTransaction` with the exact URL Bags handed back.
-2. If Bags still returns 500, the failure surfaces fast (~25s vs ~2min), `setFailed` runs, and contributors are auto-refunded. The opaque error body is captured in `execution_error` and we open a Bags support ticket with the logged payload.
+## Files Touched
 
-## Why this is the right move
-
-- We've spent two iterations adding workarounds for a symptom (500s) without evidence the workarounds help — the logs show all 5 rotated-gateway attempts failed identically. That's a strong signal the URL mutation is *causing* the rejection, not curing it.
-- The Bags docs, SDK schema, and example code all agree: pass `tokenMetadata` through unchanged.
-- Removing ~80 lines of speculative gateway code makes future debugging much easier — when Bags returns 500 again, we'll know it's their payload validator, not our gateway shuffle.
-
-## Files to edit
-
-- `executor/src/executeBags.ts` (delete helpers, simplify Steps 0 and 3, simplify retry)
-- `executor/src/db.ts` (lock back to 120s)
+- New migration under `supabase/migrations/`
+- `src/pages/SchedulePage.tsx` (conditional render + tab badges + submit guard)
+- `src/components/schedule/PlatformPausedCard.tsx` (new)
+- `src/components/admin/PlatformStatusPanel.tsx` (new)
+- `src/pages/AdminPage.tsx` (mount panel)
+- `supabase/functions/create-launch/index.ts` (guard)
+- `supabase/functions/create-launch-pumpfun/index.ts` (guard)
