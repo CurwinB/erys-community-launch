@@ -603,6 +603,19 @@ export async function executeBagsLaunch(
         `Bags fee-share build: meteoraConfigKey=${meteoraConfigKey.toBase58()} txs=${txs.length} bundles=${bundles.length}`,
       );
 
+      // Persist the meteoraConfigKey BEFORE submitting fee-share transactions.
+      // This way, if confirmation fails after the tx actually lands on-chain,
+      // an admin retry has the exact config key and we don't lose the
+      // recovery handle.
+      const earlyConfigKey = meteoraConfigKey.toBase58();
+      try {
+        await storeFeeShareConfig(launch.id, earlyConfigKey, feeClaimers.length);
+      } catch (persistErr: any) {
+        console.warn(
+          `Failed to pre-persist meteoraConfigKey ${earlyConfigKey}: ${persistErr?.message ?? persistErr}`,
+        );
+      }
+
       try {
         // 1) Submit bundles via Jito (with tip tx) per docs.
         for (let bIdx = 0; bIdx < bundles.length; bIdx++) {
@@ -626,33 +639,58 @@ export async function executeBagsLaunch(
           );
         }
 
-        // 2) Submit standalone transactions via the SDK helper.
+        // 2) Submit standalone transactions via our HTTP-polling helper.
+        // The SDK's signAndSendTransaction relies on signatureSubscribe and
+        // can false-fail with "block height exceeded" even when the tx
+        // actually lands on-chain.
         for (let i = 0; i < txs.length; i++) {
-          const sig = await signAndSendTransaction(
+          const sig = await sendVersionedTxWithPolling(
             connection,
-            commitment,
             txs[i],
             escrowKeypair,
+            `fee-share-tx-${i + 1}`,
           );
           console.log(`fee-share tx ${i + 1}/${txs.length} confirmed: ${sig}`);
         }
 
-        configKeyStr = meteoraConfigKey.toBase58();
-        await storeFeeShareConfig(launch.id, configKeyStr, feeClaimers.length);
+        configKeyStr = earlyConfigKey;
       } catch (err: any) {
         const msg = describeBagsError(err);
-        if (isPreflightOnlyError(msg)) {
+        // Recovery: even if our submission helper threw, the on-chain
+        // create_fee_config tx may have actually landed. Derive the PDA
+        // and verify with RPC. If it exists, treat the step as success
+        // and continue to createLaunchTransaction.
+        try {
+          const derived = deriveBagsFeeShareConfigPda(tokenMint);
+          const acc = await connection.getAccountInfo(derived, "confirmed");
+          if (acc) {
+            configKeyStr = derived.toBase58();
+            console.log(
+              `Fee-share submission threw (${msg}) but on-chain PDA ${configKeyStr} exists — recovering and continuing.`,
+            );
+            await storeFeeShareConfig(launch.id, configKeyStr, feeClaimers.length);
+            // Fall through to STEP 3 (createLaunchTransaction).
+          }
+        } catch (recoverErr: any) {
+          console.warn(
+            `PDA recovery check failed: ${recoverErr?.message ?? recoverErr}`,
+          );
+        }
+        if (configKeyStr) {
+          // recovered — break out of the catch and proceed
+        } else if (isPreflightOnlyError(msg)) {
           await setFailed(
             launch.id,
             `Fee-share submission rejected pre-flight (auto-refunding): ${msg}`,
           );
+          return;
         } else {
           await setFailedNoRefund(
             launch.id,
             `Fee-share submission failed (escrow may hold partial state, manual review): ${msg}`,
           );
+          return;
         }
-        return;
       }
     }
 
