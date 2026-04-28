@@ -23,6 +23,22 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json();
+
+    // Admin kill-switch: pause new Bags launches without a code deploy.
+    {
+      const { data: setting } = await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", "launches_bags_enabled")
+        .maybeSingle();
+      if (setting && setting.value !== "true") {
+        return errorResponse(
+          "Bags.fm launches are temporarily paused for maintenance. Please try again shortly.",
+          503
+        );
+      }
+    }
+
     const {
       token_name,
       token_symbol,
