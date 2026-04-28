@@ -1,105 +1,94 @@
-## Diagnosis — what the logs actually show
+## Goal
 
-The log timeline for launch `049c3955…`:
+Stop second-guessing Bags. Follow their documented example **exactly** for `executor/src/executeBags.ts` Steps 0 → 3, and let any failure surface naturally instead of being masked by retries against a payload Bags never asked us to mutate.
 
+## Why our current code is fighting Bags
+
+The official Bags "Launch a Token" example (from `docs.bags.fm/how-to-guides/launch-token`) does exactly this for Step 3:
+
+```ts
+const tokenInfoResponse = await sdk.tokenLaunch.createTokenInfoAndMetadata({ ... });
+// ...fee-share config...
+const tokenLaunchTransaction = await sdk.tokenLaunch.createLaunchTransaction({
+  metadataUrl: tokenInfoResponse.tokenMetadata,   // ← exactly what Bags returned
+  tokenMint,
+  launchWallet: keypair.publicKey,
+  initialBuyLamports: launchParams.initialBuyAmountLamports,
+  configKey,
+});
 ```
-16:45:23  Step 0  createTokenInfoAndMetadata    OK   (mint ARrob…BAGS, ipfs.io/ipfs/QmWhpb…)
-16:45:23  Step 2  fee-share config              built (key 5tPW…m5QM, needsCreation=true, 2 txs)
-16:45:24  fee-share-tx-1   submitted 2VQK…kJov
-16:45:26  fee-share-tx-2   submitted 2oQX…Sm7d
-16:45:28  Wait 25s for indexer
-16:45:58  fee_share_config 5tPW… confirmed on-chain (1048 bytes)   ← PDA verified
-16:45:58  Step 3  createLaunchTransaction (netBuy=255871440, claimers=2)
-          attempt 1/5 → 500 {"success":false,"response":"Internal server error"}
-          attempt 2/5 → 500 (same)
-          attempt 3/5 → 500 (same)
-          attempt 4/5 → 500 (same)
-16:46:29  attempt 5/5 → 500 — give up, setFailedNoRefund
-```
 
-**Everything we built last round worked:**
+The Bags `CreateTokenInfoResponse` schema (`/api-reference/create-token-info`) defines exactly two URL-ish fields: `tokenMint` and `tokenMetadata`. There is no `metadataUri`/`metadataUrl`/`uri` on the response — Bags expects you to pass `tokenMetadata` straight back, untouched.
 
-- The retry loop fired all 5 attempts with proper backoff (2s/4s/8s/16s).
-- The 25 s indexer wait + on-chain `getAccountInfo` verification confirmed the fee-share PDA exists (1048 bytes — that's the correct config size).
-- `describeBagsError` now surfaces the real Bags body: `{"success":false,"response":"Internal server error"}`.
+Our code currently:
+- Calls `pickBestMetadataUrl(tokenInfo)` which **rewrites the URL to `dweb.link` / `cf-ipfs` / `pinata`**.
+- On retries, calls `rotateMetadataGateway()` which **mutates the URL again**.
+- Pre-warms the URL via `fetch()` from Railway and retries up to 5 times across ~110s.
 
-**The failure is on Bags' side, not ours.** Their `POST /token-launch/create-launch-transaction` is returning a hard 500 for *this specific payload* across 30+ seconds of retries. That rules out a transient blip — something in the request itself is making their backend throw. Their error response is opaque ("Internal server error") because their server-side logging swallowed the real cause.
+Bags' backend likely validates the metadata URL against the host **it pinned to** (the `ipfs.io` URL it returned). When we hand it `dweb.link/ipfs/<cid>`, Bags' validator either rejects it or its own fetcher fails — and we get the opaque 500. Every retry rotates to *another* gateway Bags didn't return, so all 5 attempts fail the same way.
 
-### What's different about this payload that could trip Bags
+The Bags changelog also confirms: when you let `createTokenInfoAndMetadata` upload, "we use the provided URL as-is" downstream. They want their URL back.
 
-Comparing our payload to known-good launches:
+## What changes
 
-| Field | Value | Risk |
-|---|---|---|
-| `metadataUrl` | `https://ipfs.io/ipfs/QmWhpb59D4rQNA8mKM7EyGmx17iRRZhwxHEeuMKG6AWAfr` | **High** — `ipfs.io` is a public gateway that's frequently rate-limited / 504s. If Bags' backend fetches this URL to validate the JSON or pull the image, a gateway timeout there manifests as a 500 to us. |
-| `tokenMint` | `ARrob…BAGS` (vanity grind suffix) | Low — Bags supports vanity mints. |
-| `launchWallet` | escrow pubkey | Low. |
-| `initialBuyLamports` | `255871440` (~0.256 SOL) | Low — well above the 10 M floor we check. |
-| `configKey` | `5tPW…m5QM` (just-created PDA) | Low — verified on-chain. |
-| `claimers` | 2 | Low. |
+### `executor/src/executeBags.ts`
 
-Two other launches recently failed at the **same step** (per the prior plan in `.lovable/plan.md` — `a7e8b27f…` also died at `createLaunchTransaction` with a 500). The pattern is "everything before Step 3 succeeds, Step 3 returns 500". This strongly points at the **metadata URL** as the common offender — `createTokenInfoAndMetadata` returns an `ipfs.io` gateway URL, and Bags' indexer/validator on the next call has to fetch it. When `ipfs.io` 504s, Bags 500s.
+1. **Step 0 — pass `tokenInfo.tokenMetadata` through verbatim.** Delete the URL rewrite. Store the literal Bags-returned URL in `ipfs_metadata_url`.
 
-There's also a smaller risk: **Bags expects the metadata host they themselves wrote it to** (their own pinning service / CDN). Calling their helper to upload then handing the same URL back should be fine — but if their server-side fetcher uses a different gateway (or has a stricter timeout than the public `ipfs.io`), we'll see exactly this symptom.
+2. **Step 3 — call `createLaunchTransaction` with the exact same five fields the Bags example uses, in the same order:**
+   ```ts
+   launchTx = await sdk.tokenLaunch.createLaunchTransaction({
+     metadataUrl: tokenInfo.tokenMetadata,
+     tokenMint,
+     launchWallet: escrowPubkey,
+     initialBuyLamports: Number(netBuyLamports),
+     configKey: new PublicKey(configKeyStr),
+   });
+   ```
 
----
+3. **Delete the gateway machinery** — no longer needed:
+   - `IPFS_GATEWAYS`
+   - `extractIpfsCid`
+   - `pickBestMetadataUrl`
+   - `rotateMetadataGateway`
+   - `verifyMetadataReachable`
+   - the `node-fetch` import (verify nothing else in the file uses it; if so, leave it).
 
-## Fix plan
+4. **Simplify the Step 3 retry loop.** Bags' docs treat `createLaunchTransaction` as a one-shot call. Keep a small safety net for genuine transport blips, but stop hammering:
+   - `MAX_LAUNCH_TX_ATTEMPTS = 3`
+   - Backoff: `5s, 15s` (≈20s span). Fits comfortably inside the existing lock.
+   - Retry **only** on network-level errors (`ECONNRESET`, `ETIMEDOUT`, `ENOTFOUND`, `EAI_AGAIN`, `fetch failed`, `socket hang up`) and HTTP `429`/`503`.
+   - **Treat HTTP `500` as terminal** — Bags returning 500 means the payload is bad (or their service is genuinely broken); retrying won't fix either, and our logs prove 5 attempts produce 5 identical 500s.
+   - On exhaustion or terminal error: still call `setFailed` (auto-refund) when no on-chain SOL was committed, which is always true at this point. Drop the `setFailedNoRefund` branch for Step 3 — there is no scenario at Step 3 where keeping contributor SOL in escrow is the right answer.
 
-### 1. Stop using the `ipfs.io` URL — use the Bags-canonical URL
+5. **Keep the diagnostic logging** of `tokenInfo` keys + the Step 3 payload (`metadataUrl`, `tokenMint`, `launchWallet`, `initialBuyLamports`, `configKey`, `claimerCount`). These are cheap and let us correlate any future Bags 500 with their support team.
 
-Inspect `tokenInfo` returned by `sdk.tokenLaunch.createTokenInfoAndMetadata`. The SDK returns multiple fields (`tokenMetadata`, sometimes `metadataUri`, sometimes a CID). We're currently picking `tokenMetadata` (which the logs show as `https://ipfs.io/...`). We should:
+### `executor/src/db.ts`
 
-- Log the **full** `tokenInfo` object once so we can see every URL Bags hands back (CID, gateway, alternate host).
-- Prefer a Bags-hosted URL (e.g. `https://storage.bags.fm/...` or whatever they pin to) over the public `ipfs.io` gateway.
-- If only `ipfs.io` is returned, rewrite to a more reliable gateway like `https://cf-ipfs.com/ipfs/<cid>` or `https://<cid>.ipfs.dweb.link` *and* warm it ourselves (`HEAD`) before calling Step 3 so any cold-cache 504 happens to us, not to Bags.
+6. **Revert `claim_executing_launch_for_worker` lock from 240s → 120s.** With the simplified retry budget (≤25s for Step 3) we no longer need the extended window, and 120s matches what every other path expects.
 
-### 2. Pre-validate the metadata URL before Step 3
+### Files NOT changed
 
-Before calling `createLaunchTransaction`, do a `fetch(ipfsMetadataUrl, { method: "GET" })` from the executor itself with a 10 s timeout. If it fails or returns non-2xx, swap to an alternate gateway (or re-pin) and retry. This makes the failure mode visible and recoverable instead of hidden inside Bags' 500.
+- `executor/src/executeLaunch.ts` — unchanged.
+- DB schema, RPCs, edge functions, UI — unchanged.
+- Refund logic — unchanged (already correct).
 
-### 3. Make the retry loop smarter — call out *why* we're retrying
+## Recovery for the stuck launch `049c3955…`
 
-Right now all 5 attempts hit Bags within 30 s with the same payload and the same metadata URL — so they all fail the same way. Two cheap improvements:
+After deploying:
+1. Click **Retry** in admin. The new code will:
+   - Call `createTokenInfoAndMetadata` for a fresh mint + Bags-canonical URL.
+   - Reuse the existing `fee_share_config_key` PDA (already on-chain, harmless).
+   - Call `createLaunchTransaction` with the exact URL Bags handed back.
+2. If Bags still returns 500, the failure surfaces fast (~25s vs ~2min), `setFailed` runs, and contributors are auto-refunded. The opaque error body is captured in `execution_error` and we open a Bags support ticket with the logged payload.
 
-- On attempt ≥2, **re-resolve the metadata** (call `createTokenInfoAndMetadata` again to get a fresh URL, or rotate gateway). The mint stays the same, but the URL we send to Bags differs. This costs nothing on-chain.
-- Stretch backoff to `5s, 15s, 30s, 60s` so we span at least 2 minutes — long enough for a real Bags-side incident to clear, short enough to stay within the worker lock window (120 s; bump to 240 s if needed).
+## Why this is the right move
 
-### 4. Auto-refund instead of "no refund" when Step 3 exhausts retries
+- We've spent two iterations adding workarounds for a symptom (500s) without evidence the workarounds help — the logs show all 5 rotated-gateway attempts failed identically. That's a strong signal the URL mutation is *causing* the rejection, not curing it.
+- The Bags docs, SDK schema, and example code all agree: pass `tokenMetadata` through unchanged.
+- Removing ~80 lines of speculative gateway code makes future debugging much easier — when Bags returns 500 again, we'll know it's their payload validator, not our gateway shuffle.
 
-Today we call `setFailedNoRefund` so the operator must click Retry/Refund. But Step 3 is build-only — no SOL was spent into a curve. The fee-share config PDA on-chain is harmless. Change the exhausted-retry branch to `setFailed` (which auto-refunds contributors) when:
+## Files to edit
 
-- The error is purely 5xx/network across all 5 attempts (Bags genuinely down).
-- AND no on-chain launch tx was ever broadcast (always true at this point in the code).
-
-Operator can still investigate later; contributors get their SOL back automatically.
-
-### 5. Recover the stuck launch `049c3955…`
-
-After the patch:
-- **Option A (preferred):** click **Retry** in admin. The new code will reuse `configKey=5tPW…m5QM` (already on-chain), re-fetch metadata via the new gateway, and try again. Cost: nothing extra.
-- **Option B:** click **Refund (N)** to send the contributor SOL back. The fee-share PDA stays on-chain idle — harmless.
-
-No DB changes needed; both buttons already exist.
-
-### 6. Operational visibility
-
-Add a single structured log line just before Step 3 dumping `{ metadataUrl, tokenMint, configKey, netBuyLamports, claimerCount, payloadBytes }` so future Bags 500s let us correlate against their support ticket without grepping multiple lines.
-
----
-
-## Files to change
-
-- `executor/src/executeBags.ts`
-  - Step 0: log full `tokenInfo`, prefer non-`ipfs.io` URL, store chosen URL.
-  - New helper `pickBestMetadataUrl(tokenInfo)` + `verifyMetadataReachable(url)`.
-  - Step 3 retry loop: re-resolve metadata URL between attempts, longer backoff (5/15/30/60), and switch the exhausted-retry branch from `setFailedNoRefund` → `setFailed` for pure-5xx cases.
-- `executor/src/executeLaunch.ts` — bump worker lock expiry to ~240 s if Step 3 backoff total exceeds 120 s.
-
-No DB schema changes. No edge function changes. No UI changes.
-
----
-
-## Why this fixes the loop for real
-
-Past iterations chased the *transport* (retries, backoff, indexer race, error capture). All of that is now correct and the logs prove it. What's left is the *payload*: Bags' backend appears to choke when fetching/validating our `ipfs.io` metadata URL. Switching to a faster/canonical gateway, pre-warming it ourselves, and rotating it on retry directly attacks the only remaining variable. Auto-refund on exhausted retries closes the contributor-experience gap so a Bags outage no longer requires manual operator action.
+- `executor/src/executeBags.ts` (delete helpers, simplify Steps 0 and 3, simplify retry)
+- `executor/src/db.ts` (lock back to 120s)
