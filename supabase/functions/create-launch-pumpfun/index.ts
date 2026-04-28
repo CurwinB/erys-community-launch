@@ -28,6 +28,22 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json();
+
+    // Admin kill-switch: pause new Pump.fun launches without a code deploy.
+    {
+      const { data: setting } = await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", "launches_pumpfun_enabled")
+        .maybeSingle();
+      if (setting && setting.value !== "true") {
+        return errorResponse(
+          "Pump.fun launches are temporarily paused for maintenance. Please try again shortly.",
+          503
+        );
+      }
+    }
+
     const {
       token_name,
       token_symbol,
