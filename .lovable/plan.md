@@ -1,137 +1,157 @@
-I understand the frustration. The last Bags launch failed at the same place as several earlier ones: Bags accepted metadata creation and fee-share config, but `createLaunchTransaction` returned a Bags-side 500 (`{"success":false,"response":"Internal server error"}`). Bags is now paused via the admin toggle, so users will not keep hitting this while we fix the execution path.
+I checked the uploaded Railway log, Supabase launch rows, and the on-chain transaction. This latest failure is different from the earlier Bags 500s.
 
-The current code is close in ordering, but it also contains custom workarounds that do not mirror the official Bags guide. The safest next move is to remove those assumptions and make our Bags executor match Bags’ documented TypeScript flow as literally as possible.
+## What went wrong this time
 
-## What went wrong
-
-Recent Bags failures show this pattern:
+The failed Bags launch is:
 
 ```text
-1. createTokenInfoAndMetadata succeeded
-2. fee-share/config succeeded and returned a configKey
-3. createLaunchTransaction failed with Bags 500
+launch_id: d77ac7e5-d731-45c0-aaba-071e95ae5467
+token: Erys test / ETEST
+mint: 4eY3ywM1vZss1FFPY3J598hhkEmP3mwX5JHc1rseBAGS
+escrow: E7XRAxqquSZQENUhmhjvZYMgvHcLAD33FNZGmd7429LZ
+status: execution_failed
 ```
 
-The latest failed launch:
+Supabase says it failed at fee-share submission:
 
 ```text
-launch: 750c96d7-e5b7-4f3c-90d2-0efb80e408cb
-mint: 4FGo4Xtu6m4XGds7kkwjonAxKoJs4wkQt9zUQvkqBAGS
-configKey: G6fACH6bo2M3iFqnxDtqbCwAwkbkt1NJAuEJT9zwT9AE
-metadata: https://ipfs.io/ipfs/QmbMFWsDred5aDYAFLTvUENf6XE5zKB4GL2k3FXuowDLPV
-error: createLaunchTransaction failed ... Request failed with status 500
+Fee-share submission failed (escrow may hold partial state, manual review):
+Signature 4xnT8TeqzFmzaPbMcjJgBFrsq5Xcw3mWPvY8jXtgexN6b1dMvNkwibpjJBeqTESsoH3Hmm7SifFDBcYHwy6BPJiq has expired: block height exceeded.
 ```
 
-This means the issue is not the schedule page, not contribution insertion, and not metadata being skipped. The failure is specifically in the Bags launch-transaction build call after the fee-share config is made.
+The uploaded Railway log repeatedly shows:
 
-## Confirmed mismatches from Bags docs
+```text
+Received JSON-RPC error calling `signatureSubscribe`
+signature: 4xnT8TeqzFmzaPbMcjJgBFrsq5Xcw3mWPvY8jXtgexN6b1dMvNkwibpjJBeqTESsoH3Hmm7SifFDBcYHwy6BPJiq
+commitment: processed
+```
 
-I compared `executor/src/executeBags.ts` to the official Bags launch guide and API reference. These are the concrete mismatches I will correct:
+But Solscan shows that exact transaction actually succeeded and finalized:
 
-1. **SDK commitment**
-   - Bags docs instantiate the SDK with `"processed"`.
-   - Our code uses `"confirmed"`.
-   - I will change Bags execution to use `"processed"` exactly like the docs.
+```text
+signature: 4xnT8TeqzFmzaPbMcjJgBFrsq5Xcw3mWPvY8jXtgexN6b1dMvNkwibpjJBeqTESsoH3Hmm7SifFDBcYHwy6BPJiq
+result: Success, finalized
+program: Bagsfm Fee Shares
+instruction: create_fee_config
+created config PDA: 9FmdWfQNvx7y9rPqRHnvqbxwiDKAApjdJc1uhoMdEpmJ
+block time: 20:00:22 UTC
+```
 
-2. **Lookup table call payload**
-   - Bags docs call `getConfigCreationLookupTableTransactions({ payer, baseMint, feeClaimers })`.
-   - Our code currently passes `payer` and `feeClaimers`, but not `baseMint`.
-   - I will add `baseMint: tokenMint` so LUT creation matches the docs.
+So the core issue is:
 
-3. **Fee-share config creation path**
-   - Bags docs use `sdk.config.createBagsFeeShareConfig(...)`.
-   - Our code bypasses that with a manual REST `/fee-share/config` call.
-   - I will refactor the primary path to use the SDK method exactly like Bags’ guide, including `payer`, `baseMint`, `feeClaimers`, `partner`, `partnerConfig`, and `additionalLookupTables`.
+```text
+The Bags fee-share config transaction landed successfully on-chain,
+but the executor trusted the SDK helper's confirmTransaction error,
+marked the launch failed, and never continued to createLaunchTransaction.
+```
 
-4. **Bundle sending**
-   - Bags docs send bundle transactions via Jito using `createTipTransaction(...)` and `sendBundleAndConfirm(...)`.
-   - Our code sends bundle transactions one by one with normal RPC.
-   - I will add the documented `sendBundleWithTip(...)` helper and use it for fee-share bundles.
+This is not a Bags API 500 this time. It is a transaction confirmation false negative caused by the official SDK helper using `connection.confirmTransaction`, which relies on `signatureSubscribe`. Our Railway/RPC environment is throwing repeated `signatureSubscribe` errors, and then the helper reports blockhash expiry even though the transaction landed.
 
-5. **Transaction sending helper**
-   - Bags docs use `signAndSendTransaction(...)` for normal LUT/config/launch transactions.
-   - Our code uses custom HTTP polling senders.
-   - I will make the primary Bags path use the SDK helper. I will keep our custom HTTP sender only as a fallback if our RPC does not support the SDK confirmation method, but the default path will mirror Bags first.
+## Current risk
 
-6. **Creator handling**
-   - Bags docs say the creator must always be explicitly included in `feeClaimers` with BPS, and if no extra fee claimers exist, creator gets `10000` BPS.
-   - Our current “creator” is the largest contributor, not necessarily the launch creator / launch wallet.
-   - I will update the Bags fee-claimer model so the launch wallet is explicitly included first as creator. Since Erys community launches share fees with contributors, contributor fee claimers will receive the remaining BPS, while creator BPS remains explicit and total still equals exactly `10000`.
+Bags launches are currently enabled in `app_settings`:
 
-7. **Field validation before Bags calls**
-   - Bags requires: name <= 32, symbol <= 10, description non-empty <= 1000, and a valid image URL or image file.
-   - I will add a strict preflight validator before calling Bags so we fail locally with a clear error instead of sending a payload Bags may reject opaquely.
+```text
+launches_bags_enabled = true
+```
 
-8. **No metadata URL rewriting**
-   - We already corrected this: the executor passes `tokenInfo.tokenMetadata` verbatim to `createLaunchTransaction`.
-   - I will keep that unchanged.
+That means users can still schedule Bags launches even though the executor can false-fail after a successful on-chain fee-share config transaction. I recommend disabling Bags again until this fix is applied and verified.
 
-## Implementation plan
+## Important state of the failed launch
 
-### 1. Pause protection stays active
-- Keep Bags disabled in `app_settings` until the refactor is complete and we intentionally re-enable it from admin.
-- Do not affect Pump.fun launches.
+For `d77ac7e5-d731-45c0-aaba-071e95ae5467`:
 
-### 2. Refactor `executor/src/executeBags.ts` to official Bags flow
-The new execution order will be:
+- The launch token itself did not launch.
+- The fee-share config did get created on-chain.
+- Supabase did not store `fee_share_config_key`, because the executor returned early after the false error.
+- The correct derived config key is `9FmdWfQNvx7y9rPqRHnvqbxwiDKAApjdJc1uhoMdEpmJ`.
+- Contributions have not been refunded yet, which is conservative because partial on-chain state exists.
+
+## Fix plan
+
+### 1. Immediately protect users
+
+Disable Bags launches again via `app_settings` until the confirmation fix is deployed and tested. Pump.fun can remain unchanged.
+
+### 2. Keep the official Bags payload/order, replace only fragile confirmation handling
+
+Continue using Bags SDK for the documented flow and payloads:
 
 ```text
 createTokenInfoAndMetadata
-  -> build feeClaimers with creator explicit and BPS sum 10000
-  -> if needed: getConfigCreationLookupTableTransactions with baseMint
-  -> sign/send LUT creation via Bags SDK helper
-  -> wait one slot
-  -> sign/send LUT extensions via Bags SDK helper
-  -> createBagsFeeShareConfig via Bags SDK
-  -> if bundles exist: sendBundleWithTip exactly like docs
-  -> send normal config txs via Bags SDK helper
-  -> createLaunchTransaction using tokenInfo.tokenMetadata verbatim
-  -> signAndSendTransaction launch tx via Bags SDK helper
-  -> mark launched
+createBagsFeeShareConfig
+createLaunchTransaction
 ```
 
-### 3. Preserve safe retry/accounting behavior
-- Continue persisting `token_mint_address`, `ipfs_metadata_url`, `fee_share_config_key`, and `claimer_count` for audit/debugging.
-- Keep auto-refunds only for failures before any possible on-chain launch spend.
-- Keep no-refund behavior for ambiguous post-broadcast failures.
-- Remove or downgrade custom retry hacks that conflict with the official Bags path.
-
-### 4. Improve evidence for failures
-If Bags still returns 500 after the exact documented flow, I will store a compact “Bags payload fingerprint” in `execution_error`, including:
+But stop using the SDK's `signAndSendTransaction` as the only source of truth for whether a transaction landed. The SDK helper does this internally:
 
 ```text
-mint
-metadata URL
-configKey
-launchWallet
-initialBuyLamports
-fee claimer count
-BPS sum
-whether bundles were used
+sendTransaction(skipPreflight: true, maxRetries: 0)
+confirmTransaction(...)
 ```
 
-This gives Bags support enough detail to inspect their backend logs without exposing secrets.
+That exact confirmation path is what failed here. I will replace executor-side transaction sending for Bags with a robust helper that:
 
-### 5. Add local checks for the latest failed pattern
-- Validate fee-claimer array length and BPS sum.
-- Validate no duplicate invalid wallets.
-- Validate metadata URL is present and publicly reachable when possible.
-- Validate `initialBuyLamports` is a safe integer and >= Bags example minimum of `10,000,000` lamports.
+```text
+signs the VersionedTransaction
+sends it via sendRawTransaction
+polls getSignatureStatuses over HTTP
+rebroadcasts while valid
+if blockhash expires, checks transaction history before declaring failure
+returns success if the tx landed confirmed/finalized
+```
 
-### 6. Verification after implementation
-- Run the project’s tests/type checks through the normal Lovable validation pipeline.
-- Review the updated executor code against the Bags docs line by line.
-- Keep Bags paused until you confirm we should re-enable it and run a controlled small launch test.
+This preserves Bags’ documented API call order and payloads, but fixes the confirmation transport problem that caused the false failure.
 
-## Files to change
+### 3. Recover successful-on-chain fee-share configs before failing
 
-- `executor/src/executeBags.ts`
-  - Main Bags flow refactor.
-- `executor/package.json` and lockfile only if needed
-  - Ensure SDK helper imports are available from current `@bagsfm/bags-sdk`.
-- Possibly `.lovable/plan.md`
-  - Keep the plan/audit record updated.
+When fee-share submission throws, the executor should not immediately mark failed. It should:
 
-## Important note
+1. Derive the deterministic fee-share config PDA from `baseMint`.
+2. Check RPC for that account.
+3. If it exists, store it in Supabase as `fee_share_config_key`.
+4. Continue to the 25s Bags indexer wait and `createLaunchTransaction`.
 
-Even if Bags still returns a server-side 500 after this, we will then have removed our custom deviations from the docs. At that point the failure evidence will show Bags: “we are sending exactly the documented SDK flow and this exact payload still 500s,” which is the strongest path to a successful launch.
+For the latest failed launch, this would have found:
+
+```text
+9FmdWfQNvx7y9rPqRHnvqbxwiDKAApjdJc1uhoMdEpmJ
+```
+
+and continued instead of failing.
+
+### 4. Persist partial progress earlier
+
+As soon as Bags returns `meteoraConfigKey` from `createBagsFeeShareConfig`, store it in Supabase before submitting fee-share transactions. That way, if confirmation fails after the transaction lands, the admin retry path has the exact config key and does not lose the recovery handle.
+
+### 5. Add a safe admin retry path for this exact launch
+
+After the code fix, `d77ac7e5-d731-45c0-aaba-071e95ae5467` should be recoverable without recreating the fee-share config:
+
+```text
+set fee_share_config_key = 9FmdWfQNvx7y9rPqRHnvqbxwiDKAApjdJc1uhoMdEpmJ
+set status = executing
+clear worker lock
+```
+
+Then the executor should skip config creation, wait for Bags indexing, call `createLaunchTransaction`, and launch.
+
+### 6. Improve failure classification
+
+If a Bags transaction confirmation throws but later polling proves the tx landed, treat it as success.
+
+If the tx truly never landed, classify it based on stage:
+
+- Before any on-chain state: safe auto-refund.
+- After fee-share config might exist: no auto-refund until recovery check completes.
+- After launch tx broadcast: no auto-refund unless we prove the launch tx failed preflight/on-chain.
+
+### 7. Verification
+
+After implementation:
+
+- Re-check the code against the Bags launch guide step-by-step.
+- Confirm the executor no longer relies on `signatureSubscribe` for final success/failure decisions.
+- Verify the latest failed config PDA is detected on-chain.
+- Keep Bags paused until we run one controlled small launch test.
