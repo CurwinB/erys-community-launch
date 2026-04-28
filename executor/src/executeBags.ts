@@ -7,6 +7,8 @@ import {
 import {
   BagsSDK,
   BAGS_FEE_SHARE_V2_MAX_CLAIMERS_NON_LUT,
+  BAGS_FEE_SHARE_V2_PROGRAM_ID,
+  WRAPPED_SOL_MINT,
   signAndSendTransaction,
   sendBundleAndConfirm,
   waitForSlotsToPass,
@@ -31,20 +33,25 @@ const BAGS_PARTNER_WALLET = process.env.BAGS_PARTNER_WALLET!;
 const BAGS_PARTNER_CONFIG = process.env.BAGS_PARTNER_CONFIG!;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
 
-// Bags fee-share v2 program (matches BAGS_FEE_SHARE_V2_PROGRAM_ID inside the SDK).
-// Used for deterministic PDA derivation as a final fallback when the Bags
-// API tells us a config exists but does not surface its key.
-const BAGS_FEE_SHARE_V2_PROGRAM_ID = new PublicKey(
-  "BAGSB7d4dDF7HKfL1Hh6yKfABBs2HfsysB1g2pi3yY8t",
-);
-const WSOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
+// Bags fee-share v2 program is re-exported from the SDK (resolved from the
+// IDL). We use it together with the WSOL quote mint to derive the
+// fee_share_config PDA as a final fallback when the Bags API tells us a
+// config exists but does not surface its key.
 const BAGS_API_BASE_URL = "https://public-api-v2.bags.fm/api/v1";
 const BAGS_DEFAULT_CONFIG_TYPE = "fa29606e-5e48-4c37-827f-4b03d58ee23d";
 
 function deriveBagsFeeShareConfigPda(baseMint: PublicKey): PublicKey {
+  const programId =
+    typeof BAGS_FEE_SHARE_V2_PROGRAM_ID === "string"
+      ? new PublicKey(BAGS_FEE_SHARE_V2_PROGRAM_ID)
+      : (BAGS_FEE_SHARE_V2_PROGRAM_ID as unknown as PublicKey);
   const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("fee_share_config"), baseMint.toBuffer(), WSOL_MINT.toBuffer()],
-    BAGS_FEE_SHARE_V2_PROGRAM_ID,
+    [
+      Buffer.from("fee_share_config"),
+      baseMint.toBuffer(),
+      WRAPPED_SOL_MINT.toBuffer(),
+    ],
+    programId,
   );
   return pda;
 }
