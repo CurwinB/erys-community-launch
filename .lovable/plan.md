@@ -1,86 +1,137 @@
-## Goal
+I understand the frustration. The last Bags launch failed at the same place as several earlier ones: Bags accepted metadata creation and fee-share config, but `createLaunchTransaction` returned a Bags-side 500 (`{"success":false,"response":"Internal server error"}`). Bags is now paused via the admin toggle, so users will not keep hitting this while we fix the execution path.
 
-Give admins a switch (per platform) to temporarily disable new Bags or Pump.fun launches. When disabled, the Schedule Launch page shows a polished "We're upgrading this experience" message instead of the form, and the create-launch edge functions reject new submissions as a safety net.
+The current code is close in ordering, but it also contains custom workarounds that do not mirror the official Bags guide. The safest next move is to remove those assumptions and make our Bags executor match Bags’ documented TypeScript flow as literally as possible.
 
-## UX
+## What went wrong
 
-**Schedule page (`/schedule`)**
-- The platform tab (Bags / Pump.fun) still toggles freely.
-- If the selected platform is disabled:
-  - The form is hidden.
-  - A trust-inspiring card appears in its place:
-    > **Bags.fm launches are temporarily paused**
-    > We're upgrading our Bags.fm integration to deliver a smoother, more reliable launch experience. New Bags launches are paused for a few hours while we ship improvements. Pump.fun launches remain fully open — switch above to launch now, or check back shortly.
-  - A subtle pulsing dot + "Maintenance in progress" label.
-  - CTA button: "Switch to Pump.fun" (or vice versa) when the other platform is enabled.
-- If both are disabled, show a single global maintenance card with no switch CTA.
-- The disabled-platform tab button gets a small "Paused" badge so the state is obvious before the user clicks.
+Recent Bags failures show this pattern:
 
-**Admin page (`/admin`)**
-- Add a new top-of-page **Platform Status** panel (above the existing tabs, next to MetricCards) with two switches:
-  - "Bags.fm launches enabled" — on/off + last-changed timestamp + who toggled it
-  - "Pump.fun launches enabled" — same
-- Toggling shows a confirm dialog ("Disable Bags launches? Users will see a maintenance message on the Schedule page.") before applying, then a toast.
+```text
+1. createTokenInfoAndMetadata succeeded
+2. fee-share/config succeeded and returned a configKey
+3. createLaunchTransaction failed with Bags 500
+```
 
-## Technical Plan
+The latest failed launch:
 
-### 1. Storage (migration)
+```text
+launch: 750c96d7-e5b7-4f3c-90d2-0efb80e408cb
+mint: 4FGo4Xtu6m4XGds7kkwjonAxKoJs4wkQt9zUQvkqBAGS
+configKey: G6fACH6bo2M3iFqnxDtqbCwAwkbkt1NJAuEJT9zwT9AE
+metadata: https://ipfs.io/ipfs/QmbMFWsDred5aDYAFLTvUENf6XE5zKB4GL2k3FXuowDLPV
+error: createLaunchTransaction failed ... Request failed with status 500
+```
 
-Use the existing `app_settings` table. Add two keys (no schema change needed):
-- `launches_bags_enabled` → `"true"` / `"false"` (default `"true"`)
-- `launches_pumpfun_enabled` → `"true"` / `"false"` (default `"true"`)
+This means the issue is not the schedule page, not contribution insertion, and not metadata being skipped. The failure is specifically in the Bags launch-transaction build call after the fee-share config is made.
 
-Migration also seeds defaults via `INSERT … ON CONFLICT DO NOTHING`.
+## Confirmed mismatches from Bags docs
 
-Add two SECURITY DEFINER RPCs:
-- `get_launch_platform_status()` → returns `{ bags_enabled boolean, pumpfun_enabled boolean }`. `GRANT EXECUTE … TO anon, authenticated` (public — read only, no secrets).
-- `set_launch_platform_status(p_admin_wallet text, p_platform text, p_enabled boolean)` → checks `is_admin_wallet(p_admin_wallet)`, upserts the matching key, returns the new status. Grant to `authenticated`.
+I compared `executor/src/executeBags.ts` to the official Bags launch guide and API reference. These are the concrete mismatches I will correct:
 
-`app_settings` already has a public SELECT policy, so the RPC is essentially a typed wrapper, but using RPC keeps the admin-write path locked down.
+1. **SDK commitment**
+   - Bags docs instantiate the SDK with `"processed"`.
+   - Our code uses `"confirmed"`.
+   - I will change Bags execution to use `"processed"` exactly like the docs.
 
-### 2. Frontend — schedule page
+2. **Lookup table call payload**
+   - Bags docs call `getConfigCreationLookupTableTransactions({ payer, baseMint, feeClaimers })`.
+   - Our code currently passes `payer` and `feeClaimers`, but not `baseMint`.
+   - I will add `baseMint: tokenMint` so LUT creation matches the docs.
 
-In `src/pages/SchedulePage.tsx`:
-- New `useQuery(["launch-platform-status"])` calling `supabase.rpc("get_launch_platform_status")` with a 30s `staleTime` and `refetchOnWindowFocus`.
-- Derive `bagsEnabled` / `pumpfunEnabled`.
-- Replace the form rendering with conditional logic:
-  - If selected platform disabled → render new `<PlatformPausedCard platform={platform} otherEnabled={…} onSwitch={…} />` instead of the form + submit button.
-  - Tab buttons get a "Paused" pill when disabled (still clickable so users can read the message).
-- New component: `src/components/schedule/PlatformPausedCard.tsx` — dark card matching brand (bg `#111`, accent `#00D4FF` for Bags, `#00FF88` for Pump), pulsing dot, headline, body copy, and conditional "Switch to {other}" button.
-- Block `handleSubmit` early with a toast if the platform is disabled (defense-in-depth in case status is stale).
+3. **Fee-share config creation path**
+   - Bags docs use `sdk.config.createBagsFeeShareConfig(...)`.
+   - Our code bypasses that with a manual REST `/fee-share/config` call.
+   - I will refactor the primary path to use the SDK method exactly like Bags’ guide, including `payer`, `baseMint`, `feeClaimers`, `partner`, `partnerConfig`, and `additionalLookupTables`.
 
-### 3. Frontend — admin page
+4. **Bundle sending**
+   - Bags docs send bundle transactions via Jito using `createTipTransaction(...)` and `sendBundleAndConfirm(...)`.
+   - Our code sends bundle transactions one by one with normal RPC.
+   - I will add the documented `sendBundleWithTip(...)` helper and use it for fee-share bundles.
 
-- New component: `src/components/admin/PlatformStatusPanel.tsx`.
-  - Uses `useQuery` + `useMutation` against the two RPCs.
-  - Two rows: platform label, enabled `Switch`, "last updated" timestamp.
-  - Wrap toggle in `AlertDialog` confirm.
-  - On success: invalidate `["launch-platform-status"]` and `["admin-platform-status"]`.
-- Mount in `AdminPage.tsx` between `<MetricCards />` and `<Tabs>`.
+5. **Transaction sending helper**
+   - Bags docs use `signAndSendTransaction(...)` for normal LUT/config/launch transactions.
+   - Our code uses custom HTTP polling senders.
+   - I will make the primary Bags path use the SDK helper. I will keep our custom HTTP sender only as a fallback if our RPC does not support the SDK confirmation method, but the default path will mirror Bags first.
 
-### 4. Backend — edge function guards
+6. **Creator handling**
+   - Bags docs say the creator must always be explicitly included in `feeClaimers` with BPS, and if no extra fee claimers exist, creator gets `10000` BPS.
+   - Our current “creator” is the largest contributor, not necessarily the launch creator / launch wallet.
+   - I will update the Bags fee-claimer model so the launch wallet is explicitly included first as creator. Since Erys community launches share fees with contributors, contributor fee claimers will receive the remaining BPS, while creator BPS remains explicit and total still equals exactly `10000`.
 
-In `supabase/functions/create-launch/index.ts` and `supabase/functions/create-launch-pumpfun/index.ts`, near the top of the handler (before any wallet/escrow work):
-- Read the matching `app_settings` row via the service-role client.
-- If disabled, return HTTP 503 with `{ error: "platform_paused", message: "Bags launches are temporarily paused for maintenance. Please try again shortly." }`.
-- The frontend surfaces this message in the existing error toast as a fallback.
+7. **Field validation before Bags calls**
+   - Bags requires: name <= 32, symbol <= 10, description non-empty <= 1000, and a valid image URL or image file.
+   - I will add a strict preflight validator before calling Bags so we fail locally with a clear error instead of sending a payload Bags may reject opaquely.
 
-### 5. Types
+8. **No metadata URL rewriting**
+   - We already corrected this: the executor passes `tokenInfo.tokenMetadata` verbatim to `createLaunchTransaction`.
+   - I will keep that unchanged.
 
-After the migration, `src/integrations/supabase/types.ts` is auto-regenerated to include the new RPCs — no manual edits.
+## Implementation plan
 
-## Out of Scope
+### 1. Pause protection stays active
+- Keep Bags disabled in `app_settings` until the refactor is complete and we intentionally re-enable it from admin.
+- Do not affect Pump.fun launches.
 
-- No change to in-flight launches (already-scheduled launches still execute normally; this only blocks **new** launch creation).
-- No change to contributions on existing launches.
-- No per-user overrides or scheduled maintenance windows — single global toggle per platform.
+### 2. Refactor `executor/src/executeBags.ts` to official Bags flow
+The new execution order will be:
 
-## Files Touched
+```text
+createTokenInfoAndMetadata
+  -> build feeClaimers with creator explicit and BPS sum 10000
+  -> if needed: getConfigCreationLookupTableTransactions with baseMint
+  -> sign/send LUT creation via Bags SDK helper
+  -> wait one slot
+  -> sign/send LUT extensions via Bags SDK helper
+  -> createBagsFeeShareConfig via Bags SDK
+  -> if bundles exist: sendBundleWithTip exactly like docs
+  -> send normal config txs via Bags SDK helper
+  -> createLaunchTransaction using tokenInfo.tokenMetadata verbatim
+  -> signAndSendTransaction launch tx via Bags SDK helper
+  -> mark launched
+```
 
-- New migration under `supabase/migrations/`
-- `src/pages/SchedulePage.tsx` (conditional render + tab badges + submit guard)
-- `src/components/schedule/PlatformPausedCard.tsx` (new)
-- `src/components/admin/PlatformStatusPanel.tsx` (new)
-- `src/pages/AdminPage.tsx` (mount panel)
-- `supabase/functions/create-launch/index.ts` (guard)
-- `supabase/functions/create-launch-pumpfun/index.ts` (guard)
+### 3. Preserve safe retry/accounting behavior
+- Continue persisting `token_mint_address`, `ipfs_metadata_url`, `fee_share_config_key`, and `claimer_count` for audit/debugging.
+- Keep auto-refunds only for failures before any possible on-chain launch spend.
+- Keep no-refund behavior for ambiguous post-broadcast failures.
+- Remove or downgrade custom retry hacks that conflict with the official Bags path.
+
+### 4. Improve evidence for failures
+If Bags still returns 500 after the exact documented flow, I will store a compact “Bags payload fingerprint” in `execution_error`, including:
+
+```text
+mint
+metadata URL
+configKey
+launchWallet
+initialBuyLamports
+fee claimer count
+BPS sum
+whether bundles were used
+```
+
+This gives Bags support enough detail to inspect their backend logs without exposing secrets.
+
+### 5. Add local checks for the latest failed pattern
+- Validate fee-claimer array length and BPS sum.
+- Validate no duplicate invalid wallets.
+- Validate metadata URL is present and publicly reachable when possible.
+- Validate `initialBuyLamports` is a safe integer and >= Bags example minimum of `10,000,000` lamports.
+
+### 6. Verification after implementation
+- Run the project’s tests/type checks through the normal Lovable validation pipeline.
+- Review the updated executor code against the Bags docs line by line.
+- Keep Bags paused until you confirm we should re-enable it and run a controlled small launch test.
+
+## Files to change
+
+- `executor/src/executeBags.ts`
+  - Main Bags flow refactor.
+- `executor/package.json` and lockfile only if needed
+  - Ensure SDK helper imports are available from current `@bagsfm/bags-sdk`.
+- Possibly `.lovable/plan.md`
+  - Keep the plan/audit record updated.
+
+## Important note
+
+Even if Bags still returns a server-side 500 after this, we will then have removed our custom deviations from the docs. At that point the failure evidence will show Bags: “we are sending exactly the documented SDK flow and this exact payload still 500s,” which is the strongest path to a successful launch.
