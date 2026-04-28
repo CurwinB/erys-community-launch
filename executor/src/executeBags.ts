@@ -295,6 +295,7 @@ export async function executeBagsLaunch(
 
   const connection = new Connection(SOLANA_RPC_URL, "confirmed");
   const sdk = new BagsSDK(BAGS_API_KEY, connection, "confirmed");
+  const commitment = sdk.state.getCommitment();
 
   // Decrypt escrow keypair
   const escrowSecret = decryptEscrowKey(
