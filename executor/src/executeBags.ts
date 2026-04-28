@@ -364,6 +364,25 @@ function describeBagsError(err: any): string {
   return parts.join(" | ").slice(0, 1500);
 }
 
+/**
+ * Returns true when the error is *guaranteed* to be a pre-flight rejection,
+ * meaning no transaction landed on-chain and no fee-share PDA was created.
+ * In that case it is safe to auto-refund contributors. We deliberately keep
+ * this narrow: anything ambiguous (timeout, expiry after broadcast, unknown
+ * RPC error after send) must fall through to the no-refund path so we don't
+ * drain the escrow on top of partial on-chain state.
+ */
+function isPreflightOnlyError(msg: string): boolean {
+  if (!msg) return false;
+  return (
+    /Transaction did not pass signature verification/i.test(msg) ||
+    /Simulation failed/i.test(msg) ||
+    /Config already exists/i.test(msg) ||
+    /Request failed with status 4\d\d/i.test(msg) ||
+    /createLaunchTransaction failed/i.test(msg)
+  );
+}
+
 function deriveBagsFeeShareConfigPda(baseMint: PublicKey): PublicKey {
   const programId =
     typeof BAGS_FEE_SHARE_V2_PROGRAM_ID === "string"
