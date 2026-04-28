@@ -360,6 +360,23 @@ function describeBagsError(err: any): string {
       }
     }
   }
+  // Bags SDK sometimes attaches the raw fetch Response on err.cause or
+  // exposes responseBody / data directly. Capture whatever we can find so
+  // 5xx failures stop showing up as opaque "Request failed with status 500".
+  const extraBody =
+    err.responseBody ?? err.data ?? err.body ?? err.cause?.responseBody;
+  if (extraBody !== undefined && !parts.some((p) => p.startsWith("body="))) {
+    try {
+      parts.push(
+        `body=${typeof extraBody === "string" ? extraBody : JSON.stringify(extraBody)}`,
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+  if (err.status && !parts.some((p) => p.startsWith("status="))) {
+    parts.push(`status=${err.status}`);
+  }
   if (err.code) parts.push(`code=${err.code}`);
   return parts.join(" | ").slice(0, 1500);
 }
@@ -902,34 +919,98 @@ export async function executeBagsLaunch(
     }
   }
 
-  // Wait for Bags to index the fee-share config on-chain
-  console.log("Waiting 10s for fee-share config to settle on-chain...");
-  await new Promise((r) => setTimeout(r, 10_000));
+  // Wait for Bags' off-chain indexer to catch up to the on-chain fee-share
+  // config. Even when the PDA exists immediately, Bags' API will return 500
+  // until its indexer sees the account, so we both sleep AND verify.
+  console.log("Waiting 25s for Bags indexer to see fee-share config...");
+  await new Promise((r) => setTimeout(r, 25_000));
+
+  // Belt-and-braces: confirm the fee_share_config PDA actually exists on
+  // mainnet before we hammer Bags. If the RPC can't see it, the API
+  // certainly can't either.
+  try {
+    const configPubkey = new PublicKey(configKeyStr);
+    const cfgAcc = await connection.getAccountInfo(configPubkey, "confirmed");
+    if (!cfgAcc) {
+      console.warn(
+        `fee_share_config ${configKeyStr} not visible to RPC after wait; proceeding anyway`,
+      );
+    } else {
+      console.log(
+        `fee_share_config ${configKeyStr} confirmed on-chain (${cfgAcc.data.length} bytes)`,
+      );
+    }
+  } catch (verifyErr: any) {
+    console.warn(
+      `fee_share_config verification failed: ${verifyErr?.message ?? verifyErr}`,
+    );
+  }
 
   // STEP 3: createLaunchTransaction
   console.log(
     `Step 3: createLaunchTransaction (mint=${tokenMint.toBase58()} configKey=${configKeyStr} netBuyLamports=${netBuyLamports.toString()} claimers=${feeClaimers.length})`,
   );
   let launchTx: VersionedTransaction;
-  try {
-    launchTx = await sdk.tokenLaunch.createLaunchTransaction({
-      metadataUrl: ipfsMetadataUrl,
-      tokenMint,
-      launchWallet: escrowPubkey,
-      initialBuyLamports: Number(netBuyLamports),
-      configKey: new PublicKey(configKeyStr),
-    });
-  } catch (err: any) {
-    // createLaunchTransaction is an HTTP call that returns a tx to sign —
-    // by definition nothing has been broadcast yet. The fee-share config
-    // already exists on-chain, but a retry can reuse the stored
-    // fee_share_config_key, so we still want to no-refund here to preserve
-    // that state. (Auto-refund would drain the escrow that the retry needs.)
-    await setFailedNoRefund(
-      launch.id,
-      `createLaunchTransaction failed (configKey=${configKeyStr}, retry can reuse config): ${describeBagsError(err)}`,
-    );
-    return;
+  // createLaunchTransaction is a build-only HTTP call (no broadcast), so
+  // it's safe to retry on transient 5xx / network errors caused by Bags'
+  // indexer lag. We use exponential backoff: 2s, 4s, 8s, 16s, 32s.
+  {
+    const MAX_LAUNCH_TX_ATTEMPTS = 5;
+    const isTransientBagsError = (err: any, msg: string): boolean => {
+      const status = err?.response?.status ?? err?.status;
+      if (typeof status === "number" && (status >= 500 || status === 429)) {
+        return true;
+      }
+      return /status\s*5\d\d|status\s*429|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|network|socket hang up/i.test(
+        msg,
+      );
+    };
+
+    let lastLaunchErr: any = null;
+    let built = false;
+    for (let attempt = 1; attempt <= MAX_LAUNCH_TX_ATTEMPTS; attempt++) {
+      try {
+        launchTx = await sdk.tokenLaunch.createLaunchTransaction({
+          metadataUrl: ipfsMetadataUrl,
+          tokenMint,
+          launchWallet: escrowPubkey,
+          initialBuyLamports: Number(netBuyLamports),
+          configKey: new PublicKey(configKeyStr),
+        });
+        built = true;
+        break;
+      } catch (err: any) {
+        lastLaunchErr = err;
+        const msg = describeBagsError(err);
+        if (
+          attempt < MAX_LAUNCH_TX_ATTEMPTS &&
+          isTransientBagsError(err, msg)
+        ) {
+          const backoffMs = Math.min(32_000, 2_000 * 2 ** (attempt - 1));
+          console.warn(
+            `createLaunchTransaction transient failure on attempt ${attempt}/${MAX_LAUNCH_TX_ATTEMPTS} (${msg}); retrying in ${backoffMs}ms`,
+          );
+          await new Promise((r) => setTimeout(r, backoffMs));
+          continue;
+        }
+        // Non-transient (4xx schema/auth) or final attempt — give up.
+        // Build-only failure: no tx was broadcast, but the fee-share
+        // config IS on-chain and the stored fee_share_config_key lets a
+        // manual retry reuse it. Keep escrow funded for the retry.
+        await setFailedNoRefund(
+          launch.id,
+          `createLaunchTransaction failed after ${attempt} attempt(s) (configKey=${configKeyStr}, retry can reuse config): ${msg}`,
+        );
+        return;
+      }
+    }
+    if (!built) {
+      await setFailedNoRefund(
+        launch.id,
+        `createLaunchTransaction exhausted ${MAX_LAUNCH_TX_ATTEMPTS} attempts (configKey=${configKeyStr}): ${describeBagsError(lastLaunchErr)}`,
+      );
+      return;
+    }
   }
 
   // STEP 4: sign + send launch tx
