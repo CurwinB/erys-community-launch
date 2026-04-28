@@ -6,12 +6,14 @@ import LaunchCard from "@/components/LaunchCard";
 import Seo from "@/components/Seo";
 import { supabase } from "@/integrations/supabase/client";
 import { LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { Coins, Clock, Shield, ArrowDown } from "lucide-react";
 
 const Index = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [completedPage, setCompletedPage] = useState(1);
   const LAUNCHES_PER_PAGE = 20;
+  const isMobile = useIsMobile();
 
   const { data: liveLaunches, isLoading: liveLaunchesLoading } = useQuery({
     queryKey: ["launches", "live"],
@@ -160,27 +162,52 @@ const Index = () => {
             </div>
           ) : liveLaunches && liveLaunches.length > 0 ? (
             <>
-            <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-              {paginatedLaunches.map((launch, i) => {
-                const stats = contributionStats?.[launch.id];
-                return (
-                  <LaunchCard
-                    key={launch.id}
-                    id={launch.id}
-                    tokenName={launch.token_name}
-                    tokenSymbol={launch.token_symbol}
-                    imageUrl={launch.image_url}
-                    launchDatetime={launch.launch_datetime}
-                    totalEscrowLamports={stats?.total || 0}
-                    contributorCount={stats?.count || 0}
-                    minContributionLamports={Number(launch.min_contribution_lamports)}
-                    status="scheduled"
-                    platform={(launch.platform as "bags" | "pumpfun") || "bags"}
-                    animationDelay={i * 100}
-                  />
-                );
-              })}
-            </div>
+            {isMobile ? (
+              <div className="flex flex-col divide-y divide-border border border-border">
+                {paginatedLaunches.map((launch, i) => {
+                  const stats = contributionStats?.[launch.id];
+                  return (
+                    <LaunchCard
+                      key={launch.id}
+                      id={launch.id}
+                      tokenName={launch.token_name}
+                      tokenSymbol={launch.token_symbol}
+                      imageUrl={launch.image_url}
+                      launchDatetime={launch.launch_datetime}
+                      totalEscrowLamports={stats?.total || 0}
+                      contributorCount={stats?.count || 0}
+                      minContributionLamports={Number(launch.min_contribution_lamports)}
+                      status="scheduled"
+                      platform={(launch.platform as "bags" | "pumpfun") || "bags"}
+                      animationDelay={Math.min(i, 10) * 30}
+                      variant="row"
+                    />
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                {paginatedLaunches.map((launch, i) => {
+                  const stats = contributionStats?.[launch.id];
+                  return (
+                    <LaunchCard
+                      key={launch.id}
+                      id={launch.id}
+                      tokenName={launch.token_name}
+                      tokenSymbol={launch.token_symbol}
+                      imageUrl={launch.image_url}
+                      launchDatetime={launch.launch_datetime}
+                      totalEscrowLamports={stats?.total || 0}
+                      contributorCount={stats?.count || 0}
+                      minContributionLamports={Number(launch.min_contribution_lamports)}
+                      status="scheduled"
+                      platform={(launch.platform as "bags" | "pumpfun") || "bags"}
+                      animationDelay={i * 100}
+                    />
+                  );
+                })}
+              </div>
+            )}
             {totalPages > 1 && (
               <div className="mt-6 flex items-center justify-between border border-border bg-card px-4 py-3">
                 <button
@@ -227,24 +254,46 @@ const Index = () => {
             </div>
           ) : completedLaunches && completedLaunches.length > 0 ? (
             <>
-            <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 opacity-75">
-              {paginatedCompleted.map((launch, i) => (
-                <LaunchCard
-                  key={launch.id}
-                  id={launch.id}
-                  tokenName={launch.token_name}
-                  tokenSymbol={launch.token_symbol}
-                  imageUrl={launch.image_url}
-                  launchDatetime={launch.launch_datetime}
-                  totalEscrowLamports={0}
-                  contributorCount={0}
-                  minContributionLamports={Number(launch.min_contribution_lamports)}
-                  status="launched"
-                  platform={(launch.platform as "bags" | "pumpfun") || "bags"}
-                  animationDelay={i * 100}
-                />
-              ))}
-            </div>
+            {isMobile ? (
+              <div className="flex flex-col divide-y divide-border border border-border opacity-75">
+                {paginatedCompleted.map((launch, i) => (
+                  <LaunchCard
+                    key={launch.id}
+                    id={launch.id}
+                    tokenName={launch.token_name}
+                    tokenSymbol={launch.token_symbol}
+                    imageUrl={launch.image_url}
+                    launchDatetime={launch.launch_datetime}
+                    totalEscrowLamports={0}
+                    contributorCount={0}
+                    minContributionLamports={Number(launch.min_contribution_lamports)}
+                    status="launched"
+                    platform={(launch.platform as "bags" | "pumpfun") || "bags"}
+                    animationDelay={Math.min(i, 10) * 30}
+                    variant="row"
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 opacity-75">
+                {paginatedCompleted.map((launch, i) => (
+                  <LaunchCard
+                    key={launch.id}
+                    id={launch.id}
+                    tokenName={launch.token_name}
+                    tokenSymbol={launch.token_symbol}
+                    imageUrl={launch.image_url}
+                    launchDatetime={launch.launch_datetime}
+                    totalEscrowLamports={0}
+                    contributorCount={0}
+                    minContributionLamports={Number(launch.min_contribution_lamports)}
+                    status="launched"
+                    platform={(launch.platform as "bags" | "pumpfun") || "bags"}
+                    animationDelay={i * 100}
+                  />
+                ))}
+              </div>
+            )}
             {totalCompletedPages > 1 && (
               <div className="mt-6 flex items-center justify-between border border-border bg-card px-4 py-3">
                 <button
