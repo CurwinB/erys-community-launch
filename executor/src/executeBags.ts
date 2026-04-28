@@ -10,9 +10,11 @@ import {
   BAGS_FEE_SHARE_V2_PROGRAM_ID,
   WRAPPED_SOL_MINT,
   waitForSlotsToPass,
+  signAndSendTransaction,
+  sendBundleAndConfirm,
+  createTipTransaction,
 } from "@bagsfm/bags-sdk";
 import { decryptEscrowKey } from "./decrypt";
-import fetch from "node-fetch";
 import {
   Launch,
   Contribution,
@@ -36,318 +38,7 @@ const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
 // IDL). We use it together with the WSOL quote mint to derive the
 // fee_share_config PDA as a final fallback when the Bags API tells us a
 // config exists but does not surface its key.
-const BAGS_API_BASE_URL = "https://public-api-v2.bags.fm/api/v1";
 const BAGS_DEFAULT_CONFIG_TYPE = "fa29606e-5e48-4c37-827f-4b03d58ee23d";
-
-// HTTP-polling confirmation tunables. Mirrors the proven pattern in
-// pumpportalCustodial.ts. We deliberately avoid the Bags SDK's
-// `signAndSendTransaction` (and web3's `confirmTransaction`) because both
-// rely on `signatureSubscribe` over WebSocket. Our Railway RPC endpoint
-// returns -32601 ("Method 'signatureSubscribe' not found"), so confirmations
-// silently fall through and the SDK throws opaque errors. HTTP polling via
-// `getSignatureStatuses` is supported on every RPC tier and is idempotent.
-const BAGS_POLL_INTERVAL_MS = 2_000;
-const BAGS_REBROADCAST_EVERY_MS = 5_000;
-const BAGS_PER_ATTEMPT_TIMEOUT_MS = 90_000;
-const BAGS_MAX_BLOCKHASH_REFRESH_ATTEMPTS = 3;
-
-function isNonZeroSignature(sig: Uint8Array): boolean {
-  return sig.some((byte) => byte !== 0);
-}
-
-// ---------------------------------------------------------------------------
-// Metadata URL handling
-//
-// Per the official Bags example
-// (https://docs.bags.fm/how-to-guides/launch-token), the value returned by
-// `sdk.tokenLaunch.createTokenInfoAndMetadata()` as `tokenMetadata` MUST be
-// passed back verbatim to `createLaunchTransaction({ metadataUrl })`. Bags'
-// backend validates against the URL it pinned to; rewriting it to another
-// gateway causes opaque 500s.
-// ---------------------------------------------------------------------------
-
-function logTransactionSignatureState(
-  tx: VersionedTransaction,
-  signer: PublicKey,
-  label: string,
-): void {
-  const requiredSigners = tx.message.header.numRequiredSignatures;
-  const existingSignatures = tx.signatures.filter(isNonZeroSignature).length;
-  const staticAccountKeys: PublicKey[] =
-    (tx.message as any).staticAccountKeys ?? (tx.message as any).accountKeys ?? [];
-  const signerIndex = staticAccountKeys
-    .slice(0, requiredSigners)
-    .findIndex((key) => key.equals(signer));
-  const signerHasSignature =
-    signerIndex >= 0 && isNonZeroSignature(tx.signatures[signerIndex]);
-
-  console.log(
-    `[${label}] signatures ${existingSignatures}/${requiredSigners}; escrowRequired=${
-      signerIndex >= 0
-    }; escrowSigned=${signerHasSignature}`,
-  );
-}
-
-async function describeSolanaSendError(
-  err: any,
-  connection: Connection,
-): Promise<string> {
-  const parts = [err?.message ?? String(err)];
-  const logs = err?.logs;
-  if (Array.isArray(logs) && logs.length > 0) {
-    parts.push(`logs=${JSON.stringify(logs)}`);
-  } else if (typeof err?.getLogs === "function") {
-    try {
-      const fetchedLogs = await err.getLogs(connection);
-      if (Array.isArray(fetchedLogs) && fetchedLogs.length > 0) {
-        parts.push(`logs=${JSON.stringify(fetchedLogs)}`);
-      }
-    } catch {
-      /* logs unavailable */
-    }
-  }
-  if (err?.code) parts.push(`code=${err.code}`);
-  return parts.join(" | ").slice(0, 1500);
-}
-
-/**
- * Sign + send + HTTP-confirm a transaction we fully own/build locally.
- * - Re-signs with a fresh recent blockhash on each attempt so we don't get
- *   stuck on `block height exceeded` after a slow leader.
- * - Polls `getSignatureStatuses` and rebroadcasts the same signed bytes
- *   periodically; Solana de-dupes so it costs us nothing extra.
- * - Throws on permanent on-chain errors instead of retrying.
- *
- * Do NOT use this for transactions returned by Bags. Those may include
- * Bags/program-side signatures tied to the original message + blockhash.
- */
-async function sendVersionedTransactionWithHttpConfirm(
-  connection: Connection,
-  tx: VersionedTransaction,
-  signer: Keypair,
-  label: string,
-): Promise<string> {
-  let lastSignature: string | null = null;
-  let lastErr: any = null;
-
-  for (
-    let attempt = 1;
-    attempt <= BAGS_MAX_BLOCKHASH_REFRESH_ATTEMPTS;
-    attempt++
-  ) {
-    // Refresh blockhash on each attempt. A VersionedTransaction's
-    // signatures are tied to its message + blockhash, so we must wipe and
-    // re-sign whenever we change the blockhash.
-    try {
-      const { blockhash } = await connection.getLatestBlockhash("confirmed");
-      tx.message.recentBlockhash = blockhash;
-      // Reset signatures before re-signing.
-      tx.signatures = tx.signatures.map(() => new Uint8Array(64));
-      tx.sign([signer]);
-    } catch (refreshErr: any) {
-      lastErr = refreshErr;
-      console.warn(
-        `[${label}] blockhash refresh attempt ${attempt} failed: ${
-          refreshErr?.message ?? refreshErr
-        }`,
-      );
-      continue;
-    }
-
-    const rawTx = tx.serialize();
-    let signature: string;
-    try {
-      signature = await connection.sendRawTransaction(rawTx, {
-        preflightCommitment: "confirmed",
-        skipPreflight: false,
-      });
-    } catch (sendErr: any) {
-      lastErr = sendErr;
-      const details = await describeSolanaSendError(sendErr, connection);
-      console.warn(
-        `[${label}] sendRawTransaction attempt ${attempt} failed: ${details}`,
-      );
-      continue;
-    }
-    lastSignature = signature;
-    console.log(`[${label}] submitted ${signature} (attempt ${attempt})`);
-
-    const start = Date.now();
-    let lastRebroadcast = start;
-    while (Date.now() - start < BAGS_PER_ATTEMPT_TIMEOUT_MS) {
-      await new Promise((r) => setTimeout(r, BAGS_POLL_INTERVAL_MS));
-      try {
-        const statuses = await connection.getSignatureStatuses([signature], {
-          searchTransactionHistory: false,
-        });
-        const status = statuses?.value?.[0];
-        if (status) {
-          if (status.err) {
-            throw new Error(
-              `tx ${signature} on-chain error: ${JSON.stringify(status.err)}`,
-            );
-          }
-          if (
-            status.confirmationStatus === "confirmed" ||
-            status.confirmationStatus === "finalized"
-          ) {
-            return signature;
-          }
-        }
-      } catch (pollErr: any) {
-        if (/on-chain error/.test(pollErr?.message ?? "")) {
-          throw pollErr;
-        }
-        console.warn(
-          `[${label}] getSignatureStatuses transient error: ${
-            pollErr?.message ?? pollErr
-          }`,
-        );
-      }
-
-      if (Date.now() - lastRebroadcast >= BAGS_REBROADCAST_EVERY_MS) {
-        lastRebroadcast = Date.now();
-        try {
-          await connection.sendRawTransaction(rawTx, {
-            preflightCommitment: "confirmed",
-            skipPreflight: true,
-          });
-        } catch {
-          /* leader may already have it */
-        }
-      }
-    }
-
-    // One final searched status check before giving up on this attempt.
-    try {
-      const finalStatuses = await connection.getSignatureStatuses([signature], {
-        searchTransactionHistory: true,
-      });
-      const final = finalStatuses?.value?.[0];
-      if (
-        final &&
-        !final.err &&
-        (final.confirmationStatus === "confirmed" ||
-          final.confirmationStatus === "finalized")
-      ) {
-        return signature;
-      }
-    } catch {
-      /* fall through to retry */
-    }
-
-    lastErr = new Error(
-      `tx ${signature} not confirmed within ${BAGS_PER_ATTEMPT_TIMEOUT_MS}ms; retrying with fresh blockhash`,
-    );
-    console.warn(`[${label}] ${(lastErr as Error).message}`);
-  }
-
-  throw new Error(
-    `[${label}] failed after ${BAGS_MAX_BLOCKHASH_REFRESH_ATTEMPTS} blockhash-refresh attempts. Last signature: ${
-      lastSignature ?? "<none>"
-    }. Last error: ${lastErr?.message ?? lastErr}`,
-  );
-}
-
-/**
- * Sign + send + HTTP-confirm a prebuilt transaction returned by Bags.
- *
- * Critical difference from the local sender above: we NEVER mutate the
- * message/blockhash and NEVER wipe signatures. Bags transactions can already
- * contain required signatures. Replacing the blockhash or signature array
- * invalidates them and causes `Transaction did not pass signature verification`.
- */
-async function sendBagsPrebuiltTransactionWithHttpConfirm(
-  connection: Connection,
-  tx: VersionedTransaction,
-  signer: Keypair,
-  label: string,
-): Promise<string> {
-  logTransactionSignatureState(tx, signer.publicKey, `${label}:before-sign`);
-  tx.sign([signer]);
-  logTransactionSignatureState(tx, signer.publicKey, `${label}:after-sign`);
-
-  const rawTx = tx.serialize();
-  let signature: string;
-  try {
-    signature = await connection.sendRawTransaction(rawTx, {
-      preflightCommitment: "confirmed",
-      skipPreflight: false,
-    });
-  } catch (sendErr: any) {
-    const details = await describeSolanaSendError(sendErr, connection);
-    throw new Error(`[${label}] sendRawTransaction failed: ${details}`);
-  }
-
-  console.log(`[${label}] submitted ${signature}`);
-
-  const start = Date.now();
-  let lastRebroadcast = start;
-  while (Date.now() - start < BAGS_PER_ATTEMPT_TIMEOUT_MS) {
-    await new Promise((r) => setTimeout(r, BAGS_POLL_INTERVAL_MS));
-    try {
-      const statuses = await connection.getSignatureStatuses([signature], {
-        searchTransactionHistory: false,
-      });
-      const status = statuses?.value?.[0];
-      if (status) {
-        if (status.err) {
-          throw new Error(
-            `tx ${signature} on-chain error: ${JSON.stringify(status.err)}`,
-          );
-        }
-        if (
-          status.confirmationStatus === "confirmed" ||
-          status.confirmationStatus === "finalized"
-        ) {
-          return signature;
-        }
-      }
-    } catch (pollErr: any) {
-      if (/on-chain error/.test(pollErr?.message ?? "")) {
-        throw pollErr;
-      }
-      console.warn(
-        `[${label}] getSignatureStatuses transient error: ${
-          pollErr?.message ?? pollErr
-        }`,
-      );
-    }
-
-    if (Date.now() - lastRebroadcast >= BAGS_REBROADCAST_EVERY_MS) {
-      lastRebroadcast = Date.now();
-      try {
-        await connection.sendRawTransaction(rawTx, {
-          preflightCommitment: "confirmed",
-          skipPreflight: true,
-        });
-      } catch {
-        /* leader may already have it */
-      }
-    }
-  }
-
-  try {
-    const finalStatuses = await connection.getSignatureStatuses([signature], {
-      searchTransactionHistory: true,
-    });
-    const final = finalStatuses?.value?.[0];
-    if (
-      final &&
-      !final.err &&
-      (final.confirmationStatus === "confirmed" ||
-        final.confirmationStatus === "finalized")
-    ) {
-      return signature;
-    }
-  } catch {
-    /* fall through */
-  }
-
-  throw new Error(
-    `[${label}] tx ${signature} not confirmed within ${BAGS_PER_ATTEMPT_TIMEOUT_MS}ms; rebuild from Bags before retrying`,
-  );
-}
 
 /**
  * Best-effort extractor for Bags SDK / fetch / axios-style errors so the
@@ -433,55 +124,82 @@ const TOTAL_BPS = 10_000;
 const MAX_CLAIMERS = 100;
 
 /**
- * Build a deterministic fee-claimers array.
- * - First entry is the creator (contributions[0]) and gets at least CREATOR_MIN_BPS.
- * - Remaining contributors get share proportional to their lamport amount.
- * - Final pass adjusts the creator's BPS so the total is exactly TOTAL_BPS.
- * - Capped at MAX_CLAIMERS entries (Bags limit).
+ * Build a deterministic fee-claimers array per the official Bags docs.
+ *
+ * Bags requires that the launch creator is explicitly included in the
+ * `feeClaimers` array. We put the launch wallet (escrow) FIRST with at
+ * least CREATOR_MIN_BPS, then distribute the remainder proportionally
+ * across contributors by lamport amount. Final pass adjusts the creator's
+ * BPS so the total is exactly TOTAL_BPS (10000).
+ *
+ * Capped at MAX_CLAIMERS entries (Bags limit). If the same wallet appears
+ * as both creator and a contributor, we merge them into a single entry to
+ * avoid Bags rejecting duplicate claimers.
  */
 function buildFeeClaimers(
+  creatorWallet: PublicKey,
   contributions: Contribution[],
 ): Array<{ user: PublicKey; userBps: number }> {
-  const capped = contributions.slice(0, MAX_CLAIMERS);
-  const totalLamports = capped.reduce(
+  // Reserve slot 0 for the creator. Cap remaining contributors so total
+  // entries (creator + contributors) never exceed MAX_CLAIMERS.
+  const creatorStr = creatorWallet.toBase58();
+  const contributorEntries = contributions
+    .filter((c) => (c.token_delivery_wallet || c.wallet_address) !== creatorStr)
+    .slice(0, MAX_CLAIMERS - 1);
+
+  const totalLamports = contributorEntries.reduce(
     (sum, c) => sum + BigInt(c.amount_lamports),
     0n,
   );
   const totalNum = Number(totalLamports);
 
-  // Initial proportional allocation (floored), creator gets the floor minimum
-  const allocations: number[] = capped.map((c, idx) => {
-    const raw = Math.floor(
-      (Number(BigInt(c.amount_lamports)) / totalNum) * TOTAL_BPS,
-    );
-    return idx === 0 ? Math.max(CREATOR_MIN_BPS, raw) : raw;
-  });
-
-  // Adjust creator to make sum exactly TOTAL_BPS
-  const sumExceptCreator = allocations
-    .slice(1)
-    .reduce((a, b) => a + b, 0);
-  allocations[0] = TOTAL_BPS - sumExceptCreator;
-
-  // Safety: if creator ended up below floor due to many small contributors,
-  // pull from the largest non-creator until creator is at the floor.
-  if (allocations[0] < CREATOR_MIN_BPS) {
-    let deficit = CREATOR_MIN_BPS - allocations[0];
-    // Iterate from largest contributor downward (already sorted desc by db.ts)
-    for (let i = 1; i < allocations.length && deficit > 0; i++) {
-      const take = Math.min(allocations[i] - 1, deficit);
-      if (take > 0) {
-        allocations[i] -= take;
-        allocations[0] += take;
-        deficit -= take;
-      }
-    }
+  // If there are no other contributors, creator gets all 10000 BPS.
+  if (contributorEntries.length === 0 || totalNum === 0) {
+    return [{ user: creatorWallet, userBps: TOTAL_BPS }];
   }
 
-  return capped.map((c, idx) => ({
-    user: new PublicKey(c.token_delivery_wallet || c.wallet_address),
-    userBps: allocations[idx],
-  }));
+  // Allocate (TOTAL_BPS - CREATOR_MIN_BPS) proportionally across contributors.
+  const distributable = TOTAL_BPS - CREATOR_MIN_BPS;
+  const contributorBps = contributorEntries.map((c) =>
+    Math.floor((Number(BigInt(c.amount_lamports)) / totalNum) * distributable),
+  );
+  const sumContrib = contributorBps.reduce((a, b) => a + b, 0);
+  const creatorBps = TOTAL_BPS - sumContrib;
+
+  const result: Array<{ user: PublicKey; userBps: number }> = [
+    { user: creatorWallet, userBps: creatorBps },
+  ];
+  contributorEntries.forEach((c, i) => {
+    if (contributorBps[i] > 0) {
+      result.push({
+        user: new PublicKey(c.token_delivery_wallet || c.wallet_address),
+        userBps: contributorBps[i],
+      });
+    }
+  });
+
+  // If rounding dropped some BPS into the creator slot only, that's fine.
+  // Re-balance to ensure exact 10000 (defensive).
+  const finalSum = result.reduce((s, r) => s + r.userBps, 0);
+  if (finalSum !== TOTAL_BPS) {
+    result[0].userBps += TOTAL_BPS - finalSum;
+  }
+  return result;
+}
+
+/**
+ * Strict preflight validation per Bags' documented limits. Failing locally
+ * with a clear error is far better than getting a Bags 500 with no body.
+ */
+function validateBagsMetadata(launch: Launch): string | null {
+  const name = launch.token_name?.trim() ?? "";
+  const symbol = launch.token_symbol?.trim() ?? "";
+  const description = launch.description?.trim() ?? "";
+  if (!name || name.length > 32) return `Invalid name length (${name.length}); must be 1..32`;
+  if (!symbol || symbol.length > 10) return `Invalid symbol length (${symbol.length}); must be 1..10`;
+  if (description.length > 1000) return `Description too long (${description.length}); max 1000`;
+  if (!launch.image_url) return `Missing image_url`;
+  return null;
 }
 
 export async function executeBagsLaunch(
@@ -491,8 +209,18 @@ export async function executeBagsLaunch(
   console.log(`Executing Bags launch ${launch.id} (${launch.token_name})`);
 
   const connection = new Connection(SOLANA_RPC_URL, "confirmed");
-  const sdk = new BagsSDK(BAGS_API_KEY, connection, "confirmed");
+  // Per Bags official docs: instantiate the SDK with "processed" commitment.
+  // The SDK helpers (signAndSendTransaction / sendBundleAndConfirm) use this
+  // for their internal confirmation polling.
+  const sdk = new BagsSDK(BAGS_API_KEY, connection, "processed");
   const commitment = sdk.state.getCommitment();
+
+  // Strict local preflight before we ever talk to Bags.
+  const validationErr = validateBagsMetadata(launch);
+  if (validationErr) {
+    await setFailed(launch.id, `Bags metadata validation failed: ${validationErr}`);
+    return;
+  }
 
   // Decrypt escrow keypair
   const escrowSecret = decryptEscrowKey(
@@ -633,8 +361,9 @@ export async function executeBagsLaunch(
     return;
   }
 
-  // Build fee claimers (deterministic BPS summing to exactly 10000)
-  const feeClaimers = buildFeeClaimers(contributions);
+  // Build fee claimers (deterministic BPS summing to exactly 10000).
+  // Per Bags docs the launch wallet (creator) is included explicitly first.
+  const feeClaimers = buildFeeClaimers(escrowPubkey, contributions);
   const bpsSum = feeClaimers.reduce((s, c) => s + c.userBps, 0);
   console.log(
     `Built ${feeClaimers.length} fee claimers; BPS sum = ${bpsSum} (must be ${TOTAL_BPS})`,
@@ -657,8 +386,9 @@ export async function executeBagsLaunch(
     try {
       lutResult = await sdk.config.getConfigCreationLookupTableTransactions({
         payer: escrowPubkey,
+        baseMint: tokenMint,
         feeClaimers,
-      });
+      } as any);
     } catch (err: any) {
       await setFailed(launch.id, `LUT create-tx fetch failed: ${err.message}`);
       return;
@@ -670,12 +400,12 @@ export async function executeBagsLaunch(
     }
 
     try {
-      // Create the LUT first
-      const createSig = await sendVersionedTransactionWithHttpConfirm(
+      // Create the LUT first (use SDK helper per docs)
+      const createSig = await signAndSendTransaction(
         connection,
+        commitment,
         lutResult.creationTransaction,
         escrowKeypair,
-        "lut-create",
       );
       console.log(`LUT created: ${createSig}`);
 
@@ -685,11 +415,11 @@ export async function executeBagsLaunch(
 
       // Extend with claimer addresses
       for (let i = 0; i < lutResult.extendTransactions.length; i++) {
-        const sig = await sendVersionedTransactionWithHttpConfirm(
+        const sig = await signAndSendTransaction(
           connection,
+          commitment,
           lutResult.extendTransactions[i],
           escrowKeypair,
-          `lut-extend-${i + 1}`,
         );
         console.log(
           `LUT extend ${i + 1}/${lutResult.extendTransactions.length}: ${sig}`,
@@ -711,231 +441,125 @@ export async function executeBagsLaunch(
     );
     configKeyStr = launch.fee_share_config_key;
   } else {
-    // We bypass sdk.config.createBagsFeeShareConfig() here and call the Bags
-    // REST API directly. The SDK throws a generic `Error('Config already
-    // exists')` when needsCreation=false and discards the meteoraConfigKey,
-    // so it's impossible to recover the existing key through the SDK.
-    // Calling the REST endpoint ourselves lets us:
-    //   - get the existing meteoraConfigKey when needsCreation=false
-    //   - decode/sign/send the returned txs/bundles when needsCreation=true
-    //   - fall back to the deterministic PDA if Bags returns a malformed body
-    const MAX_FEESHARE_ATTEMPTS = 3;
-    const isExpiryError = (msg: string) =>
-      /block height exceeded|blockhash not found|TransactionExpiredBlockheightExceededError|expired/i.test(
-        msg,
-      ) || /not confirmed within/i.test(msg);
-
-    const restBody = {
-      payer: escrowPubkey.toBase58(),
-      baseMint: tokenMint.toBase58(),
-      claimersArray: feeClaimers.map((c) => c.user.toBase58()),
-      basisPointsArray: feeClaimers.map((c) => c.userBps),
-      partner: BAGS_PARTNER_WALLET,
-      partnerConfig: BAGS_PARTNER_CONFIG,
-      additionalLookupTables: additionalLookupTables?.map((lut) => lut.toBase58()),
-      bagsConfigType: BAGS_DEFAULT_CONFIG_TYPE,
-    };
-
-    let lastErr: any = null;
-    let submitted = false;
-
-    for (let attempt = 1; attempt <= MAX_FEESHARE_ATTEMPTS; attempt++) {
-      let restJson: any;
-      try {
-        const resp = await fetch(`${BAGS_API_BASE_URL}/fee-share/config`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": BAGS_API_KEY,
-          },
-          body: JSON.stringify(restBody),
-        });
-        const text = await resp.text();
+    // Use the official Bags SDK exactly per docs:
+    //   sdk.config.createBagsFeeShareConfig({ payer, baseMint, feeClaimers,
+    //     partner, partnerConfig, additionalLookupTables })
+    //
+    // This returns { transactions, bundles, meteoraConfigKey }. We then send
+    // them with the SDK helpers `sendBundleAndConfirm` (with a Jito tip) and
+    // `signAndSendTransaction`, exactly mirroring the docs.
+    //
+    // Recovery rule: if the SDK throws "Config already exists" we derive the
+    // deterministic PDA, verify it's on-chain, and reuse it.
+    let createResult: {
+      transactions: VersionedTransaction[];
+      bundles: VersionedTransaction[][];
+      meteoraConfigKey: PublicKey;
+    } | null = null;
+    try {
+      createResult = await sdk.config.createBagsFeeShareConfig({
+        payer: escrowPubkey,
+        baseMint: tokenMint,
+        feeClaimers,
+        partner: BAGS_PARTNER_WALLET ? new PublicKey(BAGS_PARTNER_WALLET) : undefined,
+        partnerConfig: BAGS_PARTNER_CONFIG ? new PublicKey(BAGS_PARTNER_CONFIG) : undefined,
+        additionalLookupTables,
+        bagsConfigType: BAGS_DEFAULT_CONFIG_TYPE as any,
+      });
+    } catch (err: any) {
+      const msg = describeBagsError(err);
+      if (/already exists/i.test(msg)) {
+        // Recover via deterministic PDA derivation.
         try {
-          restJson = JSON.parse(text);
-        } catch {
+          const derived = deriveBagsFeeShareConfigPda(tokenMint);
+          const acc = await connection.getAccountInfo(derived, "confirmed");
+          if (acc) {
+            configKeyStr = derived.toBase58();
+            console.log(
+              `Reusing existing on-chain fee_share_config via PDA derivation: ${configKeyStr}`,
+            );
+            await storeFeeShareConfig(launch.id, configKeyStr, feeClaimers.length);
+          } else {
+            await setFailed(
+              launch.id,
+              `Bags reports fee-share config exists but PDA ${derived.toBase58()} not visible on-chain.`,
+            );
+            return;
+          }
+        } catch (deriveErr: any) {
           await setFailed(
             launch.id,
-            `Bags fee-share/config returned non-JSON (status ${resp.status}): ${text.slice(0, 500)}`,
+            `createBagsFeeShareConfig failed and PDA recovery failed: ${msg} | ${deriveErr?.message ?? deriveErr}`,
           );
           return;
         }
-        if (!resp.ok || restJson?.success === false) {
-          const apiErrMsg =
-            restJson?.error ??
-            restJson?.message ??
-            `HTTP ${resp.status}`;
-          // Build-time API errors are not retryable (auth, schema, partner config…).
-          await setFailed(
-            launch.id,
-            `Bags fee-share/config API error: ${apiErrMsg}`,
-          );
-          return;
-        }
-      } catch (err: any) {
-        await setFailed(
-          launch.id,
-          `Bags fee-share/config fetch failed: ${err?.message ?? String(err)}`,
-        );
+      } else {
+        await setFailed(launch.id, `createBagsFeeShareConfig failed: ${msg}`);
         return;
       }
+    }
 
-      const responseBody = restJson?.response ?? restJson;
-      const needsCreation: boolean = responseBody?.needsCreation === true;
-      let candidateKey: string | undefined =
-        responseBody?.meteoraConfigKey ?? undefined;
-
+    if (createResult && !configKeyStr) {
+      const { transactions: txs, bundles, meteoraConfigKey } = createResult;
       console.log(
-        `Fee-share attempt ${attempt}/${MAX_FEESHARE_ATTEMPTS}: needsCreation=${needsCreation} key=${
-          candidateKey ?? "<missing>"
-        } txs=${responseBody?.transactions?.length ?? 0} bundles=${responseBody?.bundles?.length ?? 0}`,
+        `Bags fee-share build: meteoraConfigKey=${meteoraConfigKey.toBase58()} txs=${txs.length} bundles=${bundles.length}`,
       );
 
-      // Fast path: config already on-chain. No SOL spent by us. Reuse the key
-      // and continue to the launch tx step. This is the primary fix for
-      // "Config already exists" failures on retried launches.
-      if (!needsCreation) {
-        if (!candidateKey) {
-          // Final fallback: derive the deterministic PDA and verify it exists.
-          try {
-            const derived = deriveBagsFeeShareConfigPda(tokenMint);
-            const acc = await connection.getAccountInfo(derived, "confirmed");
-            if (acc) {
-              candidateKey = derived.toBase58();
-              console.log(
-                `Recovered fee_share_config via PDA derivation: ${candidateKey}`,
-              );
-            }
-          } catch (deriveErr: any) {
-            console.warn(
-              `PDA derivation fallback failed: ${deriveErr?.message ?? deriveErr}`,
-            );
-          }
-        }
-        if (!candidateKey) {
-          // No on-chain SOL was spent by this attempt, so refunding is safe.
-          await setFailed(
-            launch.id,
-            `Bags says fee-share config already exists but did not return meteoraConfigKey and PDA derivation could not confirm it on-chain. Mint ${tokenMint.toBase58()}.`,
-          );
-          return;
-        }
-        configKeyStr = candidateKey;
-        await storeFeeShareConfig(launch.id, configKeyStr, feeClaimers.length);
-        submitted = true;
-        break;
-      }
-
-      // needsCreation=true: decode txs/bundles and submit on-chain.
-      let txs: VersionedTransaction[] = [];
-      let bundles: VersionedTransaction[][] = [];
       try {
-        const bs58Mod: any = await import("bs58");
-        const bs58 = bs58Mod.default ?? bs58Mod;
-        txs = (responseBody?.transactions ?? []).map((t: any) =>
-          VersionedTransaction.deserialize(bs58.decode(t.transaction)),
-        );
-        bundles = (responseBody?.bundles ?? []).map((bundle: any[]) =>
-          bundle.map((t: any) =>
-            VersionedTransaction.deserialize(bs58.decode(t.transaction)),
-          ),
-        );
-      } catch (decErr: any) {
-        await setFailed(
-          launch.id,
-          `Failed to decode Bags fee-share txs: ${decErr?.message ?? decErr}`,
-        );
-        return;
-      }
-
-      if (!candidateKey) {
-        // Defensive: still try to derive even on the create path so we don't
-        // submit on-chain work without a key to persist.
-        try {
-          candidateKey = deriveBagsFeeShareConfigPda(tokenMint).toBase58();
-        } catch {
-          await setFailed(
-            launch.id,
-            `Bags response missing meteoraConfigKey on creation path; refusing to submit txs.`,
-          );
-          return;
-        }
-      }
-
-      try {
+        // 1) Submit bundles via Jito (with tip tx) per docs.
         for (let bIdx = 0; bIdx < bundles.length; bIdx++) {
           const bundle = bundles[bIdx];
-          console.log(
-            `Sending Bags bundle ${bIdx + 1}/${bundles.length} (${bundle.length} txs) via HTTP polling`,
+          // Build a tip tx and append it to the bundle (docs pattern).
+          const tipTx = await createTipTransaction(
+            connection,
+            commitment,
+            escrowPubkey,
+            10_000, // 10k lamports tip — small but reliable for non-urgent bundles
           );
-          for (let txIdx = 0; txIdx < bundle.length; txIdx++) {
-            const sig = await sendBagsPrebuiltTransactionWithHttpConfirm(
-              connection,
-              bundle[txIdx],
-              escrowKeypair,
-              `fee-share-bundle-${bIdx + 1}-tx-${txIdx + 1}`,
-            );
-            console.log(
-              `Bundle ${bIdx + 1} tx ${txIdx + 1}/${bundle.length}: ${sig}`,
-            );
+          tipTx.sign([escrowKeypair]);
+          // Sign each bundle tx with the escrow keypair before bundling.
+          for (const tx of bundle) {
+            tx.sign([escrowKeypair]);
           }
+          const signedBundle = [...bundle, tipTx];
+          const bundleSig = await sendBundleAndConfirm(signedBundle, sdk);
+          console.log(
+            `fee-share bundle ${bIdx + 1}/${bundles.length} confirmed: ${bundleSig}`,
+          );
         }
 
+        // 2) Submit standalone transactions via the SDK helper.
         for (let i = 0; i < txs.length; i++) {
-          const sig = await sendBagsPrebuiltTransactionWithHttpConfirm(
+          const sig = await signAndSendTransaction(
             connection,
+            commitment,
             txs[i],
             escrowKeypair,
-            `fee-share-tx-${i + 1}`,
           );
-          console.log(`Fee-share tx ${i + 1}/${txs.length}: ${sig}`);
+          console.log(`fee-share tx ${i + 1}/${txs.length} confirmed: ${sig}`);
         }
 
-        configKeyStr = candidateKey;
+        configKeyStr = meteoraConfigKey.toBase58();
         await storeFeeShareConfig(launch.id, configKeyStr, feeClaimers.length);
-        submitted = true;
-        break;
       } catch (err: any) {
-        lastErr = err;
-        const msg = err?.message ?? String(err);
-        if (isExpiryError(msg) && attempt < MAX_FEESHARE_ATTEMPTS) {
-          console.warn(
-            `Fee-share submission expired on attempt ${attempt} (${msg}). Rebuilding with fresh blockhash...`,
-          );
-          continue;
-        }
-        // Pre-flight rejections (signature verification, simulation
-        // failure, Bags 4xx) never land on-chain — safe to auto-refund.
-        // Anything else may have partially landed, so keep the escrow
-        // intact for manual review / retry.
+        const msg = describeBagsError(err);
         if (isPreflightOnlyError(msg)) {
           await setFailed(
             launch.id,
-            `Fee-share tx rejected pre-flight (no on-chain state, contributors will be auto-refunded): ${msg}`,
+            `Fee-share submission rejected pre-flight (auto-refunding): ${msg}`,
           );
         } else {
           await setFailedNoRefund(
             launch.id,
-            `Fee-share submission failed (escrow may hold partial on-chain state — manual review): ${msg}`,
+            `Fee-share submission failed (escrow may hold partial state, manual review): ${msg}`,
           );
         }
         return;
       }
     }
 
-    if (!submitted || !configKeyStr) {
-      const msg = lastErr?.message ?? String(lastErr);
-      if (isPreflightOnlyError(msg)) {
-        await setFailed(
-          launch.id,
-          `Fee-share rejected pre-flight after ${MAX_FEESHARE_ATTEMPTS} attempts (no on-chain state, auto-refunding): ${msg}`,
-        );
-      } else {
-        await setFailedNoRefund(
-          launch.id,
-          `Fee-share submission failed after ${MAX_FEESHARE_ATTEMPTS} attempts: ${msg}`,
-        );
-      }
+    if (!configKeyStr) {
+      await setFailed(launch.id, `Fee-share creation produced no configKey`);
       return;
     }
   }
@@ -1039,7 +663,17 @@ export async function executeBagsLaunch(
         // contributor SOL is still in escrow. Auto-refund regardless of
         // error class — keeping funds locked never helps and the fee-share
         // config PDA stays on-chain harmlessly.
-        const reason = `createLaunchTransaction failed after ${attempt} attempt(s) (configKey=${configKeyStr}, retry can reuse config): ${msg}`;
+        const fingerprint = JSON.stringify({
+          mint: tokenMint.toBase58(),
+          metadataUrl: ipfsMetadataUrl,
+          configKey: configKeyStr,
+          launchWallet: escrowPubkey.toBase58(),
+          initialBuyLamports: Number(netBuyLamports),
+          claimerCount: feeClaimers.length,
+          bpsSum: feeClaimers.reduce((s, c) => s + c.userBps, 0),
+          usedLut: !!additionalLookupTables,
+        });
+        const reason = `createLaunchTransaction failed after ${attempt} attempt(s) (configKey=${configKeyStr}, retry can reuse config): ${msg} | fingerprint=${fingerprint}`;
         await setFailed(launch.id, reason);
         return;
       }
@@ -1054,11 +688,13 @@ export async function executeBagsLaunch(
   // STEP 4: sign + send launch tx
   console.log("Step 4: sign + send launch tx");
   try {
-    const sig = await sendBagsPrebuiltTransactionWithHttpConfirm(
+    // Per Bags docs: use the SDK helper. It signs with our keypair, sends,
+    // and confirms using the SDK's commitment ("processed").
+    const sig = await signAndSendTransaction(
       connection,
+      commitment,
       launchTx,
       escrowKeypair,
-      "bags-launch-tx",
     );
     console.log(`Bags launch confirmed: ${sig}`);
     console.log(`Solscan: https://solscan.io/tx/${sig}`);
