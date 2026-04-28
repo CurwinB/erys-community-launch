@@ -295,7 +295,6 @@ export async function executeBagsLaunch(
 
   const connection = new Connection(SOLANA_RPC_URL, "confirmed");
   const sdk = new BagsSDK(BAGS_API_KEY, connection, "confirmed");
-  const commitment = sdk.state.getCommitment();
 
   // Decrypt escrow keypair
   const escrowSecret = decryptEscrowKey(
@@ -465,11 +464,11 @@ export async function executeBagsLaunch(
 
     try {
       // Create the LUT first
-      const createSig = await signAndSendTransaction(
+      const createSig = await sendVersionedTransactionWithHttpConfirm(
         connection,
-        commitment,
         lutResult.creationTransaction,
         escrowKeypair,
+        "lut-create",
       );
       console.log(`LUT created: ${createSig}`);
 
@@ -479,11 +478,11 @@ export async function executeBagsLaunch(
 
       // Extend with claimer addresses
       for (let i = 0; i < lutResult.extendTransactions.length; i++) {
-        const sig = await signAndSendTransaction(
+        const sig = await sendVersionedTransactionWithHttpConfirm(
           connection,
-          commitment,
           lutResult.extendTransactions[i],
           escrowKeypair,
+          `lut-extend-${i + 1}`,
         );
         console.log(
           `LUT extend ${i + 1}/${lutResult.extendTransactions.length}: ${sig}`,
