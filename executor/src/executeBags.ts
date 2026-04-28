@@ -673,8 +673,9 @@ export async function executeBagsLaunch(
     return;
   }
 
-  // Build fee claimers (deterministic BPS summing to exactly 10000)
-  const feeClaimers = buildFeeClaimers(contributions);
+  // Build fee claimers (deterministic BPS summing to exactly 10000).
+  // Per Bags docs the launch wallet (creator) is included explicitly first.
+  const feeClaimers = buildFeeClaimers(escrowPubkey, contributions);
   const bpsSum = feeClaimers.reduce((s, c) => s + c.userBps, 0);
   console.log(
     `Built ${feeClaimers.length} fee claimers; BPS sum = ${bpsSum} (must be ${TOTAL_BPS})`,
@@ -697,8 +698,9 @@ export async function executeBagsLaunch(
     try {
       lutResult = await sdk.config.getConfigCreationLookupTableTransactions({
         payer: escrowPubkey,
+        baseMint: tokenMint,
         feeClaimers,
-      });
+      } as any);
     } catch (err: any) {
       await setFailed(launch.id, `LUT create-tx fetch failed: ${err.message}`);
       return;
