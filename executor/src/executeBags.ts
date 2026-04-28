@@ -665,7 +665,7 @@ export async function executeBagsLaunch(
     const isExpiryError = (msg: string) =>
       /block height exceeded|blockhash not found|TransactionExpiredBlockheightExceededError|expired/i.test(
         msg,
-      );
+      ) || /not confirmed within/i.test(msg);
 
     const restBody = {
       payer: escrowPubkey.toBase58(),
@@ -807,21 +807,24 @@ export async function executeBagsLaunch(
       try {
         for (let bIdx = 0; bIdx < bundles.length; bIdx++) {
           const bundle = bundles[bIdx];
-          const signed: VersionedTransaction[] = bundle.map(
-            (tx: VersionedTransaction) => {
-              tx.sign([escrowKeypair]);
-              return tx;
-            },
-          );
           console.log(
-            `Sending Jito bundle ${bIdx + 1}/${bundles.length} (${signed.length} txs)`,
+            `Sending Bags bundle ${bIdx + 1}/${bundles.length} (${bundle.length} txs) via HTTP polling`,
           );
-          const sig = await sendBundleAndConfirm(signed, sdk);
-          console.log(`Bundle ${bIdx + 1} confirmed: ${sig}`);
+          for (let txIdx = 0; txIdx < bundle.length; txIdx++) {
+            const sig = await sendBagsPrebuiltTransactionWithHttpConfirm(
+              connection,
+              bundle[txIdx],
+              escrowKeypair,
+              `fee-share-bundle-${bIdx + 1}-tx-${txIdx + 1}`,
+            );
+            console.log(
+              `Bundle ${bIdx + 1} tx ${txIdx + 1}/${bundle.length}: ${sig}`,
+            );
+          }
         }
 
         for (let i = 0; i < txs.length; i++) {
-          const sig = await sendVersionedTransactionWithHttpConfirm(
+          const sig = await sendBagsPrebuiltTransactionWithHttpConfirm(
             connection,
             txs[i],
             escrowKeypair,
