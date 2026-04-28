@@ -51,13 +51,62 @@ const BAGS_REBROADCAST_EVERY_MS = 5_000;
 const BAGS_PER_ATTEMPT_TIMEOUT_MS = 90_000;
 const BAGS_MAX_BLOCKHASH_REFRESH_ATTEMPTS = 3;
 
+function isNonZeroSignature(sig: Uint8Array): boolean {
+  return sig.some((byte) => byte !== 0);
+}
+
+function logTransactionSignatureState(
+  tx: VersionedTransaction,
+  signer: PublicKey,
+  label: string,
+): void {
+  const requiredSigners = tx.message.header.numRequiredSignatures;
+  const existingSignatures = tx.signatures.filter(isNonZeroSignature).length;
+  const signerIndex = tx.message.staticAccountKeys
+    .slice(0, requiredSigners)
+    .findIndex((key) => key.equals(signer));
+  const signerHasSignature =
+    signerIndex >= 0 && isNonZeroSignature(tx.signatures[signerIndex]);
+
+  console.log(
+    `[${label}] signatures ${existingSignatures}/${requiredSigners}; escrowRequired=${
+      signerIndex >= 0
+    }; escrowSigned=${signerHasSignature}`,
+  );
+}
+
+async function describeSolanaSendError(
+  err: any,
+  connection: Connection,
+): Promise<string> {
+  const parts = [err?.message ?? String(err)];
+  const logs = err?.logs;
+  if (Array.isArray(logs) && logs.length > 0) {
+    parts.push(`logs=${JSON.stringify(logs)}`);
+  } else if (typeof err?.getLogs === "function") {
+    try {
+      const fetchedLogs = await err.getLogs(connection);
+      if (Array.isArray(fetchedLogs) && fetchedLogs.length > 0) {
+        parts.push(`logs=${JSON.stringify(fetchedLogs)}`);
+      }
+    } catch {
+      /* logs unavailable */
+    }
+  }
+  if (err?.code) parts.push(`code=${err.code}`);
+  return parts.join(" | ").slice(0, 1500);
+}
+
 /**
- * Sign + send + HTTP-confirm a VersionedTransaction using the escrow keypair.
+ * Sign + send + HTTP-confirm a transaction we fully own/build locally.
  * - Re-signs with a fresh recent blockhash on each attempt so we don't get
  *   stuck on `block height exceeded` after a slow leader.
  * - Polls `getSignatureStatuses` and rebroadcasts the same signed bytes
  *   periodically; Solana de-dupes so it costs us nothing extra.
  * - Throws on permanent on-chain errors instead of retrying.
+ *
+ * Do NOT use this for transactions returned by Bags. Those may include
+ * Bags/program-side signatures tied to the original message + blockhash.
  */
 async function sendVersionedTransactionWithHttpConfirm(
   connection: Connection,
