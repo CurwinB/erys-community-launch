@@ -12,6 +12,7 @@ import {
   waitForSlotsToPass,
 } from "@bagsfm/bags-sdk";
 import { decryptEscrowKey } from "./decrypt";
+import fetch from "node-fetch";
 import {
   Launch,
   Contribution,
@@ -509,7 +510,15 @@ export async function executeBagsLaunch(
   }
 
   const tokenMint = new PublicKey(tokenInfo.tokenMint);
-  const ipfsMetadataUrl = tokenInfo.tokenMetadata;
+  // Log the full tokenInfo so we can see every URL/CID Bags returns. Helps
+  // diagnose Step-3 500s where Bags' backend can't fetch our metadata URL.
+  try {
+    console.log(`tokenInfo keys: ${JSON.stringify(Object.keys(tokenInfo))}`);
+    console.log(`tokenInfo full: ${JSON.stringify(tokenInfo)}`);
+  } catch {
+    // ignore stringify errors
+  }
+  let ipfsMetadataUrl = pickBestMetadataUrl(tokenInfo);
   console.log(`Fresh tokenMint: ${tokenMint.toBase58()}`);
   console.log(`Fresh metadataUrl: ${ipfsMetadataUrl}`);
 
@@ -953,9 +962,13 @@ export async function executeBagsLaunch(
   let launchTx!: VersionedTransaction;
   // createLaunchTransaction is a build-only HTTP call (no broadcast), so
   // it's safe to retry on transient 5xx / network errors caused by Bags'
-  // indexer lag. We use exponential backoff: 2s, 4s, 8s, 16s, 32s.
+  // indexer lag OR by Bags' backend timing out fetching our metadata URL.
+  // We use longer backoff (5/15/30/60s = ~110s span) and rotate the
+  // metadata gateway between attempts so each retry exercises a different
+  // upstream path.
   {
     const MAX_LAUNCH_TX_ATTEMPTS = 5;
+    const ATTEMPT_BACKOFFS_MS = [5_000, 15_000, 30_000, 60_000];
     const isTransientBagsError = (err: any, msg: string): boolean => {
       const status = err?.response?.status ?? err?.status;
       if (typeof status === "number" && (status >= 500 || status === 429)) {
@@ -967,8 +980,41 @@ export async function executeBagsLaunch(
     };
 
     let lastLaunchErr: any = null;
+    let allTransient = true;
     let built = false;
     for (let attempt = 1; attempt <= MAX_LAUNCH_TX_ATTEMPTS; attempt++) {
+      // Pre-warm the metadata URL ourselves so a cold-cache 504 surfaces
+      // here (visible) instead of inside Bags' backend (opaque 500).
+      // On attempt >= 2, rotate to an alternate gateway.
+      if (attempt >= 2) {
+        const rotated = rotateMetadataGateway(ipfsMetadataUrl, attempt);
+        if (rotated && rotated !== ipfsMetadataUrl) {
+          console.warn(
+            `Rotating metadata gateway for attempt ${attempt}: ${ipfsMetadataUrl} -> ${rotated}`,
+          );
+          ipfsMetadataUrl = rotated;
+        }
+      }
+      const reachable = await verifyMetadataReachable(ipfsMetadataUrl);
+      if (!reachable.ok) {
+        console.warn(
+          `Metadata pre-warm failed for ${ipfsMetadataUrl}: ${reachable.reason}`,
+        );
+      } else {
+        console.log(
+          `Metadata pre-warm OK (${reachable.status}, ${reachable.bytes ?? "?"} bytes) ${ipfsMetadataUrl}`,
+        );
+      }
+      console.log(
+        `Step 3 payload (attempt ${attempt}): ${JSON.stringify({
+          metadataUrl: ipfsMetadataUrl,
+          tokenMint: tokenMint.toBase58(),
+          launchWallet: escrowPubkey.toBase58(),
+          initialBuyLamports: Number(netBuyLamports),
+          configKey: configKeyStr,
+          claimerCount: feeClaimers.length,
+        })}`,
+      );
       try {
         launchTx = await sdk.tokenLaunch.createLaunchTransaction({
           metadataUrl: ipfsMetadataUrl,
@@ -982,33 +1028,42 @@ export async function executeBagsLaunch(
       } catch (err: any) {
         lastLaunchErr = err;
         const msg = describeBagsError(err);
+        const transient = isTransientBagsError(err, msg);
+        if (!transient) allTransient = false;
         if (
           attempt < MAX_LAUNCH_TX_ATTEMPTS &&
-          isTransientBagsError(err, msg)
+          transient
         ) {
-          const backoffMs = Math.min(32_000, 2_000 * 2 ** (attempt - 1));
+          const backoffMs =
+            ATTEMPT_BACKOFFS_MS[attempt - 1] ?? 60_000;
           console.warn(
             `createLaunchTransaction transient failure on attempt ${attempt}/${MAX_LAUNCH_TX_ATTEMPTS} (${msg}); retrying in ${backoffMs}ms`,
           );
           await new Promise((r) => setTimeout(r, backoffMs));
           continue;
         }
-        // Non-transient (4xx schema/auth) or final attempt — give up.
-        // Build-only failure: no tx was broadcast, but the fee-share
-        // config IS on-chain and the stored fee_share_config_key lets a
-        // manual retry reuse it. Keep escrow funded for the retry.
-        await setFailedNoRefund(
-          launch.id,
-          `createLaunchTransaction failed after ${attempt} attempt(s) (configKey=${configKeyStr}, retry can reuse config): ${msg}`,
-        );
+        // No on-chain launch tx was ever broadcast at this point.
+        // - Pure-5xx/network exhaustion = Bags is down. Auto-refund so
+        //   contributors get their SOL back without manual operator action.
+        //   The fee-share config PDA stays on-chain (harmless, idle).
+        // - Any 4xx/non-transient error = our request shape is wrong;
+        //   keep funds in escrow and surface to operator via no-refund path.
+        const reason = `createLaunchTransaction failed after ${attempt} attempt(s) (configKey=${configKeyStr}, retry can reuse config): ${msg}`;
+        if (transient && allTransient) {
+          await setFailed(launch.id, reason);
+        } else {
+          await setFailedNoRefund(launch.id, reason);
+        }
         return;
       }
     }
     if (!built) {
-      await setFailedNoRefund(
-        launch.id,
-        `createLaunchTransaction exhausted ${MAX_LAUNCH_TX_ATTEMPTS} attempts (configKey=${configKeyStr}): ${describeBagsError(lastLaunchErr)}`,
-      );
+      const reason = `createLaunchTransaction exhausted ${MAX_LAUNCH_TX_ATTEMPTS} attempts (configKey=${configKeyStr}): ${describeBagsError(lastLaunchErr)}`;
+      if (allTransient) {
+        await setFailed(launch.id, reason);
+      } else {
+        await setFailedNoRefund(launch.id, reason);
+      }
       return;
     }
   }
