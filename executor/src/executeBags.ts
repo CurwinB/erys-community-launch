@@ -499,11 +499,11 @@ export async function executeBagsLaunch(
 
     try {
       // Create the LUT first (use SDK helper per docs)
-      const createSig = await signAndSendTransaction(
+      const createSig = await sendVersionedTxWithPolling(
         connection,
-        commitment,
         lutResult.creationTransaction,
         escrowKeypair,
+        "lut-create",
       );
       console.log(`LUT created: ${createSig}`);
 
@@ -513,11 +513,11 @@ export async function executeBagsLaunch(
 
       // Extend with claimer addresses
       for (let i = 0; i < lutResult.extendTransactions.length; i++) {
-        const sig = await signAndSendTransaction(
+        const sig = await sendVersionedTxWithPolling(
           connection,
-          commitment,
           lutResult.extendTransactions[i],
           escrowKeypair,
+          `lut-extend-${i + 1}`,
         );
         console.log(
           `LUT extend ${i + 1}/${lutResult.extendTransactions.length}: ${sig}`,
