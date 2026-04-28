@@ -529,7 +529,8 @@ export async function executeBagsLaunch(
   } catch {
     // ignore stringify errors
   }
-  let ipfsMetadataUrl = pickBestMetadataUrl(tokenInfo);
+  // Per Bags docs: pass `tokenMetadata` back verbatim. Do not rewrite.
+  const ipfsMetadataUrl: string = tokenInfo?.tokenMetadata ?? "";
   console.log(`Fresh tokenMint: ${tokenMint.toBase58()}`);
   console.log(`Fresh metadataUrl: ${ipfsMetadataUrl}`);
 
