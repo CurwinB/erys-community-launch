@@ -38,7 +38,6 @@ const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
 // IDL). We use it together with the WSOL quote mint to derive the
 // fee_share_config PDA as a final fallback when the Bags API tells us a
 // config exists but does not surface its key.
-const BAGS_API_BASE_URL = "https://public-api-v2.bags.fm/api/v1";
 const BAGS_DEFAULT_CONFIG_TYPE = "fa29606e-5e48-4c37-827f-4b03d58ee23d";
 
 // HTTP-polling confirmation tunables. Mirrors the proven pattern in
