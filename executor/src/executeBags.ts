@@ -56,95 +56,15 @@ function isNonZeroSignature(sig: Uint8Array): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Metadata URL helpers
+// Metadata URL handling
 //
-// Bags' createTokenInfoAndMetadata returns an `ipfs.io` gateway URL by
-// default. `ipfs.io` is frequently slow / 504s, and when Bags' backend
-// fetches that URL during createLaunchTransaction a timeout there manifests
-// to us as an opaque 500. We:
-//  1. Prefer any non-`ipfs.io` URL Bags itself returns.
-//  2. Pre-warm whatever URL we end up sending so cold-cache 504s surface
-//     here (visible) instead of inside Bags (opaque).
-//  3. Rotate to alternate public gateways on retry attempts.
+// Per the official Bags example
+// (https://docs.bags.fm/how-to-guides/launch-token), the value returned by
+// `sdk.tokenLaunch.createTokenInfoAndMetadata()` as `tokenMetadata` MUST be
+// passed back verbatim to `createLaunchTransaction({ metadataUrl })`. Bags'
+// backend validates against the URL it pinned to; rewriting it to another
+// gateway causes opaque 500s.
 // ---------------------------------------------------------------------------
-
-const IPFS_GATEWAYS = [
-  (cid: string, path: string) => `https://${cid}.ipfs.dweb.link${path}`,
-  (cid: string, path: string) => `https://cf-ipfs.com/ipfs/${cid}${path}`,
-  (cid: string, path: string) => `https://ipfs.io/ipfs/${cid}${path}`,
-  (cid: string, path: string) => `https://gateway.pinata.cloud/ipfs/${cid}${path}`,
-];
-
-function extractIpfsCid(url: string): { cid: string; path: string } | null {
-  // Match either `/ipfs/<cid><path>` or subdomain form `<cid>.ipfs.<host><path>`.
-  const pathMatch = url.match(/\/ipfs\/([A-Za-z0-9]+)(\/.*)?$/);
-  if (pathMatch) {
-    return { cid: pathMatch[1], path: pathMatch[2] ?? "" };
-  }
-  const subMatch = url.match(/^https?:\/\/([A-Za-z0-9]+)\.ipfs\.[^/]+(\/.*)?$/);
-  if (subMatch) {
-    return { cid: subMatch[1], path: subMatch[2] ?? "" };
-  }
-  return null;
-}
-
-function pickBestMetadataUrl(tokenInfo: any): string {
-  const candidates: string[] = [];
-  for (const key of [
-    "tokenMetadata",
-    "metadataUri",
-    "metadataUrl",
-    "metadataURI",
-    "uri",
-  ]) {
-    const v = tokenInfo?.[key];
-    if (typeof v === "string" && v.length > 0) candidates.push(v);
-  }
-  if (candidates.length === 0) {
-    // Fall back to whatever `tokenMetadata` was — even empty string — so the
-    // SDK call below errors clearly instead of swallowing.
-    return tokenInfo?.tokenMetadata ?? "";
-  }
-  // Prefer Bags-hosted / non-public-gateway URLs first.
-  const nonIpfsIo = candidates.find((u) => !/ipfs\.io/i.test(u));
-  if (nonIpfsIo) return nonIpfsIo;
-  // Otherwise prefer subdomain form (faster propagation) over path form.
-  const cid = extractIpfsCid(candidates[0]);
-  if (cid) {
-    return `https://${cid.cid}.ipfs.dweb.link${cid.path}`;
-  }
-  return candidates[0];
-}
-
-function rotateMetadataGateway(url: string, attempt: number): string | null {
-  const cid = extractIpfsCid(url);
-  if (!cid) return null;
-  // attempt is 1-indexed and we only call this for attempt >= 2.
-  const idx = (attempt - 1) % IPFS_GATEWAYS.length;
-  return IPFS_GATEWAYS[idx](cid.cid, cid.path);
-}
-
-async function verifyMetadataReachable(
-  url: string,
-): Promise<{ ok: boolean; status?: number; bytes?: number; reason?: string }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      signal: controller.signal as any,
-    });
-    if (!res.ok) {
-      return { ok: false, status: res.status, reason: `HTTP ${res.status}` };
-    }
-    const text = await res.text();
-    return { ok: true, status: res.status, bytes: text.length };
-  } catch (err: any) {
-    return { ok: false, reason: err?.message ?? String(err) };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
 
 function logTransactionSignatureState(
   tx: VersionedTransaction,
@@ -609,7 +529,8 @@ export async function executeBagsLaunch(
   } catch {
     // ignore stringify errors
   }
-  let ipfsMetadataUrl = pickBestMetadataUrl(tokenInfo);
+  // Per Bags docs: pass `tokenMetadata` back verbatim. Do not rewrite.
+  const ipfsMetadataUrl: string = tokenInfo?.tokenMetadata ?? "";
   console.log(`Fresh tokenMint: ${tokenMint.toBase58()}`);
   console.log(`Fresh metadataUrl: ${ipfsMetadataUrl}`);
 
@@ -1051,51 +972,33 @@ export async function executeBagsLaunch(
     `Step 3: createLaunchTransaction (mint=${tokenMint.toBase58()} configKey=${configKeyStr} netBuyLamports=${netBuyLamports.toString()} claimers=${feeClaimers.length})`,
   );
   let launchTx!: VersionedTransaction;
-  // createLaunchTransaction is a build-only HTTP call (no broadcast), so
-  // it's safe to retry on transient 5xx / network errors caused by Bags'
-  // indexer lag OR by Bags' backend timing out fetching our metadata URL.
-  // We use longer backoff (5/15/30/60s = ~110s span) and rotate the
-  // metadata gateway between attempts so each retry exercises a different
-  // upstream path.
+  // createLaunchTransaction is a build-only HTTP call (no broadcast). Per
+  // Bags docs we pass `tokenInfo.tokenMetadata` verbatim and treat 5xx as
+  // terminal — retrying an identical payload against the same backend
+  // doesn't help. We keep a tiny safety net for genuine transport blips
+  // (network / 429 / 503).
   {
-    const MAX_LAUNCH_TX_ATTEMPTS = 5;
-    const ATTEMPT_BACKOFFS_MS = [5_000, 15_000, 30_000, 60_000];
+    const MAX_LAUNCH_TX_ATTEMPTS = 3;
+    const ATTEMPT_BACKOFFS_MS = [5_000, 15_000];
     const isTransientBagsError = (err: any, msg: string): boolean => {
       const status = err?.response?.status ?? err?.status;
-      if (typeof status === "number" && (status >= 500 || status === 429)) {
+      // 500 is terminal — Bags either rejected the payload or is genuinely
+      // broken; either way retrying is useless and just burns the worker
+      // lock. Only retry on rate-limit / temporary unavailability.
+      if (typeof status === "number" && (status === 429 || status === 503)) {
         return true;
       }
-      return /status\s*5\d\d|status\s*429|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|network|socket hang up/i.test(
+      if (typeof status === "number" && status >= 400) {
+        return false;
+      }
+      return /status\s*429|status\s*503|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up/i.test(
         msg,
       );
     };
 
     let lastLaunchErr: any = null;
-    let allTransient = true;
     let built = false;
     for (let attempt = 1; attempt <= MAX_LAUNCH_TX_ATTEMPTS; attempt++) {
-      // Pre-warm the metadata URL ourselves so a cold-cache 504 surfaces
-      // here (visible) instead of inside Bags' backend (opaque 500).
-      // On attempt >= 2, rotate to an alternate gateway.
-      if (attempt >= 2) {
-        const rotated = rotateMetadataGateway(ipfsMetadataUrl, attempt);
-        if (rotated && rotated !== ipfsMetadataUrl) {
-          console.warn(
-            `Rotating metadata gateway for attempt ${attempt}: ${ipfsMetadataUrl} -> ${rotated}`,
-          );
-          ipfsMetadataUrl = rotated;
-        }
-      }
-      const reachable = await verifyMetadataReachable(ipfsMetadataUrl);
-      if (!reachable.ok) {
-        console.warn(
-          `Metadata pre-warm failed for ${ipfsMetadataUrl}: ${reachable.reason}`,
-        );
-      } else {
-        console.log(
-          `Metadata pre-warm OK (${reachable.status}, ${reachable.bytes ?? "?"} bytes) ${ipfsMetadataUrl}`,
-        );
-      }
       console.log(
         `Step 3 payload (attempt ${attempt}): ${JSON.stringify({
           metadataUrl: ipfsMetadataUrl,
@@ -1120,41 +1023,30 @@ export async function executeBagsLaunch(
         lastLaunchErr = err;
         const msg = describeBagsError(err);
         const transient = isTransientBagsError(err, msg);
-        if (!transient) allTransient = false;
         if (
           attempt < MAX_LAUNCH_TX_ATTEMPTS &&
           transient
         ) {
           const backoffMs =
-            ATTEMPT_BACKOFFS_MS[attempt - 1] ?? 60_000;
+            ATTEMPT_BACKOFFS_MS[attempt - 1] ?? 15_000;
           console.warn(
             `createLaunchTransaction transient failure on attempt ${attempt}/${MAX_LAUNCH_TX_ATTEMPTS} (${msg}); retrying in ${backoffMs}ms`,
           );
           await new Promise((r) => setTimeout(r, backoffMs));
           continue;
         }
-        // No on-chain launch tx was ever broadcast at this point.
-        // - Pure-5xx/network exhaustion = Bags is down. Auto-refund so
-        //   contributors get their SOL back without manual operator action.
-        //   The fee-share config PDA stays on-chain (harmless, idle).
-        // - Any 4xx/non-transient error = our request shape is wrong;
-        //   keep funds in escrow and surface to operator via no-refund path.
+        // No on-chain launch tx was ever broadcast at this point, so
+        // contributor SOL is still in escrow. Auto-refund regardless of
+        // error class — keeping funds locked never helps and the fee-share
+        // config PDA stays on-chain harmlessly.
         const reason = `createLaunchTransaction failed after ${attempt} attempt(s) (configKey=${configKeyStr}, retry can reuse config): ${msg}`;
-        if (transient && allTransient) {
-          await setFailed(launch.id, reason);
-        } else {
-          await setFailedNoRefund(launch.id, reason);
-        }
+        await setFailed(launch.id, reason);
         return;
       }
     }
     if (!built) {
       const reason = `createLaunchTransaction exhausted ${MAX_LAUNCH_TX_ATTEMPTS} attempts (configKey=${configKeyStr}): ${describeBagsError(lastLaunchErr)}`;
-      if (allTransient) {
-        await setFailed(launch.id, reason);
-      } else {
-        await setFailedNoRefund(launch.id, reason);
-      }
+      await setFailed(launch.id, reason);
       return;
     }
   }
