@@ -17,6 +17,7 @@ import {
   Contribution,
   supabase,
   setFailed,
+  setFailedNoRefund,
   setLaunched,
   storeFeeShareConfig,
 } from "./db";
@@ -29,6 +30,24 @@ const BAGS_API_KEY = process.env.BAGS_API_KEY!;
 const BAGS_PARTNER_WALLET = process.env.BAGS_PARTNER_WALLET!;
 const BAGS_PARTNER_CONFIG = process.env.BAGS_PARTNER_CONFIG!;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
+
+// Bags fee-share v2 program (matches BAGS_FEE_SHARE_V2_PROGRAM_ID inside the SDK).
+// Used for deterministic PDA derivation as a final fallback when the Bags
+// API tells us a config exists but does not surface its key.
+const BAGS_FEE_SHARE_V2_PROGRAM_ID = new PublicKey(
+  "BAGSB7d4dDF7HKfL1Hh6yKfABBs2HfsysB1g2pi3yY8t",
+);
+const WSOL_MINT = new PublicKey("So11111111111111111111111111111111111111112");
+const BAGS_API_BASE_URL = "https://public-api-v2.bags.fm/api/v1";
+const BAGS_DEFAULT_CONFIG_TYPE = "fa29606e-5e48-4c37-827f-4b03d58ee23d";
+
+function deriveBagsFeeShareConfigPda(baseMint: PublicKey): PublicKey {
+  const [pda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("fee_share_config"), baseMint.toBuffer(), WSOL_MINT.toBuffer()],
+    BAGS_FEE_SHARE_V2_PROGRAM_ID,
+  );
+  return pda;
+}
 
 const CREATOR_MIN_BPS = 750;
 const TOTAL_BPS = 10_000;
