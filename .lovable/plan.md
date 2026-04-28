@@ -1,100 +1,105 @@
-## Diagnosis
+## Diagnosis — what the logs actually show
 
-The Railway log shows the launch died at Step 3:
+The log timeline for launch `049c3955…`:
 
 ```
-Step 3: createLaunchTransaction (mint=EPGFBU1G…BAGS configKey=6UCKGxu7… netBuyLamports=255871440 claimers=2)
-Launch a7e8b27f… failed (no auto-refund): createLaunchTransaction failed
-  (configKey=6UCKGxu7…, retry can reuse config): Request failed with status 500
+16:45:23  Step 0  createTokenInfoAndMetadata    OK   (mint ARrob…BAGS, ipfs.io/ipfs/QmWhpb…)
+16:45:23  Step 2  fee-share config              built (key 5tPW…m5QM, needsCreation=true, 2 txs)
+16:45:24  fee-share-tx-1   submitted 2VQK…kJov
+16:45:26  fee-share-tx-2   submitted 2oQX…Sm7d
+16:45:28  Wait 25s for indexer
+16:45:58  fee_share_config 5tPW… confirmed on-chain (1048 bytes)   ← PDA verified
+16:45:58  Step 3  createLaunchTransaction (netBuy=255871440, claimers=2)
+          attempt 1/5 → 500 {"success":false,"response":"Internal server error"}
+          attempt 2/5 → 500 (same)
+          attempt 3/5 → 500 (same)
+          attempt 4/5 → 500 (same)
+16:46:29  attempt 5/5 → 500 — give up, setFailedNoRefund
 ```
 
-What we know for certain:
+**Everything we built last round worked:**
 
-- Steps 0, 2 succeeded. The fee-share config PDA is on-chain (`6UCKGxu7ppfJJJ9tsPYfTjVbDm997nqqyf4rnULevsjQ`) and persisted in the DB row, so any retry skips re-creation.
-- The 500 came from Bags' `POST /token-launch/create-launch-transaction` — a build-only HTTP call, **nothing was broadcast on-chain**, so escrow SOL is fully recoverable.
-- Bags' own docs say: "500 — retry with exponential backoff (max 5 attempts)". We currently fail on the first 500 and stop.
-- We waited only **10s** between fee-share-config confirmation and `createLaunchTransaction`. The fee-share PDA was just created two slots earlier on the *same* validator path; Bags' indexer can lag behind chain finalization, and a freshly-created config can return 500 if their backend reads from a stale replica.
-- Our error wrapper (`describeBagsError`) extracted only `Request failed with status 500` — it didn't surface Bags' JSON body (`{success:false,error:"…"}`) because the Bags SDK throws a generic `Error` whose `response` property isn't always populated. We're flying blind on the actual reason.
+- The retry loop fired all 5 attempts with proper backoff (2s/4s/8s/16s).
+- The 25 s indexer wait + on-chain `getAccountInfo` verification confirmed the fee-share PDA exists (1048 bytes — that's the correct config size).
+- `describeBagsError` now surfaces the real Bags body: `{"success":false,"response":"Internal server error"}`.
 
-So this is two problems compounding:
+**The failure is on Bags' side, not ours.** Their `POST /token-launch/create-launch-transaction` is returning a hard 500 for *this specific payload* across 30+ seconds of retries. That rules out a transient blip — something in the request itself is making their backend throw. Their error response is opaque ("Internal server error") because their server-side logging swallowed the real cause.
 
-1. **No retry on 500** for `createLaunchTransaction`, despite Bags explicitly recommending it and the call being trivially safe to retry (no on-chain side-effect).
-2. **No body capture** when the SDK throws — we only see "status 500", which is why we keep going back and forth.
+### What's different about this payload that could trip Bags
 
-There's also a UX problem: with `setFailedNoRefund`, the launch sits in `execution_failed` requiring the operator to manually click Retry. For a build-only failure where nothing landed, the executor should retry automatically inside the same run.
+Comparing our payload to known-good launches:
+
+| Field | Value | Risk |
+|---|---|---|
+| `metadataUrl` | `https://ipfs.io/ipfs/QmWhpb59D4rQNA8mKM7EyGmx17iRRZhwxHEeuMKG6AWAfr` | **High** — `ipfs.io` is a public gateway that's frequently rate-limited / 504s. If Bags' backend fetches this URL to validate the JSON or pull the image, a gateway timeout there manifests as a 500 to us. |
+| `tokenMint` | `ARrob…BAGS` (vanity grind suffix) | Low — Bags supports vanity mints. |
+| `launchWallet` | escrow pubkey | Low. |
+| `initialBuyLamports` | `255871440` (~0.256 SOL) | Low — well above the 10 M floor we check. |
+| `configKey` | `5tPW…m5QM` (just-created PDA) | Low — verified on-chain. |
+| `claimers` | 2 | Low. |
+
+Two other launches recently failed at the **same step** (per the prior plan in `.lovable/plan.md` — `a7e8b27f…` also died at `createLaunchTransaction` with a 500). The pattern is "everything before Step 3 succeeds, Step 3 returns 500". This strongly points at the **metadata URL** as the common offender — `createTokenInfoAndMetadata` returns an `ipfs.io` gateway URL, and Bags' indexer/validator on the next call has to fetch it. When `ipfs.io` 504s, Bags 500s.
+
+There's also a smaller risk: **Bags expects the metadata host they themselves wrote it to** (their own pinning service / CDN). Calling their helper to upload then handing the same URL back should be fine — but if their server-side fetcher uses a different gateway (or has a stricter timeout than the public `ipfs.io`), we'll see exactly this symptom.
 
 ---
 
-## Fix
+## Fix plan
 
-### 1. Retry `createLaunchTransaction` with backoff (executor/src/executeBags.ts)
+### 1. Stop using the `ipfs.io` URL — use the Bags-canonical URL
 
-Wrap the `sdk.tokenLaunch.createLaunchTransaction(...)` call in a retry loop:
+Inspect `tokenInfo` returned by `sdk.tokenLaunch.createTokenInfoAndMetadata`. The SDK returns multiple fields (`tokenMetadata`, sometimes `metadataUri`, sometimes a CID). We're currently picking `tokenMetadata` (which the logs show as `https://ipfs.io/...`). We should:
 
-- Up to **5 attempts** with exponential backoff: 2s, 4s, 8s, 16s, 32s.
-- Retry only on **500/502/503/504** and network errors. Do **not** retry 400/401/403/404 (per Bags docs).
-- Each retry reuses the existing `configKeyStr` (already persisted), so no extra SOL is spent.
-- Log each attempt and the captured Bags response body.
+- Log the **full** `tokenInfo` object once so we can see every URL Bags hands back (CID, gateway, alternate host).
+- Prefer a Bags-hosted URL (e.g. `https://storage.bags.fm/...` or whatever they pin to) over the public `ipfs.io` gateway.
+- If only `ipfs.io` is returned, rewrite to a more reliable gateway like `https://cf-ipfs.com/ipfs/<cid>` or `https://<cid>.ipfs.dweb.link` *and* warm it ourselves (`HEAD`) before calling Step 3 so any cold-cache 504 happens to us, not to Bags.
 
-Pseudocode:
+### 2. Pre-validate the metadata URL before Step 3
 
-```text
-for attempt in 1..=5:
-  try:
-    launchTx = await sdk.tokenLaunch.createLaunchTransaction({...})
-    break
-  catch err:
-    body = await captureBagsErrorBody(err)   // see step 2
-    status = body.status
-    log("createLaunchTransaction attempt {attempt} failed status={status} body={body}")
-    if status in {400,401,403,404}: setFailedNoRefund(...); return
-    if attempt == 5: setFailedNoRefund(...); return
-    await sleep(2000 * 2^(attempt-1))
-```
+Before calling `createLaunchTransaction`, do a `fetch(ipfsMetadataUrl, { method: "GET" })` from the executor itself with a 10 s timeout. If it fails or returns non-2xx, swap to an alternate gateway (or re-pin) and retry. This makes the failure mode visible and recoverable instead of hidden inside Bags' 500.
 
-### 2. Capture the actual Bags error body
+### 3. Make the retry loop smarter — call out *why* we're retrying
 
-The Bags SDK uses axios under the hood and the response body lives on `err.response.data`, but our `describeBagsError` only reads it when present and falls back to `err.message`. Strengthen it:
+Right now all 5 attempts hit Bags within 30 s with the same payload and the same metadata URL — so they all fail the same way. Two cheap improvements:
 
-- Inspect `err.response?.data`, `err.response?.body`, `err.cause`, `err.body`, and `err.toJSON?.()`.
-- If the SDK swallowed the body, fall back to a direct `fetch` of `${BAGS_API_BASE_URL}/token-launch/create-launch-transaction` with the same payload so we always get the JSON `{success,error}` text in `execution_error`.
+- On attempt ≥2, **re-resolve the metadata** (call `createTokenInfoAndMetadata` again to get a fresh URL, or rotate gateway). The mint stays the same, but the URL we send to Bags differs. This costs nothing on-chain.
+- Stretch backoff to `5s, 15s, 30s, 60s` so we span at least 2 minutes — long enough for a real Bags-side incident to clear, short enough to stay within the worker lock window (120 s; bump to 240 s if needed).
 
-This means future 500s will tell us *why* (e.g. "config not yet indexed", "invalid initialBuyLamports", "metadata fetch failed").
+### 4. Auto-refund instead of "no refund" when Step 3 exhausts retries
 
-### 3. Wait longer for the fee-share config to index
+Today we call `setFailedNoRefund` so the operator must click Retry/Refund. But Step 3 is build-only — no SOL was spent into a curve. The fee-share config PDA on-chain is harmless. Change the exhausted-retry branch to `setFailed` (which auto-refunds contributors) when:
 
-10s is empirically too short when the fee-share config is brand-new. Two changes:
+- The error is purely 5xx/network across all 5 attempts (Bags genuinely down).
+- AND no on-chain launch tx was ever broadcast (always true at this point in the code).
 
-- Bump the post-config sleep from **10s → 25s** when `needsCreation === true` was true on this run.
-- After the sleep, **verify the config PDA actually exists** via `connection.getAccountInfo(configKey, "confirmed")` before calling `createLaunchTransaction`. If absent, sleep another 10s and recheck (max 3 rechecks). This eliminates the race where Bags' API reads from an indexer that hasn't caught up to our confirmed slot.
+Operator can still investigate later; contributors get their SOL back automatically.
 
-If config was reused (`needsCreation === false`) we keep the 10s wait — it's already on-chain and indexed.
+### 5. Recover the stuck launch `049c3955…`
 
-### 4. Treat exhausted-retry build-only failures as auto-refundable
+After the patch:
+- **Option A (preferred):** click **Retry** in admin. The new code will reuse `configKey=5tPW…m5QM` (already on-chain), re-fetch metadata via the new gateway, and try again. Cost: nothing extra.
+- **Option B:** click **Refund (N)** to send the contributor SOL back. The fee-share PDA stays on-chain idle — harmless.
 
-Today `createLaunchTransaction` failure goes through `setFailedNoRefund` so contributor SOL is held until the admin acts. That made sense when we feared partial state, but this call is purely a build-time HTTP fetch — by definition no tx was broadcast. Change behaviour:
+No DB changes needed; both buttons already exist.
 
-- If retries are exhausted with **only** 500/network errors → use `setFailed` (auto-refund). The fee-share config PDA is harmless to leave on-chain; it just sits idle.
-- If we got a 4xx → still `setFailedNoRefund` (signals our request shape is wrong; admin should investigate before refund).
+### 6. Operational visibility
 
-This restores the auto-refund path the user expects when launches fail before any mint exists.
-
-### 5. Operational cleanup for the stuck launch `a7e8b27f-…`
-
-This launch already has the fee-share config on-chain. After the patch lands the operator can simply click **Retry** on the admin Launches tab — the new retry loop will reuse `configKey=6UCKGxu7…`, skip the fee-share step entirely, and call `createLaunchTransaction` up to 5 times. If it still fails (Bags backend genuinely broken), the operator can click the **Refund (2)** button next to it to return the 0.26 SOL to the two contributors.
-
-No code change is needed to recover this specific launch — the existing Retry/Refund admin UI handles it once the executor is patched.
+Add a single structured log line just before Step 3 dumping `{ metadataUrl, tokenMint, configKey, netBuyLamports, claimerCount, payloadBytes }` so future Bags 500s let us correlate against their support ticket without grepping multiple lines.
 
 ---
 
 ## Files to change
 
-- `executor/src/executeBags.ts` — retry loop around `createLaunchTransaction`, longer + verified post-config wait, smarter `setFailed` vs `setFailedNoRefund` decision, beefed-up `describeBagsError` (or a `fetchBagsLaunchTxDirect` fallback that returns the raw JSON body).
+- `executor/src/executeBags.ts`
+  - Step 0: log full `tokenInfo`, prefer non-`ipfs.io` URL, store chosen URL.
+  - New helper `pickBestMetadataUrl(tokenInfo)` + `verifyMetadataReachable(url)`.
+  - Step 3 retry loop: re-resolve metadata URL between attempts, longer backoff (5/15/30/60), and switch the exhausted-retry branch from `setFailedNoRefund` → `setFailed` for pure-5xx cases.
+- `executor/src/executeLaunch.ts` — bump worker lock expiry to ~240 s if Step 3 backoff total exceeds 120 s.
 
-No DB schema changes. No edge-function changes. No admin UI changes (the Refund/Retry buttons added in the prior task already cover the manual-recovery path for the currently stuck launch).
+No DB schema changes. No edge function changes. No UI changes.
 
 ---
 
-## Why this finally fixes the loop
+## Why this fixes the loop for real
 
-Past iterations chased "Config already exists", signature-verification races, and missing meteoraConfigKey — all of which we've already fixed. This is a *different* class of failure: a transient 500 from Bags on the next API call, made worse by an indexer race we never accounted for. Retrying with backoff + waiting for indexer + capturing the real error body covers all three failure modes that have surfaced on this endpoint, and aligns directly with Bags' published retry guidance.
+Past iterations chased the *transport* (retries, backoff, indexer race, error capture). All of that is now correct and the logs prove it. What's left is the *payload*: Bags' backend appears to choke when fetching/validating our `ipfs.io` metadata URL. Switching to a faster/canonical gateway, pre-warming it ourselves, and rotating it on retry directly attacks the only remaining variable. Auto-refund on exhausted retries closes the contributor-experience gap so a Bags outage no longer requires manual operator action.
