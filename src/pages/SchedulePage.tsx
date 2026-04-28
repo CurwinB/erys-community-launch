@@ -330,6 +330,14 @@ const SchedulePage = () => {
       setShowAuthFlow(true);
       return;
     }
+    if (!currentPlatformEnabled) {
+      toast({
+        title: "Platform paused",
+        description: `${platform === "bags" ? "Bags.fm" : "Pump.fun"} launches are temporarily paused for maintenance.`,
+        variant: "destructive",
+      });
+      return;
+    }
     if (creatorContribError || form.creatorContribution === "") {
       toast({ title: "Invalid contribution", description: creatorContribError || "Enter your contribution amount.", variant: "destructive" });
       return;
