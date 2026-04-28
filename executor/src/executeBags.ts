@@ -712,12 +712,12 @@ export async function executeBagsLaunch(
     }
 
     try {
-      // Create the LUT first
-      const createSig = await sendVersionedTransactionWithHttpConfirm(
+      // Create the LUT first (use SDK helper per docs)
+      const createSig = await signAndSendTransaction(
         connection,
+        commitment,
         lutResult.creationTransaction,
         escrowKeypair,
-        "lut-create",
       );
       console.log(`LUT created: ${createSig}`);
 
@@ -727,11 +727,11 @@ export async function executeBagsLaunch(
 
       // Extend with claimer addresses
       for (let i = 0; i < lutResult.extendTransactions.length; i++) {
-        const sig = await sendVersionedTransactionWithHttpConfirm(
+        const sig = await signAndSendTransaction(
           connection,
+          commitment,
           lutResult.extendTransactions[i],
           escrowKeypair,
-          `lut-extend-${i + 1}`,
         );
         console.log(
           `LUT extend ${i + 1}/${lutResult.extendTransactions.length}: ${sig}`,
@@ -990,11 +990,13 @@ export async function executeBagsLaunch(
   // STEP 4: sign + send launch tx
   console.log("Step 4: sign + send launch tx");
   try {
-    const sig = await sendBagsPrebuiltTransactionWithHttpConfirm(
+    // Per Bags docs: use the SDK helper. It signs with our keypair, sends,
+    // and confirms using the SDK's commitment ("processed").
+    const sig = await signAndSendTransaction(
       connection,
+      commitment,
       launchTx,
       escrowKeypair,
-      "bags-launch-tx",
     );
     console.log(`Bags launch confirmed: ${sig}`);
     console.log(`Solscan: https://solscan.io/tx/${sig}`);
