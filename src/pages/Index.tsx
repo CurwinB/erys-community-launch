@@ -155,11 +155,19 @@ const Index = () => {
       <section id="launches" className="border-b border-border">
         <div className="container mx-auto px-4 py-16">
           {liveLaunchesLoading ? (
-            <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className="h-72 animate-pulse rounded-sm border border-border bg-card" />
-              ))}
-            </div>
+            isMobile ? (
+              <div className="flex flex-col divide-y divide-border border border-border">
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+                  <div key={i} className="h-[68px] animate-pulse bg-card" />
+                ))}
+              </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="h-72 animate-pulse rounded-sm border border-border bg-card" />
+                ))}
+              </div>
+            )
           ) : liveLaunches && liveLaunches.length > 0 ? (
             <>
             {isMobile ? (
@@ -247,11 +255,19 @@ const Index = () => {
           <h2 className="mb-8 text-2xl font-bold text-foreground">Completed Launches</h2>
 
           {completedLoading ? (
-            <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className="h-48 animate-pulse rounded-sm border border-border bg-card" />
-              ))}
-            </div>
+            isMobile ? (
+              <div className="flex flex-col divide-y divide-border border border-border">
+                {[1, 2, 3, 4, 5, 6].map((i) => (
+                  <div key={i} className="h-[68px] animate-pulse bg-card" />
+                ))}
+              </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="h-48 animate-pulse rounded-sm border border-border bg-card" />
+                ))}
+              </div>
+            )
           ) : completedLaunches && completedLaunches.length > 0 ? (
             <>
             {isMobile ? (
