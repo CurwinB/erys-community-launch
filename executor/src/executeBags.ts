@@ -10,7 +10,6 @@ import {
   BAGS_FEE_SHARE_V2_PROGRAM_ID,
   WRAPPED_SOL_MINT,
   waitForSlotsToPass,
-  signAndSendTransaction,
   sendBundleAndConfirm,
   createTipTransaction,
 } from "@bagsfm/bags-sdk";
@@ -39,6 +38,105 @@ const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
 // fee_share_config PDA as a final fallback when the Bags API tells us a
 // config exists but does not surface its key.
 const BAGS_DEFAULT_CONFIG_TYPE = "fa29606e-5e48-4c37-827f-4b03d58ee23d";
+
+/**
+ * Robust replacement for the Bags SDK `signAndSendTransaction` helper.
+ *
+ * The official helper does:
+ *   sendTransaction(skipPreflight: true, maxRetries: 0)
+ *   connection.confirmTransaction(...)
+ * which uses `signatureSubscribe` over WebSocket. Our RPC tier throws
+ * repeated `signatureSubscribe` errors, so confirmTransaction can report
+ * a blockhash-expiry failure even after the transaction has actually
+ * landed and finalized on-chain.
+ *
+ * This helper signs the VersionedTransaction with `keypair`, broadcasts it,
+ * polls `getSignatureStatuses` over HTTP, periodically rebroadcasts, and
+ * before declaring failure does a final history lookup. Returns the
+ * signature on success; throws otherwise.
+ */
+async function sendVersionedTxWithPolling(
+  connection: Connection,
+  tx: VersionedTransaction,
+  keypair: Keypair,
+  label: string,
+  opts: { timeoutMs?: number; intervalMs?: number; rebroadcastEveryMs?: number } = {},
+): Promise<string> {
+  const timeoutMs = opts.timeoutMs ?? 90_000;
+  const intervalMs = opts.intervalMs ?? 2_000;
+  const rebroadcastEveryMs = opts.rebroadcastEveryMs ?? 5_000;
+
+  tx.sign([keypair]);
+  const rawTx = tx.serialize();
+
+  const signature = await connection.sendRawTransaction(rawTx, {
+    skipPreflight: true,
+    maxRetries: 0,
+  });
+  console.log(`[${label}] submitted ${signature}`);
+
+  const start = Date.now();
+  let lastRebroadcast = start;
+  while (Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    try {
+      const statuses = await connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: true,
+      });
+      const s = statuses?.value?.[0];
+      if (s) {
+        if (s.err) {
+          throw new Error(
+            `tx ${signature} on-chain error: ${JSON.stringify(s.err)}`,
+          );
+        }
+        if (
+          s.confirmationStatus === "confirmed" ||
+          s.confirmationStatus === "finalized"
+        ) {
+          return signature;
+        }
+      }
+    } catch (pollErr: any) {
+      if (/on-chain error/.test(pollErr?.message ?? "")) throw pollErr;
+      console.warn(
+        `[${label}] getSignatureStatuses transient error: ${pollErr?.message ?? pollErr}`,
+      );
+    }
+    if (Date.now() - lastRebroadcast >= rebroadcastEveryMs) {
+      lastRebroadcast = Date.now();
+      try {
+        await connection.sendRawTransaction(rawTx, {
+          skipPreflight: true,
+          maxRetries: 0,
+        });
+      } catch {
+        /* ignore — leader may already have it */
+      }
+    }
+  }
+
+  // Final history lookup — the tx may have landed in the last poll window.
+  try {
+    const finalStatuses = await connection.getSignatureStatuses([signature], {
+      searchTransactionHistory: true,
+    });
+    const finalStatus = finalStatuses?.value?.[0];
+    if (
+      finalStatus &&
+      !finalStatus.err &&
+      (finalStatus.confirmationStatus === "confirmed" ||
+        finalStatus.confirmationStatus === "finalized")
+    ) {
+      return signature;
+    }
+  } catch {
+    /* ignore */
+  }
+  throw new Error(
+    `[${label}] tx ${signature} not confirmed within ${timeoutMs}ms`,
+  );
+}
 
 /**
  * Best-effort extractor for Bags SDK / fetch / axios-style errors so the
@@ -401,11 +499,11 @@ export async function executeBagsLaunch(
 
     try {
       // Create the LUT first (use SDK helper per docs)
-      const createSig = await signAndSendTransaction(
+      const createSig = await sendVersionedTxWithPolling(
         connection,
-        commitment,
         lutResult.creationTransaction,
         escrowKeypair,
+        "lut-create",
       );
       console.log(`LUT created: ${createSig}`);
 
@@ -415,11 +513,11 @@ export async function executeBagsLaunch(
 
       // Extend with claimer addresses
       for (let i = 0; i < lutResult.extendTransactions.length; i++) {
-        const sig = await signAndSendTransaction(
+        const sig = await sendVersionedTxWithPolling(
           connection,
-          commitment,
           lutResult.extendTransactions[i],
           escrowKeypair,
+          `lut-extend-${i + 1}`,
         );
         console.log(
           `LUT extend ${i + 1}/${lutResult.extendTransactions.length}: ${sig}`,
@@ -505,6 +603,19 @@ export async function executeBagsLaunch(
         `Bags fee-share build: meteoraConfigKey=${meteoraConfigKey.toBase58()} txs=${txs.length} bundles=${bundles.length}`,
       );
 
+      // Persist the meteoraConfigKey BEFORE submitting fee-share transactions.
+      // This way, if confirmation fails after the tx actually lands on-chain,
+      // an admin retry has the exact config key and we don't lose the
+      // recovery handle.
+      const earlyConfigKey = meteoraConfigKey.toBase58();
+      try {
+        await storeFeeShareConfig(launch.id, earlyConfigKey, feeClaimers.length);
+      } catch (persistErr: any) {
+        console.warn(
+          `Failed to pre-persist meteoraConfigKey ${earlyConfigKey}: ${persistErr?.message ?? persistErr}`,
+        );
+      }
+
       try {
         // 1) Submit bundles via Jito (with tip tx) per docs.
         for (let bIdx = 0; bIdx < bundles.length; bIdx++) {
@@ -528,33 +639,58 @@ export async function executeBagsLaunch(
           );
         }
 
-        // 2) Submit standalone transactions via the SDK helper.
+        // 2) Submit standalone transactions via our HTTP-polling helper.
+        // The SDK's signAndSendTransaction relies on signatureSubscribe and
+        // can false-fail with "block height exceeded" even when the tx
+        // actually lands on-chain.
         for (let i = 0; i < txs.length; i++) {
-          const sig = await signAndSendTransaction(
+          const sig = await sendVersionedTxWithPolling(
             connection,
-            commitment,
             txs[i],
             escrowKeypair,
+            `fee-share-tx-${i + 1}`,
           );
           console.log(`fee-share tx ${i + 1}/${txs.length} confirmed: ${sig}`);
         }
 
-        configKeyStr = meteoraConfigKey.toBase58();
-        await storeFeeShareConfig(launch.id, configKeyStr, feeClaimers.length);
+        configKeyStr = earlyConfigKey;
       } catch (err: any) {
         const msg = describeBagsError(err);
-        if (isPreflightOnlyError(msg)) {
+        // Recovery: even if our submission helper threw, the on-chain
+        // create_fee_config tx may have actually landed. Derive the PDA
+        // and verify with RPC. If it exists, treat the step as success
+        // and continue to createLaunchTransaction.
+        try {
+          const derived = deriveBagsFeeShareConfigPda(tokenMint);
+          const acc = await connection.getAccountInfo(derived, "confirmed");
+          if (acc) {
+            configKeyStr = derived.toBase58();
+            console.log(
+              `Fee-share submission threw (${msg}) but on-chain PDA ${configKeyStr} exists — recovering and continuing.`,
+            );
+            await storeFeeShareConfig(launch.id, configKeyStr, feeClaimers.length);
+            // Fall through to STEP 3 (createLaunchTransaction).
+          }
+        } catch (recoverErr: any) {
+          console.warn(
+            `PDA recovery check failed: ${recoverErr?.message ?? recoverErr}`,
+          );
+        }
+        if (configKeyStr) {
+          // recovered — break out of the catch and proceed
+        } else if (isPreflightOnlyError(msg)) {
           await setFailed(
             launch.id,
             `Fee-share submission rejected pre-flight (auto-refunding): ${msg}`,
           );
+          return;
         } else {
           await setFailedNoRefund(
             launch.id,
             `Fee-share submission failed (escrow may hold partial state, manual review): ${msg}`,
           );
+          return;
         }
-        return;
       }
     }
 
@@ -688,13 +824,13 @@ export async function executeBagsLaunch(
   // STEP 4: sign + send launch tx
   console.log("Step 4: sign + send launch tx");
   try {
-    // Per Bags docs: use the SDK helper. It signs with our keypair, sends,
-    // and confirms using the SDK's commitment ("processed").
-    const sig = await signAndSendTransaction(
+    // HTTP-polling helper instead of the SDK's signAndSendTransaction —
+    // see comment on sendVersionedTxWithPolling for why.
+    const sig = await sendVersionedTxWithPolling(
       connection,
-      commitment,
       launchTx,
       escrowKeypair,
+      "launch-tx",
     );
     console.log(`Bags launch confirmed: ${sig}`);
     console.log(`Solscan: https://solscan.io/tx/${sig}`);
