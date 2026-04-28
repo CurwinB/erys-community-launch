@@ -521,8 +521,18 @@ export async function executeBagsLaunch(
   console.log(`Executing Bags launch ${launch.id} (${launch.token_name})`);
 
   const connection = new Connection(SOLANA_RPC_URL, "confirmed");
-  const sdk = new BagsSDK(BAGS_API_KEY, connection, "confirmed");
+  // Per Bags official docs: instantiate the SDK with "processed" commitment.
+  // The SDK helpers (signAndSendTransaction / sendBundleAndConfirm) use this
+  // for their internal confirmation polling.
+  const sdk = new BagsSDK(BAGS_API_KEY, connection, "processed");
   const commitment = sdk.state.getCommitment();
+
+  // Strict local preflight before we ever talk to Bags.
+  const validationErr = validateBagsMetadata(launch);
+  if (validationErr) {
+    await setFailed(launch.id, `Bags metadata validation failed: ${validationErr}`);
+    return;
+  }
 
   // Decrypt escrow keypair
   const escrowSecret = decryptEscrowKey(
