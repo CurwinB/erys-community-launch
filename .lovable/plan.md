@@ -1,69 +1,48 @@
-I understand the frustration. This latest log is actually much clearer than the previous ones, and it shows a different failure than the last launch.
+## What's actually wrong
 
-Plain English diagnosis:
-- Latest failed launch: `017ef269-a234-418b-896f-301e8283bd45`.
-- It failed during `Step 2: createBagsFeeShareConfig`.
-- Bags returned 2 fee-share transactions for mint `72KB2wNG6vnVUBCS8yQ4QB4aaCj6sxZDPNM3JMg7BAGS`.
-- Our executor tried to send `fee-share-tx-1`, but Solana rejected it before it even reached the chain:
-  - `Transaction did not pass signature verification`
-  - `Last signature: <none>`
-- That means this was not a Bags launch 400, not the old “Config already exists” issue, and not the previous WebSocket confirmation issue.
+The launch `017ef269...` (ETEST, 14:28 UTC) failed at Step 2 with `Transaction did not pass signature verification`. Both contributions are still in escrow on-chain (0.21 + 0.06 SOL), unrefunded.
 
-The real cause:
-- The last fix replaced WebSocket confirmation with our own HTTP sender.
-- That part was the right direction, but the sender treated the Bags transaction like a transaction we fully own.
-- Bags fee-share transactions can be prebuilt and partially signed by Bags/program-side signers.
-- Our sender refreshed the blockhash and wiped all signatures before signing with only the escrow wallet.
-- That invalidated/missing-preserved Bags signatures, so Solana rejected the transaction with signature verification failure.
+The refund UI **is still there** — under the **Recovery** tab, every contributor row has a "Refund" button and there's a "Refund All Pending Contributors" button. The launch is in `execution_failed`, which is included in the recovery list, so it should appear.
 
-So the blunt answer is: we fixed the WebSocket problem too aggressively and accidentally broke Bags’ partial-signature requirement. That is why this kept moving from one failure to another.
+What changed and why it feels like refunds disappeared:
 
-Plan to fix properly:
+1. **Auto-refund was removed for ALL Bags failure paths.** In the previous fix, every Bags failure now calls `setFailedNoRefund` (executeBags.ts lines 854, 863, 892, 914). Before, Step 1/Step 2 pre-flight failures (where nothing landed on-chain) triggered automatic contributor refunds. Now nothing happens automatically — admin must go to Recovery tab and click Refund.
+2. **The "obvious" Refund action on the main Launches tab does not exist** — that tab only has a "Retry" button. So when a launch fails, the eye-catching action looks like Retry, and refund is hidden one tab over.
+3. The Step 2 no-refund decision is **wrong for this specific failure mode**: signature-verification rejection is a pre-flight error, the tx never hit the chain, no fee-share PDA was created. It is safe (and was previously the default) to auto-refund here.
 
-1. Split Bags transaction sending into two safe paths
-   - Keep an “owned transaction” sender only for transactions we fully build and fully sign ourselves.
-   - Add a separate “prebuilt Bags transaction” sender for transactions returned by Bags.
-   - The Bags sender will never change `recentBlockhash` and never wipe existing signatures.
+## The plan
 
-2. Preserve Bags signatures
-   - For fee-share transactions from `/fee-share/config`, deserialize the transaction exactly as Bags returned it.
-   - Add only the escrow wallet signature using `tx.sign([escrowKeypair])`.
-   - Preserve all existing signatures already attached to the transaction.
-   - Serialize and submit the exact signed transaction bytes.
+### 1. Auto-refund Step 2 pre-flight failures (executor)
 
-3. Retry expiry by rebuilding, not mutating
-   - If a Bags transaction expires or times out, do not refresh its blockhash locally.
-   - Instead, call Bags `/fee-share/config` again to get fresh transactions with a fresh blockhash/signature set.
-   - This keeps the Bags signing model intact.
+In `executor/src/executeBags.ts`, distinguish between:
+- **Pre-flight / never-landed errors** (signature verification, simulation rejected, blockhash never used, "Config already exists" returned by Bags before submit) → `setFailedAndRefund`
+- **Possibly-landed errors** (timeout/expiry after send, unknown send error after some signatures broadcast) → keep `setFailedNoRefund`
 
-4. Apply the same rule to final Bags launch transactions
-   - Treat `createLaunchTransaction` output as a Bags-provided transaction.
-   - Sign only with escrow and preserve any existing signatures.
-   - Confirm with HTTP polling, but do not rewrite the transaction.
+Add a small `isPreflightOnlyError(msg)` helper that matches:
+- `Transaction did not pass signature verification`
+- `Simulation failed`
+- `Config already exists` (returned synchronously from `createBagsFeeShareConfig` before any tx is built)
+- `createLaunchTransaction failed: Request failed with status 4xx` (Bags API rejected before any tx landed)
 
-5. Improve logs so this cannot stay hidden again
-   - Log transaction signer count, existing signature count, whether escrow signed, and the transaction label.
-   - On `SendTransactionError`, capture `err.logs` / `getLogs()` where available.
-   - Keep secrets/private keys out of logs.
+Use it at the four `setFailedNoRefund` call sites to choose refund vs. no-refund.
 
-6. Keep the latest failed launch recoverable
-   - This latest failure had `Last signature: <none>` and no `fee_share_config_key`, so no fee-share transaction landed.
-   - Because it used the no-auto-refund failure path, escrow funds should still be available for retry/manual recovery.
-   - After the fix is deployed to Railway, retrying `017ef269...` should be safe from a double-launch perspective because nothing was submitted on-chain.
+### 2. Add a "Refund Contributors" action on the Launches tab
 
-Technical notes:
-- Main file to update: `executor/src/executeBags.ts`.
-- The bad behavior is in `sendVersionedTransactionWithHttpConfirm`, specifically refreshing `tx.message.recentBlockhash` and resetting `tx.signatures` for Bags-returned transactions.
-- Required Bags order will remain unchanged:
+Edit `src/components/admin/LaunchesTab.tsx` so any row with `status === 'execution_failed'` (and at least one un-refunded contribution) gets a **Refund Contributors** button next to Retry. Clicking it opens a confirmation dialog and then bulk-calls the existing `refund-contributor` edge function for each pending contribution (same logic the Recovery tab already uses). This makes the action discoverable from the screen admins land on first.
 
-```text
-fee-share/config first
-then create-launch-transaction
-then send-transaction
-```
+### 3. One-time recovery for `017ef269...`
 
-After approval, I’ll make the executor change focused on Bags partial-signature preservation and HTTP confirmation.
+Once the UI button ships, click "Refund Contributors" on that row to return 0.21 SOL to `BvpGuD…9rxV` and 0.06 SOL to `62aKWr…ubaV` from the escrow `escrow_wallet_public_key`. No code change needed beyond #2; the existing `refund-contributor` function handles it.
 
-<lov-actions>
-<lov-link url="https://docs.lovable.dev/tips-tricks/troubleshooting">Troubleshooting docs</lov-link>
-</lov-actions>
+### 4. Clarify the failure message
+
+The current `execution_error` text is a wall of SDK boilerplate. In the executor, when we catch a `SendTransactionError`, log `err.logs` separately and store a short, human first sentence in `execution_error` (e.g. `"Bags fee-share tx rejected pre-flight: signature verification failed (no on-chain state). Safe to refund."`). Full details still go to Railway logs.
+
+## Files to edit
+
+- `executor/src/executeBags.ts` — add `isPreflightOnlyError`, route Step 2/3/4 failures to refund vs. no-refund, shorten error message.
+- `src/components/admin/LaunchesTab.tsx` — add "Refund Contributors" button + confirmation dialog for `execution_failed` rows.
+
+## Out of scope
+
+- Root-causing the underlying signature verification error itself (that's the prior open thread on Bags pre-built tx signing). This plan is specifically about restoring the refund path so stuck SOL can always be returned regardless of what failed.

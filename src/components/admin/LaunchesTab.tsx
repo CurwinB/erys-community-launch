@@ -1,4 +1,5 @@
 import { useMemo, useState, Fragment } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -13,7 +14,24 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ChevronDown, ChevronRight, Download, RotateCw } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Loader2,
+  RotateCw,
+  Undo2,
+} from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { useWallet } from "@/hooks/useWallet";
@@ -62,7 +80,67 @@ interface Props {
 const LaunchesTab = ({ launches, contributions }: Props) => {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
+  const [refunding, setRefunding] = useState<Set<string>>(new Set());
+  const [refundProgress, setRefundProgress] = useState<{
+    launchId: string;
+    current: number;
+    total: number;
+  } | null>(null);
+  const [confirmRefund, setConfirmRefund] = useState<{
+    launchId: string;
+    pending: Contribution[];
+    tokenSymbol: string;
+  } | null>(null);
   const { publicKey: walletAddress } = useWallet();
+  const queryClient = useQueryClient();
+
+  const runBulkRefund = async (launchId: string, pending: Contribution[]) => {
+    setRefunding((prev) => new Set(prev).add(launchId));
+    let success = 0;
+    let failed = 0;
+    try {
+      for (let i = 0; i < pending.length; i++) {
+        setRefundProgress({
+          launchId,
+          current: i + 1,
+          total: pending.length,
+        });
+        try {
+          const { data, error } = await supabase.functions.invoke(
+            "refund-contributor",
+            {
+              body: {
+                contribution_id: pending[i].id,
+                launch_id: launchId,
+              },
+            },
+          );
+          if (error) throw new Error(error.message);
+          if ((data as any)?.error) throw new Error((data as any).error);
+          success++;
+        } catch (err: any) {
+          failed++;
+          console.error("refund failed:", err?.message ?? err);
+        }
+        if (i < pending.length - 1) {
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+      toast({
+        title: "Refunds complete",
+        description: `${success} succeeded, ${failed} failed`,
+        variant: failed > 0 ? "destructive" : undefined,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["admin-dashboard"] });
+    } finally {
+      setRefundProgress(null);
+      setRefunding((prev) => {
+        const next = new Set(prev);
+        next.delete(launchId);
+        return next;
+      });
+    }
+  };
 
   const handleRetry = async (launchId: string) => {
     if (!walletAddress) {
@@ -279,16 +357,58 @@ const LaunchesTab = ({ launches, contributions }: Props) => {
                           {launch.status}
                         </span>
                         {launch.status === "execution_failed" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="rounded-none ml-2 h-6 px-2 text-[10px]"
-                            disabled={retrying.has(launch.id)}
-                            onClick={() => handleRetry(launch.id)}
-                          >
-                            <RotateCw className="h-3 w-3 mr-1" />
-                            {retrying.has(launch.id) ? "Retrying…" : "Retry"}
-                          </Button>
+                          <span className="inline-flex gap-1 ml-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="rounded-none h-6 px-2 text-[10px]"
+                              disabled={retrying.has(launch.id)}
+                              onClick={() => handleRetry(launch.id)}
+                            >
+                              <RotateCw className="h-3 w-3 mr-1" />
+                              {retrying.has(launch.id) ? "Retrying…" : "Retry"}
+                            </Button>
+                            {(() => {
+                              const pending = contribs.filter(
+                                (c) => !c.refund_tx_signature,
+                              );
+                              if (pending.length === 0) return null;
+                              const isRefunding = refunding.has(launch.id);
+                              const prog =
+                                refundProgress?.launchId === launch.id
+                                  ? refundProgress
+                                  : null;
+                              return (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="rounded-none h-6 px-2 text-[10px] border-destructive/60 text-destructive hover:bg-destructive/10"
+                                  disabled={isRefunding}
+                                  onClick={() =>
+                                    setConfirmRefund({
+                                      launchId: launch.id,
+                                      pending,
+                                      tokenSymbol: launch.token_symbol,
+                                    })
+                                  }
+                                >
+                                  {isRefunding ? (
+                                    <>
+                                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                      {prog
+                                        ? `${prog.current}/${prog.total}`
+                                        : "Refunding…"}
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Undo2 className="h-3 w-3 mr-1" />
+                                      Refund ({pending.length})
+                                    </>
+                                  )}
+                                </Button>
+                              );
+                            })()}
+                          </span>
                         )}
                       </TableCell>
                       <TableCell className="font-mono text-xs">
@@ -422,6 +542,57 @@ const LaunchesTab = ({ launches, contributions }: Props) => {
           </TableBody>
         </Table>
       </div>
+
+      <AlertDialog
+        open={confirmRefund !== null}
+        onOpenChange={(open) => !open && setConfirmRefund(null)}
+      >
+        <AlertDialogContent className="rounded-none">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Refund all pending contributors</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                <p>
+                  Refund{" "}
+                  <span className="font-mono">
+                    {confirmRefund?.pending.length ?? 0}
+                  </span>{" "}
+                  contributor
+                  {(confirmRefund?.pending.length ?? 0) === 1 ? "" : "s"} of{" "}
+                  <span className="font-mono">
+                    {confirmRefund?.tokenSymbol}
+                  </span>
+                  ?
+                </p>
+                <p className="text-muted-foreground">
+                  Each refund is an on-chain SOL transfer from the escrow
+                  wallet. Runs sequentially with a 1s gap between attempts.
+                  This action is irreversible.
+                </p>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="rounded-none">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="rounded-none bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (confirmRefund) {
+                  void runBulkRefund(
+                    confirmRefund.launchId,
+                    confirmRefund.pending,
+                  );
+                }
+                setConfirmRefund(null);
+              }}
+            >
+              Confirm Refund
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

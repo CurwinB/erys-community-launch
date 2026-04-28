@@ -364,6 +364,25 @@ function describeBagsError(err: any): string {
   return parts.join(" | ").slice(0, 1500);
 }
 
+/**
+ * Returns true when the error is *guaranteed* to be a pre-flight rejection,
+ * meaning no transaction landed on-chain and no fee-share PDA was created.
+ * In that case it is safe to auto-refund contributors. We deliberately keep
+ * this narrow: anything ambiguous (timeout, expiry after broadcast, unknown
+ * RPC error after send) must fall through to the no-refund path so we don't
+ * drain the escrow on top of partial on-chain state.
+ */
+function isPreflightOnlyError(msg: string): boolean {
+  if (!msg) return false;
+  return (
+    /Transaction did not pass signature verification/i.test(msg) ||
+    /Simulation failed/i.test(msg) ||
+    /Config already exists/i.test(msg) ||
+    /Request failed with status 4\d\d/i.test(msg) ||
+    /createLaunchTransaction failed/i.test(msg)
+  );
+}
+
 function deriveBagsFeeShareConfigPda(baseMint: PublicKey): PublicKey {
   const programId =
     typeof BAGS_FEE_SHARE_V2_PROGRAM_ID === "string"
@@ -847,23 +866,38 @@ export async function executeBagsLaunch(
           );
           continue;
         }
-        // On-chain submission may have partially landed (the config PDA
-        // could now exist even though our attempt errored). Use the
-        // no-refund failure path so the next retry can recover the existing
-        // config instead of having auto-refund drain the escrow.
-        await setFailedNoRefund(
-          launch.id,
-          `Fee-share submission failed (escrow may hold partial on-chain state — manual review): ${msg}`,
-        );
+        // Pre-flight rejections (signature verification, simulation
+        // failure, Bags 4xx) never land on-chain — safe to auto-refund.
+        // Anything else may have partially landed, so keep the escrow
+        // intact for manual review / retry.
+        if (isPreflightOnlyError(msg)) {
+          await setFailed(
+            launch.id,
+            `Fee-share tx rejected pre-flight (no on-chain state, contributors will be auto-refunded): ${msg}`,
+          );
+        } else {
+          await setFailedNoRefund(
+            launch.id,
+            `Fee-share submission failed (escrow may hold partial on-chain state — manual review): ${msg}`,
+          );
+        }
         return;
       }
     }
 
     if (!submitted || !configKeyStr) {
-      await setFailedNoRefund(
-        launch.id,
-        `Fee-share submission failed after ${MAX_FEESHARE_ATTEMPTS} attempts: ${lastErr?.message ?? lastErr}`,
-      );
+      const msg = lastErr?.message ?? String(lastErr);
+      if (isPreflightOnlyError(msg)) {
+        await setFailed(
+          launch.id,
+          `Fee-share rejected pre-flight after ${MAX_FEESHARE_ATTEMPTS} attempts (no on-chain state, auto-refunding): ${msg}`,
+        );
+      } else {
+        await setFailedNoRefund(
+          launch.id,
+          `Fee-share submission failed after ${MAX_FEESHARE_ATTEMPTS} attempts: ${msg}`,
+        );
+      }
       return;
     }
   }
@@ -886,12 +920,14 @@ export async function executeBagsLaunch(
       configKey: new PublicKey(configKeyStr),
     });
   } catch (err: any) {
-    // Fee-share config is already on-chain at this point — auto-refund would
-    // drain escrow without unwinding that on-chain state. Use no-refund so
-    // the next retry can reuse the stored fee_share_config_key.
+    // createLaunchTransaction is an HTTP call that returns a tx to sign —
+    // by definition nothing has been broadcast yet. The fee-share config
+    // already exists on-chain, but a retry can reuse the stored
+    // fee_share_config_key, so we still want to no-refund here to preserve
+    // that state. (Auto-refund would drain the escrow that the retry needs.)
     await setFailedNoRefund(
       launch.id,
-      `createLaunchTransaction failed (configKey=${configKeyStr}): ${describeBagsError(err)}`,
+      `createLaunchTransaction failed (configKey=${configKeyStr}, retry can reuse config): ${describeBagsError(err)}`,
     );
     return;
   }
@@ -909,11 +945,21 @@ export async function executeBagsLaunch(
     console.log(`Solscan: https://solscan.io/tx/${sig}`);
     await setLaunched(launch.id);
   } catch (err: any) {
-    // Same reasoning: by Step 4 the fee-share config exists on-chain. Don't
-    // auto-refund; allow manual recovery / retry with the same config key.
-    await setFailedNoRefund(
-      launch.id,
-      `Launch tx failed (configKey=${configKeyStr}): ${describeBagsError(err)}`,
-    );
+    const msg = describeBagsError(err);
+    // Pre-flight rejection on the final launch tx never lands the mint
+    // on-chain, so contributor SOL was never spent into a bonding curve —
+    // safe to refund. Timeouts/expiry after broadcast stay no-refund
+    // because the mint may have actually landed.
+    if (isPreflightOnlyError(msg)) {
+      await setFailed(
+        launch.id,
+        `Launch tx rejected pre-flight (configKey=${configKeyStr}, no mint on-chain, auto-refunding): ${msg}`,
+      );
+    } else {
+      await setFailedNoRefund(
+        launch.id,
+        `Launch tx failed (configKey=${configKeyStr}): ${msg}`,
+      );
+    }
   }
 }
