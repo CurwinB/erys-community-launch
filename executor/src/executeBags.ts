@@ -753,231 +753,125 @@ export async function executeBagsLaunch(
     );
     configKeyStr = launch.fee_share_config_key;
   } else {
-    // We bypass sdk.config.createBagsFeeShareConfig() here and call the Bags
-    // REST API directly. The SDK throws a generic `Error('Config already
-    // exists')` when needsCreation=false and discards the meteoraConfigKey,
-    // so it's impossible to recover the existing key through the SDK.
-    // Calling the REST endpoint ourselves lets us:
-    //   - get the existing meteoraConfigKey when needsCreation=false
-    //   - decode/sign/send the returned txs/bundles when needsCreation=true
-    //   - fall back to the deterministic PDA if Bags returns a malformed body
-    const MAX_FEESHARE_ATTEMPTS = 3;
-    const isExpiryError = (msg: string) =>
-      /block height exceeded|blockhash not found|TransactionExpiredBlockheightExceededError|expired/i.test(
-        msg,
-      ) || /not confirmed within/i.test(msg);
-
-    const restBody = {
-      payer: escrowPubkey.toBase58(),
-      baseMint: tokenMint.toBase58(),
-      claimersArray: feeClaimers.map((c) => c.user.toBase58()),
-      basisPointsArray: feeClaimers.map((c) => c.userBps),
-      partner: BAGS_PARTNER_WALLET,
-      partnerConfig: BAGS_PARTNER_CONFIG,
-      additionalLookupTables: additionalLookupTables?.map((lut) => lut.toBase58()),
-      bagsConfigType: BAGS_DEFAULT_CONFIG_TYPE,
-    };
-
-    let lastErr: any = null;
-    let submitted = false;
-
-    for (let attempt = 1; attempt <= MAX_FEESHARE_ATTEMPTS; attempt++) {
-      let restJson: any;
-      try {
-        const resp = await fetch(`${BAGS_API_BASE_URL}/fee-share/config`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": BAGS_API_KEY,
-          },
-          body: JSON.stringify(restBody),
-        });
-        const text = await resp.text();
+    // Use the official Bags SDK exactly per docs:
+    //   sdk.config.createBagsFeeShareConfig({ payer, baseMint, feeClaimers,
+    //     partner, partnerConfig, additionalLookupTables })
+    //
+    // This returns { transactions, bundles, meteoraConfigKey }. We then send
+    // them with the SDK helpers `sendBundleAndConfirm` (with a Jito tip) and
+    // `signAndSendTransaction`, exactly mirroring the docs.
+    //
+    // Recovery rule: if the SDK throws "Config already exists" we derive the
+    // deterministic PDA, verify it's on-chain, and reuse it.
+    let createResult: {
+      transactions: VersionedTransaction[];
+      bundles: VersionedTransaction[][];
+      meteoraConfigKey: PublicKey;
+    } | null = null;
+    try {
+      createResult = await sdk.config.createBagsFeeShareConfig({
+        payer: escrowPubkey,
+        baseMint: tokenMint,
+        feeClaimers,
+        partner: BAGS_PARTNER_WALLET ? new PublicKey(BAGS_PARTNER_WALLET) : undefined,
+        partnerConfig: BAGS_PARTNER_CONFIG ? new PublicKey(BAGS_PARTNER_CONFIG) : undefined,
+        additionalLookupTables,
+        bagsConfigType: BAGS_DEFAULT_CONFIG_TYPE as any,
+      });
+    } catch (err: any) {
+      const msg = describeBagsError(err);
+      if (/already exists/i.test(msg)) {
+        // Recover via deterministic PDA derivation.
         try {
-          restJson = JSON.parse(text);
-        } catch {
+          const derived = deriveBagsFeeShareConfigPda(tokenMint);
+          const acc = await connection.getAccountInfo(derived, "confirmed");
+          if (acc) {
+            configKeyStr = derived.toBase58();
+            console.log(
+              `Reusing existing on-chain fee_share_config via PDA derivation: ${configKeyStr}`,
+            );
+            await storeFeeShareConfig(launch.id, configKeyStr, feeClaimers.length);
+          } else {
+            await setFailed(
+              launch.id,
+              `Bags reports fee-share config exists but PDA ${derived.toBase58()} not visible on-chain.`,
+            );
+            return;
+          }
+        } catch (deriveErr: any) {
           await setFailed(
             launch.id,
-            `Bags fee-share/config returned non-JSON (status ${resp.status}): ${text.slice(0, 500)}`,
+            `createBagsFeeShareConfig failed and PDA recovery failed: ${msg} | ${deriveErr?.message ?? deriveErr}`,
           );
           return;
         }
-        if (!resp.ok || restJson?.success === false) {
-          const apiErrMsg =
-            restJson?.error ??
-            restJson?.message ??
-            `HTTP ${resp.status}`;
-          // Build-time API errors are not retryable (auth, schema, partner config…).
-          await setFailed(
-            launch.id,
-            `Bags fee-share/config API error: ${apiErrMsg}`,
-          );
-          return;
-        }
-      } catch (err: any) {
-        await setFailed(
-          launch.id,
-          `Bags fee-share/config fetch failed: ${err?.message ?? String(err)}`,
-        );
+      } else {
+        await setFailed(launch.id, `createBagsFeeShareConfig failed: ${msg}`);
         return;
       }
+    }
 
-      const responseBody = restJson?.response ?? restJson;
-      const needsCreation: boolean = responseBody?.needsCreation === true;
-      let candidateKey: string | undefined =
-        responseBody?.meteoraConfigKey ?? undefined;
-
+    if (createResult && !configKeyStr) {
+      const { transactions: txs, bundles, meteoraConfigKey } = createResult;
       console.log(
-        `Fee-share attempt ${attempt}/${MAX_FEESHARE_ATTEMPTS}: needsCreation=${needsCreation} key=${
-          candidateKey ?? "<missing>"
-        } txs=${responseBody?.transactions?.length ?? 0} bundles=${responseBody?.bundles?.length ?? 0}`,
+        `Bags fee-share build: meteoraConfigKey=${meteoraConfigKey.toBase58()} txs=${txs.length} bundles=${bundles.length}`,
       );
 
-      // Fast path: config already on-chain. No SOL spent by us. Reuse the key
-      // and continue to the launch tx step. This is the primary fix for
-      // "Config already exists" failures on retried launches.
-      if (!needsCreation) {
-        if (!candidateKey) {
-          // Final fallback: derive the deterministic PDA and verify it exists.
-          try {
-            const derived = deriveBagsFeeShareConfigPda(tokenMint);
-            const acc = await connection.getAccountInfo(derived, "confirmed");
-            if (acc) {
-              candidateKey = derived.toBase58();
-              console.log(
-                `Recovered fee_share_config via PDA derivation: ${candidateKey}`,
-              );
-            }
-          } catch (deriveErr: any) {
-            console.warn(
-              `PDA derivation fallback failed: ${deriveErr?.message ?? deriveErr}`,
-            );
-          }
-        }
-        if (!candidateKey) {
-          // No on-chain SOL was spent by this attempt, so refunding is safe.
-          await setFailed(
-            launch.id,
-            `Bags says fee-share config already exists but did not return meteoraConfigKey and PDA derivation could not confirm it on-chain. Mint ${tokenMint.toBase58()}.`,
-          );
-          return;
-        }
-        configKeyStr = candidateKey;
-        await storeFeeShareConfig(launch.id, configKeyStr, feeClaimers.length);
-        submitted = true;
-        break;
-      }
-
-      // needsCreation=true: decode txs/bundles and submit on-chain.
-      let txs: VersionedTransaction[] = [];
-      let bundles: VersionedTransaction[][] = [];
       try {
-        const bs58Mod: any = await import("bs58");
-        const bs58 = bs58Mod.default ?? bs58Mod;
-        txs = (responseBody?.transactions ?? []).map((t: any) =>
-          VersionedTransaction.deserialize(bs58.decode(t.transaction)),
-        );
-        bundles = (responseBody?.bundles ?? []).map((bundle: any[]) =>
-          bundle.map((t: any) =>
-            VersionedTransaction.deserialize(bs58.decode(t.transaction)),
-          ),
-        );
-      } catch (decErr: any) {
-        await setFailed(
-          launch.id,
-          `Failed to decode Bags fee-share txs: ${decErr?.message ?? decErr}`,
-        );
-        return;
-      }
-
-      if (!candidateKey) {
-        // Defensive: still try to derive even on the create path so we don't
-        // submit on-chain work without a key to persist.
-        try {
-          candidateKey = deriveBagsFeeShareConfigPda(tokenMint).toBase58();
-        } catch {
-          await setFailed(
-            launch.id,
-            `Bags response missing meteoraConfigKey on creation path; refusing to submit txs.`,
-          );
-          return;
-        }
-      }
-
-      try {
+        // 1) Submit bundles via Jito (with tip tx) per docs.
         for (let bIdx = 0; bIdx < bundles.length; bIdx++) {
           const bundle = bundles[bIdx];
-          console.log(
-            `Sending Bags bundle ${bIdx + 1}/${bundles.length} (${bundle.length} txs) via HTTP polling`,
+          // Build a tip tx and append it to the bundle (docs pattern).
+          const tipTx = await createTipTransaction(
+            connection,
+            commitment,
+            escrowPubkey,
+            10_000, // 10k lamports tip — small but reliable for non-urgent bundles
           );
-          for (let txIdx = 0; txIdx < bundle.length; txIdx++) {
-            const sig = await sendBagsPrebuiltTransactionWithHttpConfirm(
-              connection,
-              bundle[txIdx],
-              escrowKeypair,
-              `fee-share-bundle-${bIdx + 1}-tx-${txIdx + 1}`,
-            );
-            console.log(
-              `Bundle ${bIdx + 1} tx ${txIdx + 1}/${bundle.length}: ${sig}`,
-            );
+          tipTx.sign([escrowKeypair]);
+          // Sign each bundle tx with the escrow keypair before bundling.
+          for (const tx of bundle) {
+            tx.sign([escrowKeypair]);
           }
+          const signedBundle = [...bundle, tipTx];
+          const bundleSig = await sendBundleAndConfirm(signedBundle, sdk);
+          console.log(
+            `fee-share bundle ${bIdx + 1}/${bundles.length} confirmed: ${bundleSig}`,
+          );
         }
 
+        // 2) Submit standalone transactions via the SDK helper.
         for (let i = 0; i < txs.length; i++) {
-          const sig = await sendBagsPrebuiltTransactionWithHttpConfirm(
+          const sig = await signAndSendTransaction(
             connection,
+            commitment,
             txs[i],
             escrowKeypair,
-            `fee-share-tx-${i + 1}`,
           );
-          console.log(`Fee-share tx ${i + 1}/${txs.length}: ${sig}`);
+          console.log(`fee-share tx ${i + 1}/${txs.length} confirmed: ${sig}`);
         }
 
-        configKeyStr = candidateKey;
+        configKeyStr = meteoraConfigKey.toBase58();
         await storeFeeShareConfig(launch.id, configKeyStr, feeClaimers.length);
-        submitted = true;
-        break;
       } catch (err: any) {
-        lastErr = err;
-        const msg = err?.message ?? String(err);
-        if (isExpiryError(msg) && attempt < MAX_FEESHARE_ATTEMPTS) {
-          console.warn(
-            `Fee-share submission expired on attempt ${attempt} (${msg}). Rebuilding with fresh blockhash...`,
-          );
-          continue;
-        }
-        // Pre-flight rejections (signature verification, simulation
-        // failure, Bags 4xx) never land on-chain — safe to auto-refund.
-        // Anything else may have partially landed, so keep the escrow
-        // intact for manual review / retry.
+        const msg = describeBagsError(err);
         if (isPreflightOnlyError(msg)) {
           await setFailed(
             launch.id,
-            `Fee-share tx rejected pre-flight (no on-chain state, contributors will be auto-refunded): ${msg}`,
+            `Fee-share submission rejected pre-flight (auto-refunding): ${msg}`,
           );
         } else {
           await setFailedNoRefund(
             launch.id,
-            `Fee-share submission failed (escrow may hold partial on-chain state — manual review): ${msg}`,
+            `Fee-share submission failed (escrow may hold partial state, manual review): ${msg}`,
           );
         }
         return;
       }
     }
 
-    if (!submitted || !configKeyStr) {
-      const msg = lastErr?.message ?? String(lastErr);
-      if (isPreflightOnlyError(msg)) {
-        await setFailed(
-          launch.id,
-          `Fee-share rejected pre-flight after ${MAX_FEESHARE_ATTEMPTS} attempts (no on-chain state, auto-refunding): ${msg}`,
-        );
-      } else {
-        await setFailedNoRefund(
-          launch.id,
-          `Fee-share submission failed after ${MAX_FEESHARE_ATTEMPTS} attempts: ${msg}`,
-        );
-      }
+    if (!configKeyStr) {
+      await setFailed(launch.id, `Fee-share creation produced no configKey`);
       return;
     }
   }
