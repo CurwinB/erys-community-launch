@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Users, Coins, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import CountdownTimer from "@/components/CountdownTimer";
@@ -17,6 +17,7 @@ interface LaunchCardProps {
   status: "scheduled" | "launched";
   platform?: "bags" | "pumpfun";
   animationDelay?: number;
+  variant?: "card" | "row";
 }
 
 const LaunchCard = ({
@@ -31,6 +32,7 @@ const LaunchCard = ({
   status,
   platform = "bags",
   animationDelay = 0,
+  variant = "card",
 }: LaunchCardProps) => {
   const isLive = status === "scheduled";
   const [copied, setCopied] = useState(false);
@@ -43,6 +45,25 @@ const LaunchCard = ({
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  if (variant === "row") {
+    return (
+      <RowVariant
+        id={id}
+        tokenName={tokenName}
+        tokenSymbol={tokenSymbol}
+        imageUrl={imageUrl}
+        launchDatetime={launchDatetime}
+        totalEscrowLamports={totalEscrowLamports}
+        contributorCount={contributorCount}
+        status={status}
+        platform={platform}
+        animationDelay={animationDelay}
+        copied={copied}
+        onCopy={handleCopy}
+      />
+    );
+  }
 
   return (
     <div
