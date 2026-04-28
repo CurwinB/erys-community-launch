@@ -1238,6 +1238,15 @@ export type Database = {
         Args: { p_launch_id: string }
         Returns: undefined
       }
+      get_launch_platform_status: {
+        Args: never
+        Returns: {
+          bags_enabled: boolean
+          bags_updated_at: string
+          pumpfun_enabled: boolean
+          pumpfun_updated_at: string
+        }[]
+      }
       get_launch_public: {
         Args: { p_id: string }
         Returns: {
@@ -1351,6 +1360,15 @@ export type Database = {
       set_app_setting: {
         Args: { p_key: string; p_value: string }
         Returns: undefined
+      }
+      set_launch_platform_status: {
+        Args: { p_admin_wallet: string; p_enabled: boolean; p_platform: string }
+        Returns: {
+          bags_enabled: boolean
+          bags_updated_at: string
+          pumpfun_enabled: boolean
+          pumpfun_updated_at: string
+        }[]
       }
       try_acquire_custodial_lock: { Args: { p_key: string }; Returns: boolean }
       try_acquire_custodial_row_lock: {
