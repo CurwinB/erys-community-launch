@@ -869,6 +869,7 @@ const SchedulePage = () => {
             {submitLabel}
           </Button>
         </form>
+        )}
       </div>
     </main>
   );
