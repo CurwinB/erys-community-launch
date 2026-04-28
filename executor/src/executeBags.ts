@@ -950,7 +950,7 @@ export async function executeBagsLaunch(
   console.log(
     `Step 3: createLaunchTransaction (mint=${tokenMint.toBase58()} configKey=${configKeyStr} netBuyLamports=${netBuyLamports.toString()} claimers=${feeClaimers.length})`,
   );
-  let launchTx: VersionedTransaction;
+  let launchTx!: VersionedTransaction;
   // createLaunchTransaction is a build-only HTTP call (no broadcast), so
   // it's safe to retry on transient 5xx / network errors caused by Bags'
   // indexer lag. We use exponential backoff: 2s, 4s, 8s, 16s, 32s.
