@@ -6,6 +6,7 @@ import AdminGate from "@/components/admin/AdminGate";
 import AdminNavbar from "@/components/admin/AdminNavbar";
 import MetricCards from "@/components/admin/MetricCards";
 import LaunchesTab from "@/components/admin/LaunchesTab";
+import PlatformStatusPanel from "@/components/admin/PlatformStatusPanel";
 import ContributorsTab from "@/components/admin/ContributorsTab";
 import PlatformRevenueTab from "@/components/admin/PlatformRevenueTab";
 import RefundsTab from "@/components/admin/RefundsTab";
@@ -98,6 +99,8 @@ const AdminPage = () => {
           totalContributors={uniqueContributors}
           loading={isLoading}
         />
+
+        <PlatformStatusPanel />
 
         <Tabs defaultValue="launches" className="w-full">
           <TabsList className="rounded-none bg-card border border-border h-auto p-0 flex flex-wrap">
