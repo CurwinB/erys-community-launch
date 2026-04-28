@@ -70,7 +70,10 @@ export async function getExecutingLaunches(): Promise<Launch[]> {
 export async function claimNextExecutingLaunch(workerId: string): Promise<Launch | null> {
   const { data, error } = await supabase.rpc("claim_executing_launch_for_worker", {
     p_worker_id: workerId,
-    p_lock_expiry_seconds: 120,
+    // Bumped from 120s to 240s so the Step-3 retry budget
+    // (5/15/30/60s backoffs + per-attempt pre-warm + Bags HTTP RTT) fits
+    // comfortably inside one lock window.
+    p_lock_expiry_seconds: 240,
   });
 
   if (error) {
