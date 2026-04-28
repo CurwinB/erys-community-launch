@@ -150,10 +150,9 @@ async function sendVersionedTransactionWithHttpConfirm(
       });
     } catch (sendErr: any) {
       lastErr = sendErr;
+      const details = await describeSolanaSendError(sendErr, connection);
       console.warn(
-        `[${label}] sendRawTransaction attempt ${attempt} failed: ${
-          sendErr?.message ?? sendErr
-        }`,
+        `[${label}] sendRawTransaction attempt ${attempt} failed: ${details}`,
       );
       continue;
     }
@@ -234,6 +233,106 @@ async function sendVersionedTransactionWithHttpConfirm(
     `[${label}] failed after ${BAGS_MAX_BLOCKHASH_REFRESH_ATTEMPTS} blockhash-refresh attempts. Last signature: ${
       lastSignature ?? "<none>"
     }. Last error: ${lastErr?.message ?? lastErr}`,
+  );
+}
+
+/**
+ * Sign + send + HTTP-confirm a prebuilt transaction returned by Bags.
+ *
+ * Critical difference from the local sender above: we NEVER mutate the
+ * message/blockhash and NEVER wipe signatures. Bags transactions can already
+ * contain required signatures. Replacing the blockhash or signature array
+ * invalidates them and causes `Transaction did not pass signature verification`.
+ */
+async function sendBagsPrebuiltTransactionWithHttpConfirm(
+  connection: Connection,
+  tx: VersionedTransaction,
+  signer: Keypair,
+  label: string,
+): Promise<string> {
+  logTransactionSignatureState(tx, signer.publicKey, `${label}:before-sign`);
+  tx.sign([signer]);
+  logTransactionSignatureState(tx, signer.publicKey, `${label}:after-sign`);
+
+  const rawTx = tx.serialize();
+  let signature: string;
+  try {
+    signature = await connection.sendRawTransaction(rawTx, {
+      preflightCommitment: "confirmed",
+      skipPreflight: false,
+    });
+  } catch (sendErr: any) {
+    const details = await describeSolanaSendError(sendErr, connection);
+    throw new Error(`[${label}] sendRawTransaction failed: ${details}`);
+  }
+
+  console.log(`[${label}] submitted ${signature}`);
+
+  const start = Date.now();
+  let lastRebroadcast = start;
+  while (Date.now() - start < BAGS_PER_ATTEMPT_TIMEOUT_MS) {
+    await new Promise((r) => setTimeout(r, BAGS_POLL_INTERVAL_MS));
+    try {
+      const statuses = await connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: false,
+      });
+      const status = statuses?.value?.[0];
+      if (status) {
+        if (status.err) {
+          throw new Error(
+            `tx ${signature} on-chain error: ${JSON.stringify(status.err)}`,
+          );
+        }
+        if (
+          status.confirmationStatus === "confirmed" ||
+          status.confirmationStatus === "finalized"
+        ) {
+          return signature;
+        }
+      }
+    } catch (pollErr: any) {
+      if (/on-chain error/.test(pollErr?.message ?? "")) {
+        throw pollErr;
+      }
+      console.warn(
+        `[${label}] getSignatureStatuses transient error: ${
+          pollErr?.message ?? pollErr
+        }`,
+      );
+    }
+
+    if (Date.now() - lastRebroadcast >= BAGS_REBROADCAST_EVERY_MS) {
+      lastRebroadcast = Date.now();
+      try {
+        await connection.sendRawTransaction(rawTx, {
+          preflightCommitment: "confirmed",
+          skipPreflight: true,
+        });
+      } catch {
+        /* leader may already have it */
+      }
+    }
+  }
+
+  try {
+    const finalStatuses = await connection.getSignatureStatuses([signature], {
+      searchTransactionHistory: true,
+    });
+    const final = finalStatuses?.value?.[0];
+    if (
+      final &&
+      !final.err &&
+      (final.confirmationStatus === "confirmed" ||
+        final.confirmationStatus === "finalized")
+    ) {
+      return signature;
+    }
+  } catch {
+    /* fall through */
+  }
+
+  throw new Error(
+    `[${label}] tx ${signature} not confirmed within ${BAGS_PER_ATTEMPT_TIMEOUT_MS}ms; rebuild from Bags before retrying`,
   );
 }
 
