@@ -56,95 +56,15 @@ function isNonZeroSignature(sig: Uint8Array): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Metadata URL helpers
+// Metadata URL handling
 //
-// Bags' createTokenInfoAndMetadata returns an `ipfs.io` gateway URL by
-// default. `ipfs.io` is frequently slow / 504s, and when Bags' backend
-// fetches that URL during createLaunchTransaction a timeout there manifests
-// to us as an opaque 500. We:
-//  1. Prefer any non-`ipfs.io` URL Bags itself returns.
-//  2. Pre-warm whatever URL we end up sending so cold-cache 504s surface
-//     here (visible) instead of inside Bags (opaque).
-//  3. Rotate to alternate public gateways on retry attempts.
+// Per the official Bags example
+// (https://docs.bags.fm/how-to-guides/launch-token), the value returned by
+// `sdk.tokenLaunch.createTokenInfoAndMetadata()` as `tokenMetadata` MUST be
+// passed back verbatim to `createLaunchTransaction({ metadataUrl })`. Bags'
+// backend validates against the URL it pinned to; rewriting it to another
+// gateway causes opaque 500s.
 // ---------------------------------------------------------------------------
-
-const IPFS_GATEWAYS = [
-  (cid: string, path: string) => `https://${cid}.ipfs.dweb.link${path}`,
-  (cid: string, path: string) => `https://cf-ipfs.com/ipfs/${cid}${path}`,
-  (cid: string, path: string) => `https://ipfs.io/ipfs/${cid}${path}`,
-  (cid: string, path: string) => `https://gateway.pinata.cloud/ipfs/${cid}${path}`,
-];
-
-function extractIpfsCid(url: string): { cid: string; path: string } | null {
-  // Match either `/ipfs/<cid><path>` or subdomain form `<cid>.ipfs.<host><path>`.
-  const pathMatch = url.match(/\/ipfs\/([A-Za-z0-9]+)(\/.*)?$/);
-  if (pathMatch) {
-    return { cid: pathMatch[1], path: pathMatch[2] ?? "" };
-  }
-  const subMatch = url.match(/^https?:\/\/([A-Za-z0-9]+)\.ipfs\.[^/]+(\/.*)?$/);
-  if (subMatch) {
-    return { cid: subMatch[1], path: subMatch[2] ?? "" };
-  }
-  return null;
-}
-
-function pickBestMetadataUrl(tokenInfo: any): string {
-  const candidates: string[] = [];
-  for (const key of [
-    "tokenMetadata",
-    "metadataUri",
-    "metadataUrl",
-    "metadataURI",
-    "uri",
-  ]) {
-    const v = tokenInfo?.[key];
-    if (typeof v === "string" && v.length > 0) candidates.push(v);
-  }
-  if (candidates.length === 0) {
-    // Fall back to whatever `tokenMetadata` was — even empty string — so the
-    // SDK call below errors clearly instead of swallowing.
-    return tokenInfo?.tokenMetadata ?? "";
-  }
-  // Prefer Bags-hosted / non-public-gateway URLs first.
-  const nonIpfsIo = candidates.find((u) => !/ipfs\.io/i.test(u));
-  if (nonIpfsIo) return nonIpfsIo;
-  // Otherwise prefer subdomain form (faster propagation) over path form.
-  const cid = extractIpfsCid(candidates[0]);
-  if (cid) {
-    return `https://${cid.cid}.ipfs.dweb.link${cid.path}`;
-  }
-  return candidates[0];
-}
-
-function rotateMetadataGateway(url: string, attempt: number): string | null {
-  const cid = extractIpfsCid(url);
-  if (!cid) return null;
-  // attempt is 1-indexed and we only call this for attempt >= 2.
-  const idx = (attempt - 1) % IPFS_GATEWAYS.length;
-  return IPFS_GATEWAYS[idx](cid.cid, cid.path);
-}
-
-async function verifyMetadataReachable(
-  url: string,
-): Promise<{ ok: boolean; status?: number; bytes?: number; reason?: string }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      signal: controller.signal as any,
-    });
-    if (!res.ok) {
-      return { ok: false, status: res.status, reason: `HTTP ${res.status}` };
-    }
-    const text = await res.text();
-    return { ok: true, status: res.status, bytes: text.length };
-  } catch (err: any) {
-    return { ok: false, reason: err?.message ?? String(err) };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
 
 function logTransactionSignatureState(
   tx: VersionedTransaction,
