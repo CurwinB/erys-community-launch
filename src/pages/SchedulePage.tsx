@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
   Connection,
   PublicKey,
@@ -20,6 +21,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useWallet } from "@/hooks/useWallet";
 import { Upload, Copy, ExternalLink, Check, Loader2, AlertCircle } from "lucide-react";
 import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
+import PlatformPausedCard from "@/components/schedule/PlatformPausedCard";
 
 const RPC_URL = import.meta.env.VITE_SOLANA_RPC_URL;
 const connection = new Connection(RPC_URL, "confirmed");
@@ -48,6 +50,29 @@ const SchedulePage = () => {
   const { setShowAuthFlow } = useDynamicContext();
 
   const [platform, setPlatform] = useState<"bags" | "pumpfun">("bags");
+
+  // Live platform availability — admins can pause new launches per platform.
+  const { data: platformStatus } = useQuery({
+    queryKey: ["launch-platform-status"],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_launch_platform_status");
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : data;
+      return row as {
+        bags_enabled: boolean;
+        pumpfun_enabled: boolean;
+      } | null;
+    },
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+  });
+  const bagsEnabled = platformStatus?.bags_enabled ?? true;
+  const pumpfunEnabled = platformStatus?.pumpfun_enabled ?? true;
+  const currentPlatformEnabled =
+    platform === "bags" ? bagsEnabled : pumpfunEnabled;
+  const otherPlatformEnabled =
+    platform === "bags" ? pumpfunEnabled : bagsEnabled;
+
   const [form, setForm] = useState({
     tokenName: "",
     tokenSymbol: "",
