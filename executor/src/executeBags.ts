@@ -9,7 +9,6 @@ import {
   BAGS_FEE_SHARE_V2_MAX_CLAIMERS_NON_LUT,
   BAGS_FEE_SHARE_V2_PROGRAM_ID,
   WRAPPED_SOL_MINT,
-  sendBundleAndConfirm,
   waitForSlotsToPass,
 } from "@bagsfm/bags-sdk";
 import { decryptEscrowKey } from "./decrypt";
