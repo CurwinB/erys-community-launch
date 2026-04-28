@@ -61,7 +61,9 @@ function logTransactionSignatureState(
 ): void {
   const requiredSigners = tx.message.header.numRequiredSignatures;
   const existingSignatures = tx.signatures.filter(isNonZeroSignature).length;
-  const signerIndex = tx.message.staticAccountKeys
+  const staticAccountKeys: PublicKey[] =
+    (tx.message as any).staticAccountKeys ?? (tx.message as any).accountKeys ?? [];
+  const signerIndex = staticAccountKeys
     .slice(0, requiredSigners)
     .findIndex((key) => key.equals(signer));
   const signerHasSignature =
