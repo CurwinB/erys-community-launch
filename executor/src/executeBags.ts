@@ -945,11 +945,21 @@ export async function executeBagsLaunch(
     console.log(`Solscan: https://solscan.io/tx/${sig}`);
     await setLaunched(launch.id);
   } catch (err: any) {
-    // Same reasoning: by Step 4 the fee-share config exists on-chain. Don't
-    // auto-refund; allow manual recovery / retry with the same config key.
-    await setFailedNoRefund(
-      launch.id,
-      `Launch tx failed (configKey=${configKeyStr}): ${describeBagsError(err)}`,
-    );
+    const msg = describeBagsError(err);
+    // Pre-flight rejection on the final launch tx never lands the mint
+    // on-chain, so contributor SOL was never spent into a bonding curve —
+    // safe to refund. Timeouts/expiry after broadcast stay no-refund
+    // because the mint may have actually landed.
+    if (isPreflightOnlyError(msg)) {
+      await setFailed(
+        launch.id,
+        `Launch tx rejected pre-flight (configKey=${configKeyStr}, no mint on-chain, auto-refunding): ${msg}`,
+      );
+    } else {
+      await setFailedNoRefund(
+        launch.id,
+        `Launch tx failed (configKey=${configKeyStr}): ${msg}`,
+      );
+    }
   }
 }
