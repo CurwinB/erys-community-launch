@@ -10,7 +10,6 @@ import {
   BAGS_FEE_SHARE_V2_PROGRAM_ID,
   WRAPPED_SOL_MINT,
   waitForSlotsToPass,
-  signAndSendTransaction,
   sendBundleAndConfirm,
   createTipTransaction,
 } from "@bagsfm/bags-sdk";
@@ -39,6 +38,105 @@ const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
 // fee_share_config PDA as a final fallback when the Bags API tells us a
 // config exists but does not surface its key.
 const BAGS_DEFAULT_CONFIG_TYPE = "fa29606e-5e48-4c37-827f-4b03d58ee23d";
+
+/**
+ * Robust replacement for the Bags SDK `signAndSendTransaction` helper.
+ *
+ * The official helper does:
+ *   sendTransaction(skipPreflight: true, maxRetries: 0)
+ *   connection.confirmTransaction(...)
+ * which uses `signatureSubscribe` over WebSocket. Our RPC tier throws
+ * repeated `signatureSubscribe` errors, so confirmTransaction can report
+ * a blockhash-expiry failure even after the transaction has actually
+ * landed and finalized on-chain.
+ *
+ * This helper signs the VersionedTransaction with `keypair`, broadcasts it,
+ * polls `getSignatureStatuses` over HTTP, periodically rebroadcasts, and
+ * before declaring failure does a final history lookup. Returns the
+ * signature on success; throws otherwise.
+ */
+async function sendVersionedTxWithPolling(
+  connection: Connection,
+  tx: VersionedTransaction,
+  keypair: Keypair,
+  label: string,
+  opts: { timeoutMs?: number; intervalMs?: number; rebroadcastEveryMs?: number } = {},
+): Promise<string> {
+  const timeoutMs = opts.timeoutMs ?? 90_000;
+  const intervalMs = opts.intervalMs ?? 2_000;
+  const rebroadcastEveryMs = opts.rebroadcastEveryMs ?? 5_000;
+
+  tx.sign([keypair]);
+  const rawTx = tx.serialize();
+
+  const signature = await connection.sendRawTransaction(rawTx, {
+    skipPreflight: true,
+    maxRetries: 0,
+  });
+  console.log(`[${label}] submitted ${signature}`);
+
+  const start = Date.now();
+  let lastRebroadcast = start;
+  while (Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, intervalMs));
+    try {
+      const statuses = await connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: true,
+      });
+      const s = statuses?.value?.[0];
+      if (s) {
+        if (s.err) {
+          throw new Error(
+            `tx ${signature} on-chain error: ${JSON.stringify(s.err)}`,
+          );
+        }
+        if (
+          s.confirmationStatus === "confirmed" ||
+          s.confirmationStatus === "finalized"
+        ) {
+          return signature;
+        }
+      }
+    } catch (pollErr: any) {
+      if (/on-chain error/.test(pollErr?.message ?? "")) throw pollErr;
+      console.warn(
+        `[${label}] getSignatureStatuses transient error: ${pollErr?.message ?? pollErr}`,
+      );
+    }
+    if (Date.now() - lastRebroadcast >= rebroadcastEveryMs) {
+      lastRebroadcast = Date.now();
+      try {
+        await connection.sendRawTransaction(rawTx, {
+          skipPreflight: true,
+          maxRetries: 0,
+        });
+      } catch {
+        /* ignore — leader may already have it */
+      }
+    }
+  }
+
+  // Final history lookup — the tx may have landed in the last poll window.
+  try {
+    const finalStatuses = await connection.getSignatureStatuses([signature], {
+      searchTransactionHistory: true,
+    });
+    const finalStatus = finalStatuses?.value?.[0];
+    if (
+      finalStatus &&
+      !finalStatus.err &&
+      (finalStatus.confirmationStatus === "confirmed" ||
+        finalStatus.confirmationStatus === "finalized")
+    ) {
+      return signature;
+    }
+  } catch {
+    /* ignore */
+  }
+  throw new Error(
+    `[${label}] tx ${signature} not confirmed within ${timeoutMs}ms`,
+  );
+}
 
 /**
  * Best-effort extractor for Bags SDK / fetch / axios-style errors so the
