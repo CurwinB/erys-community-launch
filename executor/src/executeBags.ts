@@ -15,7 +15,6 @@ import {
   createTipTransaction,
 } from "@bagsfm/bags-sdk";
 import { decryptEscrowKey } from "./decrypt";
-import fetch from "node-fetch";
 import {
   Launch,
   Contribution,
