@@ -19,6 +19,7 @@ function validateEnv(): void {
     "SUPABASE_URL",
     "SUPABASE_SERVICE_ROLE_KEY",
     "SOLANA_RPC_URL",
+    "SOLANA_WSS_URL",
     "ESCROW_ENCRYPTION_KEY",
     "BAGS_API_KEY",
     "BAGS_PARTNER_WALLET",
