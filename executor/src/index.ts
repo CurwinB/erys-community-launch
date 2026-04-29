@@ -48,6 +48,9 @@ async function main(): Promise<void> {
   console.log(
     `Using RPC: ${process.env.SOLANA_RPC_URL?.split("/v2/")[0]}/v2/***`
   );
+  console.log(
+    `SOLANA_WSS_URL override set: ${process.env.SOLANA_WSS_URL ? "yes" : "no (derived from SOLANA_RPC_URL)"}`
+  );
 
   // Publish PumpPortal wallet pool size so the scheduling edge functions
   // know the current Pump.fun per-minute capacity. Failure is non-fatal —
