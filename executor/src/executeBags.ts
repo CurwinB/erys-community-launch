@@ -822,13 +822,22 @@ export async function executeBagsLaunch(
           bpsSum: feeClaimers.reduce((s, c) => s + c.userBps, 0),
           usedLut: !!additionalLookupTables,
         });
-        const reason = `createLaunchTransaction failed after ${attempt} attempt(s) (configKey=${configKeyStr}, retry can reuse config): ${msg} | fingerprint=${fingerprint}`;
+        const status = (lastLaunchErr?.response?.status ?? lastLaunchErr?.status) as number | undefined;
+        const reason =
+          typeof status === "number" && status >= 500
+            ? `Bags createLaunchTransaction returned ${status} (Bags-side outage). Fee-share configKey=${configKeyStr} is reusable — retry from admin once Bags is healthy. ${msg} | fingerprint=${fingerprint}`
+            : `createLaunchTransaction failed after ${attempt} attempt(s) (configKey=${configKeyStr}, retry can reuse config): ${msg} | fingerprint=${fingerprint}`;
         await setFailed(launch.id, reason);
         return;
       }
     }
     if (!built) {
-      const reason = `createLaunchTransaction exhausted ${MAX_LAUNCH_TX_ATTEMPTS} attempts (configKey=${configKeyStr}): ${describeBagsError(lastLaunchErr)}`;
+      const status = (lastLaunchErr?.response?.status ?? lastLaunchErr?.status) as number | undefined;
+      const baseMsg = describeBagsError(lastLaunchErr);
+      const reason =
+        typeof status === "number" && status >= 500
+          ? `Bags createLaunchTransaction returned ${status} after ${MAX_LAUNCH_TX_ATTEMPTS} attempts (Bags-side outage). Fee-share configKey=${configKeyStr} is reusable — retry from admin once Bags is healthy. ${baseMsg}`
+          : `createLaunchTransaction exhausted ${MAX_LAUNCH_TX_ATTEMPTS} attempts (configKey=${configKeyStr}): ${baseMsg}`;
       await setFailed(launch.id, reason);
       return;
     }
