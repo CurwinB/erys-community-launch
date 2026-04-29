@@ -31,6 +31,9 @@ import {
 import { supabase as db } from "./db";
 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
+const SOLANA_WSS_URL =
+  process.env.SOLANA_WSS_URL ||
+  SOLANA_RPC_URL.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
 const TREASURY_WALLET = process.env.BAGS_PARTNER_WALLET!;
 const WORKER_ID =
   process.env.WORKER_ID || process.env.RAILWAY_REPLICA_ID || "executor-default";
@@ -119,7 +122,10 @@ export async function executePumpfunLightningLaunch(
     0n
   );
 
-  const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+  const connection = new Connection(SOLANA_RPC_URL, {
+    commitment: "confirmed",
+    wsEndpoint: SOLANA_WSS_URL,
+  });
 
   // Charge hidden processing fee BEFORE the custodial-lock critical section
   // when total raised meets threshold. Funds go escrow → platform treasury.

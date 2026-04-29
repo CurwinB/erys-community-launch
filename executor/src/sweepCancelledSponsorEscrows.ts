@@ -142,7 +142,13 @@ export async function sweepAllCancelledSponsorEscrows(
     return;
   }
 
-  const connection = new Connection(rpcUrl, "confirmed");
+  const wssUrl =
+    process.env.SOLANA_WSS_URL ||
+    rpcUrl.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
+  const connection = new Connection(rpcUrl, {
+    commitment: "confirmed",
+    wsEndpoint: wssUrl,
+  });
 
   while (true) {
     const row = await claimNextRecovery(workerId);
