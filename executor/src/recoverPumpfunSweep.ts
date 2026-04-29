@@ -10,6 +10,9 @@ import {
 import { withCustodialLock } from "./custodialLock";
 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
+const SOLANA_WSS_URL =
+  process.env.SOLANA_WSS_URL ||
+  SOLANA_RPC_URL.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
 const WORKER_ID =
   process.env.WORKER_ID || process.env.RAILWAY_REPLICA_ID || "executor-default";
 
@@ -67,7 +70,10 @@ export async function recoverPumpfunSweep(launch: Launch): Promise<void> {
   }
   const custodialPubkey: PublicKey = wallet.publicKey;
 
-  const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+  const connection = new Connection(SOLANA_RPC_URL, {
+    commitment: "confirmed",
+    wsEndpoint: SOLANA_WSS_URL,
+  });
 
   try {
     await withCustodialLock(custodialPubkey.toBase58(), WORKER_ID, async () => {
