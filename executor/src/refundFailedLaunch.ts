@@ -9,6 +9,9 @@ import { decryptEscrowKey } from "./decrypt";
 import { supabase } from "./db";
 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
+const SOLANA_WSS_URL =
+  process.env.SOLANA_WSS_URL ||
+  SOLANA_RPC_URL.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
 const TX_FEE = 5_000n;
 const RENT_EXEMPT_RESERVE = 890_880n;
 
@@ -75,7 +78,10 @@ export async function refundFailedLaunch(launchId: string): Promise<void> {
     return;
   }
 
-  const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+  const connection = new Connection(SOLANA_RPC_URL, {
+    commitment: "confirmed",
+    wsEndpoint: SOLANA_WSS_URL,
+  });
   const escrowKeypair = Keypair.fromSecretKey(new Uint8Array(escrowSecret));
 
   let escrowAvailable: bigint;
