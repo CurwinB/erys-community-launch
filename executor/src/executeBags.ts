@@ -32,6 +32,16 @@ const BAGS_API_KEY = process.env.BAGS_API_KEY!;
 const BAGS_PARTNER_WALLET = process.env.BAGS_PARTNER_WALLET!;
 const BAGS_PARTNER_CONFIG = process.env.BAGS_PARTNER_CONFIG!;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
+// Optional explicit WebSocket endpoint. The Bags SDK uses
+// connection.confirmTransaction internally (e.g. inside
+// sendBundleAndConfirm), which calls signatureSubscribe over WS. Many
+// providers (notably Alchemy's standard Solana tier) do NOT serve
+// signatureSubscribe — point this at Helius/Triton/QuickNode if you see
+// "Method 'signatureSubscribe' not found" warnings. Falls back to
+// SOLANA_RPC_URL with https->wss scheme swap.
+const SOLANA_WSS_URL =
+  process.env.SOLANA_WSS_URL ||
+  SOLANA_RPC_URL.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
 
 // Bags fee-share v2 program is re-exported from the SDK (resolved from the
 // IDL). We use it together with the WSOL quote mint to derive the
@@ -306,7 +316,10 @@ export async function executeBagsLaunch(
 ): Promise<void> {
   console.log(`Executing Bags launch ${launch.id} (${launch.token_name})`);
 
-  const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+  const connection = new Connection(SOLANA_RPC_URL, {
+    commitment: "confirmed",
+    wsEndpoint: SOLANA_WSS_URL,
+  });
   // Per Bags official docs: instantiate the SDK with "processed" commitment.
   // The SDK helpers (signAndSendTransaction / sendBundleAndConfirm) use this
   // for their internal confirmation polling.
@@ -809,13 +822,22 @@ export async function executeBagsLaunch(
           bpsSum: feeClaimers.reduce((s, c) => s + c.userBps, 0),
           usedLut: !!additionalLookupTables,
         });
-        const reason = `createLaunchTransaction failed after ${attempt} attempt(s) (configKey=${configKeyStr}, retry can reuse config): ${msg} | fingerprint=${fingerprint}`;
+        const status = (lastLaunchErr?.response?.status ?? lastLaunchErr?.status) as number | undefined;
+        const reason =
+          typeof status === "number" && status >= 500
+            ? `Bags createLaunchTransaction returned ${status} (Bags-side outage). Fee-share configKey=${configKeyStr} is reusable — retry from admin once Bags is healthy. ${msg} | fingerprint=${fingerprint}`
+            : `createLaunchTransaction failed after ${attempt} attempt(s) (configKey=${configKeyStr}, retry can reuse config): ${msg} | fingerprint=${fingerprint}`;
         await setFailed(launch.id, reason);
         return;
       }
     }
     if (!built) {
-      const reason = `createLaunchTransaction exhausted ${MAX_LAUNCH_TX_ATTEMPTS} attempts (configKey=${configKeyStr}): ${describeBagsError(lastLaunchErr)}`;
+      const status = (lastLaunchErr?.response?.status ?? lastLaunchErr?.status) as number | undefined;
+      const baseMsg = describeBagsError(lastLaunchErr);
+      const reason =
+        typeof status === "number" && status >= 500
+          ? `Bags createLaunchTransaction returned ${status} after ${MAX_LAUNCH_TX_ATTEMPTS} attempts (Bags-side outage). Fee-share configKey=${configKeyStr} is reusable — retry from admin once Bags is healthy. ${baseMsg}`
+          : `createLaunchTransaction exhausted ${MAX_LAUNCH_TX_ATTEMPTS} attempts (configKey=${configKeyStr}): ${baseMsg}`;
       await setFailed(launch.id, reason);
       return;
     }
