@@ -32,6 +32,16 @@ const BAGS_API_KEY = process.env.BAGS_API_KEY!;
 const BAGS_PARTNER_WALLET = process.env.BAGS_PARTNER_WALLET!;
 const BAGS_PARTNER_CONFIG = process.env.BAGS_PARTNER_CONFIG!;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
+// Optional explicit WebSocket endpoint. The Bags SDK uses
+// connection.confirmTransaction internally (e.g. inside
+// sendBundleAndConfirm), which calls signatureSubscribe over WS. Many
+// providers (notably Alchemy's standard Solana tier) do NOT serve
+// signatureSubscribe — point this at Helius/Triton/QuickNode if you see
+// "Method 'signatureSubscribe' not found" warnings. Falls back to
+// SOLANA_RPC_URL with https->wss scheme swap.
+const SOLANA_WSS_URL =
+  process.env.SOLANA_WSS_URL ||
+  SOLANA_RPC_URL.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
 
 // Bags fee-share v2 program is re-exported from the SDK (resolved from the
 // IDL). We use it together with the WSOL quote mint to derive the
