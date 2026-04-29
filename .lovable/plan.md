@@ -1,96 +1,65 @@
-## Two distinct problems in the latest Bags launches
+## Apply WebSocket fix to every executor Connection
 
-### Problem 1 — `signatureSubscribe not found` (ours to fix)
+`executor/src/executeBags.ts` already passes `wsEndpoint`. The other five files still build the Connection with the old `(SOLANA_RPC_URL, "confirmed")` signature, so any `confirmTransaction` call inside them (or inside libs we pass the connection to) will keep hitting Alchemy's missing `signatureSubscribe`. Bring all six sites to the same shape and make the WSS URL a hard env requirement so a missing Railway var fails fast at boot instead of mid-launch.
 
-The Bags SDK uses `connection.confirmTransaction` internally for several steps we cannot intercept (e.g. `createTipTransaction` / `sendBundleAndConfirm`, and any future SDK calls). `confirmTransaction` opens a WebSocket and calls `signatureSubscribe`. Our executor builds the Connection with only an HTTP URL:
+### Files
 
 ```text
-executor/src/executeBags.ts:309
-new Connection(SOLANA_RPC_URL, "confirmed")
+executor/src/executePumpfunLightning.ts     line 122
+executor/src/recoverPumpfunSweep.ts         line 70
+executor/src/refundFailedLaunch.ts          line 78
+executor/src/fundSponsoredEscrow.ts         line 190
+executor/src/sweepCancelledSponsorEscrows.ts line 145
+executor/src/index.ts                        validateEnv()
+executor/.env.example                        SOLANA_WSS_URL line
 ```
 
-web3.js then derives a default WS endpoint from the HTTP URL, which on most providers is wrong. Result: repeated `Method 'signatureSubscribe' not found` log spam and SDK-internal confirmation false-failures.
+### Change in each of the 5 executor files
 
-You're correct that Alchemy's standard Solana tier does not serve `signatureSubscribe`, so we must let the operator point WS at a provider that does (Helius, Triton, QuickNode, etc.) without code changes.
+At the top of the module (next to the existing `SOLANA_RPC_URL` constant), add:
 
-### Problem 2 — Bags `createLaunchTransaction` returning HTTP 500 five times
-
-This is a server-side Bags issue. Our payload is correct (fee-share PDA verified at 1048 bytes, BPS=10000, 2 claimers, mint reserved this run, metadata URL present). Retrying the same payload 5x with backoff did not help. We will not change the payload — but we will tighten the retry/refund behavior so a Bags outage doesn't leave launches in a confusing half-state.
-
-## Plan
-
-### 1. Add `wsEndpoint` to the Bags executor Connection
-
-File: `executor/src/executeBags.ts`
-
-```text
-const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!
+```ts
 const SOLANA_WSS_URL =
   process.env.SOLANA_WSS_URL ||
-  SOLANA_RPC_URL.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://")
+  SOLANA_RPC_URL.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
+```
 
-new Connection(SOLANA_RPC_URL, {
+(For `fundSponsoredEscrow.ts` and `sweepCancelledSponsorEscrows.ts` the RPC URL is read into a local `rpcUrl` inside the function — derive `wssUrl` the same way in that local scope.)
+
+Then replace the constructor:
+
+```ts
+// before
+const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+// after
+const connection = new Connection(SOLANA_RPC_URL, {
   commitment: "confirmed",
   wsEndpoint: SOLANA_WSS_URL,
-})
+});
 ```
 
-This makes `wsEndpoint` explicit and overridable via env. Operator action (out of repo): set `SOLANA_WSS_URL` in Railway to a WS-capable endpoint (Helius / Triton / QuickNode). Alchemy HTTP can stay as `SOLANA_RPC_URL`.
+No other behavior changes — same commitment, same RPC, just an explicit WS endpoint so `signatureSubscribe` works on Helius/Triton/QuickNode if the operator points `SOLANA_WSS_URL` there.
 
-### 2. Document the env var
+### `executor/src/index.ts`
 
-File: `executor/.env.example`
+Add `"SOLANA_WSS_URL"` to the `required` array in `validateEnv()` so the worker refuses to boot without it. Keep the existing startup log line (it already prints whether the override is set).
 
-Add:
+### `executor/.env.example`
+
+The file already documents `SOLANA_WSS_URL`. Change the placeholder line from the generic `wss://your-ws-capable-rpc` to a copy-pasteable Alchemy template so it matches the existing `SOLANA_RPC_URL` example:
 
 ```text
-# Optional. WebSocket RPC endpoint used ONLY for SDK-internal
-# signatureSubscribe calls (Bags SDK confirmTransaction).
-# Defaults to SOLANA_RPC_URL with https->wss. Alchemy's standard
-# Solana tier does NOT support signatureSubscribe — point this at
-# Helius / Triton / QuickNode if you see "Method 'signatureSubscribe'
-# not found" warnings.
-SOLANA_WSS_URL=wss://your-ws-capable-rpc
+SOLANA_WSS_URL=wss://solana-mainnet.g.alchemy.com/v2/your-key
 ```
 
-Also update the existing comment block in that file that says "WebSocket / signatureSubscribe support is NOT required" to clarify it's only true for our own custodial sends (which use HTTP polling), not for the Bags SDK helpers.
+Also drop the now-stale "Optional." word from the comment block above it (it is required after this change).
 
-### 3. Defensive logging for env parity
+### Out of scope
 
-In `executor/src/index.ts`, add a one-line log on startup showing whether `SOLANA_WSS_URL` is set (don't print the URL — just a boolean). Helps confirm Railway picked it up.
+- No change to `executor/src/processingFee.ts` — it receives `connection` as a parameter, as the prompt notes.
+- No change to `distributor/` (separate service, separate fix if needed later).
+- No change to platform pause toggle. Operator re-enables Bags from admin once Bags' 500s clear.
 
-### 4. Treat repeated Bags 5xx on `createLaunchTransaction` as a clear, non-refunding failure with operator guidance
+### One caller-decision flag
 
-File: `executor/src/executeBags.ts` (Step 3 block, lines ~740-820)
-
-Currently 500 is terminal-on-first-attempt (good) but the failure message is generic. Change:
-
-- When the final error is HTTP 5xx, set the failure reason to:
-  `"Bags createLaunchTransaction returned 5xx (Bags-side outage). Fee-share configKey=<key> is reusable. Retry from admin once Bags is healthy."`
-- Keep auto-refund as today (no on-chain launch tx was broadcast).
-- Add the upstream Bags status code into the reason string so admin UI shows "503", "500", etc.
-
-No retry-loop changes — Claude's read is right: hammering the same payload at a 500 doesn't help.
-
-### 5. Out-of-scope (not changed)
-
-- No change to Pump.fun, distributor, or any other executor file.
-- No change to `app_settings` — Bags remains paused via the existing admin toggle until the operator sets `SOLANA_WSS_URL` and verifies one small launch.
-
-## Files touched
-
-```text
-executor/src/executeBags.ts   (Connection wsEndpoint + Step 3 5xx reason)
-executor/src/index.ts         (one-line WSS startup log)
-executor/.env.example         (SOLANA_WSS_URL doc + corrected comment)
-```
-
-## What you do after I implement
-
-1. Grab a WebSocket Solana RPC URL (Helius free tier works: `wss://mainnet.helius-rpc.com/?api-key=...`).
-2. Add `SOLANA_WSS_URL` in Railway → executor service env.
-3. Redeploy.
-4. Re-enable Bags in the admin Platform Status panel.
-5. Run one small test launch.
-
-If `signatureSubscribe` warnings disappear from Railway logs and `createLaunchTransaction` still returns 500, we have proof it's a Bags outage and the next step is contacting Bags support with the request fingerprint we already log.
+Hardening `validateEnv` to require `SOLANA_WSS_URL` means the Railway deploy will crash-loop until you actually set it. That's the intent of your prompt and is the right behavior for production, but I want to confirm before shipping — say "go" and I'll apply.
