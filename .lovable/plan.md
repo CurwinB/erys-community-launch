@@ -1,157 +1,96 @@
-I checked the uploaded Railway log, Supabase launch rows, and the on-chain transaction. This latest failure is different from the earlier Bags 500s.
+## Two distinct problems in the latest Bags launches
 
-## What went wrong this time
+### Problem 1 — `signatureSubscribe not found` (ours to fix)
 
-The failed Bags launch is:
-
-```text
-launch_id: d77ac7e5-d731-45c0-aaba-071e95ae5467
-token: Erys test / ETEST
-mint: 4eY3ywM1vZss1FFPY3J598hhkEmP3mwX5JHc1rseBAGS
-escrow: E7XRAxqquSZQENUhmhjvZYMgvHcLAD33FNZGmd7429LZ
-status: execution_failed
-```
-
-Supabase says it failed at fee-share submission:
+The Bags SDK uses `connection.confirmTransaction` internally for several steps we cannot intercept (e.g. `createTipTransaction` / `sendBundleAndConfirm`, and any future SDK calls). `confirmTransaction` opens a WebSocket and calls `signatureSubscribe`. Our executor builds the Connection with only an HTTP URL:
 
 ```text
-Fee-share submission failed (escrow may hold partial state, manual review):
-Signature 4xnT8TeqzFmzaPbMcjJgBFrsq5Xcw3mWPvY8jXtgexN6b1dMvNkwibpjJBeqTESsoH3Hmm7SifFDBcYHwy6BPJiq has expired: block height exceeded.
+executor/src/executeBags.ts:309
+new Connection(SOLANA_RPC_URL, "confirmed")
 ```
 
-The uploaded Railway log repeatedly shows:
+web3.js then derives a default WS endpoint from the HTTP URL, which on most providers is wrong. Result: repeated `Method 'signatureSubscribe' not found` log spam and SDK-internal confirmation false-failures.
+
+You're correct that Alchemy's standard Solana tier does not serve `signatureSubscribe`, so we must let the operator point WS at a provider that does (Helius, Triton, QuickNode, etc.) without code changes.
+
+### Problem 2 — Bags `createLaunchTransaction` returning HTTP 500 five times
+
+This is a server-side Bags issue. Our payload is correct (fee-share PDA verified at 1048 bytes, BPS=10000, 2 claimers, mint reserved this run, metadata URL present). Retrying the same payload 5x with backoff did not help. We will not change the payload — but we will tighten the retry/refund behavior so a Bags outage doesn't leave launches in a confusing half-state.
+
+## Plan
+
+### 1. Add `wsEndpoint` to the Bags executor Connection
+
+File: `executor/src/executeBags.ts`
 
 ```text
-Received JSON-RPC error calling `signatureSubscribe`
-signature: 4xnT8TeqzFmzaPbMcjJgBFrsq5Xcw3mWPvY8jXtgexN6b1dMvNkwibpjJBeqTESsoH3Hmm7SifFDBcYHwy6BPJiq
-commitment: processed
+const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!
+const SOLANA_WSS_URL =
+  process.env.SOLANA_WSS_URL ||
+  SOLANA_RPC_URL.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://")
+
+new Connection(SOLANA_RPC_URL, {
+  commitment: "confirmed",
+  wsEndpoint: SOLANA_WSS_URL,
+})
 ```
 
-But Solscan shows that exact transaction actually succeeded and finalized:
+This makes `wsEndpoint` explicit and overridable via env. Operator action (out of repo): set `SOLANA_WSS_URL` in Railway to a WS-capable endpoint (Helius / Triton / QuickNode). Alchemy HTTP can stay as `SOLANA_RPC_URL`.
+
+### 2. Document the env var
+
+File: `executor/.env.example`
+
+Add:
 
 ```text
-signature: 4xnT8TeqzFmzaPbMcjJgBFrsq5Xcw3mWPvY8jXtgexN6b1dMvNkwibpjJBeqTESsoH3Hmm7SifFDBcYHwy6BPJiq
-result: Success, finalized
-program: Bagsfm Fee Shares
-instruction: create_fee_config
-created config PDA: 9FmdWfQNvx7y9rPqRHnvqbxwiDKAApjdJc1uhoMdEpmJ
-block time: 20:00:22 UTC
+# Optional. WebSocket RPC endpoint used ONLY for SDK-internal
+# signatureSubscribe calls (Bags SDK confirmTransaction).
+# Defaults to SOLANA_RPC_URL with https->wss. Alchemy's standard
+# Solana tier does NOT support signatureSubscribe — point this at
+# Helius / Triton / QuickNode if you see "Method 'signatureSubscribe'
+# not found" warnings.
+SOLANA_WSS_URL=wss://your-ws-capable-rpc
 ```
 
-So the core issue is:
+Also update the existing comment block in that file that says "WebSocket / signatureSubscribe support is NOT required" to clarify it's only true for our own custodial sends (which use HTTP polling), not for the Bags SDK helpers.
+
+### 3. Defensive logging for env parity
+
+In `executor/src/index.ts`, add a one-line log on startup showing whether `SOLANA_WSS_URL` is set (don't print the URL — just a boolean). Helps confirm Railway picked it up.
+
+### 4. Treat repeated Bags 5xx on `createLaunchTransaction` as a clear, non-refunding failure with operator guidance
+
+File: `executor/src/executeBags.ts` (Step 3 block, lines ~740-820)
+
+Currently 500 is terminal-on-first-attempt (good) but the failure message is generic. Change:
+
+- When the final error is HTTP 5xx, set the failure reason to:
+  `"Bags createLaunchTransaction returned 5xx (Bags-side outage). Fee-share configKey=<key> is reusable. Retry from admin once Bags is healthy."`
+- Keep auto-refund as today (no on-chain launch tx was broadcast).
+- Add the upstream Bags status code into the reason string so admin UI shows "503", "500", etc.
+
+No retry-loop changes — Claude's read is right: hammering the same payload at a 500 doesn't help.
+
+### 5. Out-of-scope (not changed)
+
+- No change to Pump.fun, distributor, or any other executor file.
+- No change to `app_settings` — Bags remains paused via the existing admin toggle until the operator sets `SOLANA_WSS_URL` and verifies one small launch.
+
+## Files touched
 
 ```text
-The Bags fee-share config transaction landed successfully on-chain,
-but the executor trusted the SDK helper's confirmTransaction error,
-marked the launch failed, and never continued to createLaunchTransaction.
+executor/src/executeBags.ts   (Connection wsEndpoint + Step 3 5xx reason)
+executor/src/index.ts         (one-line WSS startup log)
+executor/.env.example         (SOLANA_WSS_URL doc + corrected comment)
 ```
 
-This is not a Bags API 500 this time. It is a transaction confirmation false negative caused by the official SDK helper using `connection.confirmTransaction`, which relies on `signatureSubscribe`. Our Railway/RPC environment is throwing repeated `signatureSubscribe` errors, and then the helper reports blockhash expiry even though the transaction landed.
+## What you do after I implement
 
-## Current risk
+1. Grab a WebSocket Solana RPC URL (Helius free tier works: `wss://mainnet.helius-rpc.com/?api-key=...`).
+2. Add `SOLANA_WSS_URL` in Railway → executor service env.
+3. Redeploy.
+4. Re-enable Bags in the admin Platform Status panel.
+5. Run one small test launch.
 
-Bags launches are currently enabled in `app_settings`:
-
-```text
-launches_bags_enabled = true
-```
-
-That means users can still schedule Bags launches even though the executor can false-fail after a successful on-chain fee-share config transaction. I recommend disabling Bags again until this fix is applied and verified.
-
-## Important state of the failed launch
-
-For `d77ac7e5-d731-45c0-aaba-071e95ae5467`:
-
-- The launch token itself did not launch.
-- The fee-share config did get created on-chain.
-- Supabase did not store `fee_share_config_key`, because the executor returned early after the false error.
-- The correct derived config key is `9FmdWfQNvx7y9rPqRHnvqbxwiDKAApjdJc1uhoMdEpmJ`.
-- Contributions have not been refunded yet, which is conservative because partial on-chain state exists.
-
-## Fix plan
-
-### 1. Immediately protect users
-
-Disable Bags launches again via `app_settings` until the confirmation fix is deployed and tested. Pump.fun can remain unchanged.
-
-### 2. Keep the official Bags payload/order, replace only fragile confirmation handling
-
-Continue using Bags SDK for the documented flow and payloads:
-
-```text
-createTokenInfoAndMetadata
-createBagsFeeShareConfig
-createLaunchTransaction
-```
-
-But stop using the SDK's `signAndSendTransaction` as the only source of truth for whether a transaction landed. The SDK helper does this internally:
-
-```text
-sendTransaction(skipPreflight: true, maxRetries: 0)
-confirmTransaction(...)
-```
-
-That exact confirmation path is what failed here. I will replace executor-side transaction sending for Bags with a robust helper that:
-
-```text
-signs the VersionedTransaction
-sends it via sendRawTransaction
-polls getSignatureStatuses over HTTP
-rebroadcasts while valid
-if blockhash expires, checks transaction history before declaring failure
-returns success if the tx landed confirmed/finalized
-```
-
-This preserves Bags’ documented API call order and payloads, but fixes the confirmation transport problem that caused the false failure.
-
-### 3. Recover successful-on-chain fee-share configs before failing
-
-When fee-share submission throws, the executor should not immediately mark failed. It should:
-
-1. Derive the deterministic fee-share config PDA from `baseMint`.
-2. Check RPC for that account.
-3. If it exists, store it in Supabase as `fee_share_config_key`.
-4. Continue to the 25s Bags indexer wait and `createLaunchTransaction`.
-
-For the latest failed launch, this would have found:
-
-```text
-9FmdWfQNvx7y9rPqRHnvqbxwiDKAApjdJc1uhoMdEpmJ
-```
-
-and continued instead of failing.
-
-### 4. Persist partial progress earlier
-
-As soon as Bags returns `meteoraConfigKey` from `createBagsFeeShareConfig`, store it in Supabase before submitting fee-share transactions. That way, if confirmation fails after the transaction lands, the admin retry path has the exact config key and does not lose the recovery handle.
-
-### 5. Add a safe admin retry path for this exact launch
-
-After the code fix, `d77ac7e5-d731-45c0-aaba-071e95ae5467` should be recoverable without recreating the fee-share config:
-
-```text
-set fee_share_config_key = 9FmdWfQNvx7y9rPqRHnvqbxwiDKAApjdJc1uhoMdEpmJ
-set status = executing
-clear worker lock
-```
-
-Then the executor should skip config creation, wait for Bags indexing, call `createLaunchTransaction`, and launch.
-
-### 6. Improve failure classification
-
-If a Bags transaction confirmation throws but later polling proves the tx landed, treat it as success.
-
-If the tx truly never landed, classify it based on stage:
-
-- Before any on-chain state: safe auto-refund.
-- After fee-share config might exist: no auto-refund until recovery check completes.
-- After launch tx broadcast: no auto-refund unless we prove the launch tx failed preflight/on-chain.
-
-### 7. Verification
-
-After implementation:
-
-- Re-check the code against the Bags launch guide step-by-step.
-- Confirm the executor no longer relies on `signatureSubscribe` for final success/failure decisions.
-- Verify the latest failed config PDA is detected on-chain.
-- Keep Bags paused until we run one controlled small launch test.
+If `signatureSubscribe` warnings disappear from Railway logs and `createLaunchTransaction` still returns 500, we have proof it's a Bags outage and the next step is contacting Bags support with the request fingerprint we already log.
