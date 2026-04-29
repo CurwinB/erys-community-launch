@@ -316,7 +316,10 @@ export async function executeBagsLaunch(
 ): Promise<void> {
   console.log(`Executing Bags launch ${launch.id} (${launch.token_name})`);
 
-  const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+  const connection = new Connection(SOLANA_RPC_URL, {
+    commitment: "confirmed",
+    wsEndpoint: SOLANA_WSS_URL,
+  });
   // Per Bags official docs: instantiate the SDK with "processed" commitment.
   // The SDK helpers (signAndSendTransaction / sendBundleAndConfirm) use this
   // for their internal confirmation polling.
