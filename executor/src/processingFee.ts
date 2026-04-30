@@ -210,7 +210,7 @@ export async function chargeProcessingFee(
           return {
             charged: true,
             signature: lastSignature,
-            feeLamports: PROCESSING_FEE_LAMPORTS,
+            feeLamports,
           };
         }
       }
@@ -231,7 +231,7 @@ export async function chargeProcessingFee(
       return {
         charged: true,
         signature,
-        feeLamports: PROCESSING_FEE_LAMPORTS,
+        feeLamports,
       };
     } catch (confirmErr: any) {
       lastError = confirmErr;
@@ -253,7 +253,7 @@ export async function chargeProcessingFee(
           return {
             charged: true,
             signature,
-            feeLamports: PROCESSING_FEE_LAMPORTS,
+            feeLamports,
           };
         }
       } catch (statusErr: any) {
