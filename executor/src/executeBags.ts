@@ -421,6 +421,7 @@ export async function executeBagsLaunch(
         escrowKeypair,
         BAGS_PARTNER_WALLET,
         launch.id,
+        totalLamports,
         (launch as any).processing_fee_tx_signature ?? null,
       );
       if (feeResult.charged) {
