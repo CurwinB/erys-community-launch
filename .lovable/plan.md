@@ -1,65 +1,59 @@
-## Apply WebSocket fix to every executor Connection
+# Tiered processing fee
 
-`executor/src/executeBags.ts` already passes `wsEndpoint`. The other five files still build the Connection with the old `(SOLANA_RPC_URL, "confirmed")` signature, so any `confirmTransaction` call inside them (or inside libs we pass the connection to) will keep hitting Alchemy's missing `signatureSubscribe`. Bring all six sites to the same shape and make the WSS URL a hard env requirement so a missing Railway var fails fast at boot instead of mid-launch.
+Add a second, higher processing-fee tier so launches that raise ≥ 2 SOL pay a 0.13 SOL platform fee instead of the existing 0.06 SOL fee. Launches < 0.3 SOL still pay nothing. The fee remains hidden, debited from escrow → treasury just before the launch tx, and contributor BPS math is unchanged.
 
-### Files
+| Total raised | Fee (this PR) |
+|---|---|
+| < 0.3 SOL | 0 |
+| ≥ 0.3 and < 2 SOL | 0.06 SOL |
+| ≥ 2 SOL | 0.13 SOL |
 
-```text
-executor/src/executePumpfunLightning.ts     line 122
-executor/src/recoverPumpfunSweep.ts         line 70
-executor/src/refundFailedLaunch.ts          line 78
-executor/src/fundSponsoredEscrow.ts         line 190
-executor/src/sweepCancelledSponsorEscrows.ts line 145
-executor/src/index.ts                        validateEnv()
-executor/.env.example                        SOLANA_WSS_URL line
-```
+## Files changed
 
-### Change in each of the 5 executor files
+### 1. `executor/src/processingFee.ts` (primary)
 
-At the top of the module (next to the existing `SOLANA_RPC_URL` constant), add:
+- Replace the single `PROCESSING_FEE_LAMPORTS` / `PROCESSING_FEE_THRESHOLD` constants with the four-constant tiered set:
+  - `PROCESSING_FEE_THRESHOLD_LOW = 300_000_000n`
+  - `PROCESSING_FEE_THRESHOLD_HIGH = 2_000_000_000n`
+  - `PROCESSING_FEE_LOW = 60_000_000n`
+  - `PROCESSING_FEE_HIGH = 130_000_000n`
+  - keep `PROCESSING_FEE_TX_FEE = 5_000n` (renamed in the user prompt to `PROCESSING_FEE_TX_COST`; we keep current name to avoid touching nothing-else, OR rename — pick one; plan: keep `PROCESSING_FEE_TX_FEE`).
+- Add `getProcessingFeeLamports(totalLamports: bigint): bigint` returning `PROCESSING_FEE_HIGH`, `PROCESSING_FEE_LOW`, or `0n`.
+- `shouldChargeProcessingFee` now compares against `PROCESSING_FEE_THRESHOLD_LOW`.
+- Update `chargeProcessingFee` signature to add `totalLamports: bigint` as a **new required parameter**, while keeping the existing `existingSignature?: string | null` idempotency param. Final signature:
+  ```ts
+  chargeProcessingFee(
+    connection, escrowKeypair, treasuryWallet, launchId,
+    totalLamports, existingSignature?
+  )
+  ```
+- Inside `chargeProcessingFee`:
+  - Compute `feeLamports = getProcessingFeeLamports(totalLamports)`. If `0n`, return `{ charged: false }`.
+  - Replace every hardcoded `PROCESSING_FEE_LAMPORTS` reference (idempotency return, transferAmount, log line, all three success returns) with the dynamic `feeLamports`.
+  - `transferAmount = feeLamports - PROCESSING_FEE_TX_FEE`.
+- Update the file-level comment block to describe the two tiers.
 
+### 2. `executor/src/executeBags.ts`
+
+Update the single `chargeProcessingFee(...)` call (around line 419) to pass `totalLamports` before the existing-signature arg:
 ```ts
-const SOLANA_WSS_URL =
-  process.env.SOLANA_WSS_URL ||
-  SOLANA_RPC_URL.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
+const feeResult = await chargeProcessingFee(
+  connection,
+  escrowKeypair,
+  BAGS_PARTNER_WALLET,
+  launch.id,
+  totalLamports,
+  (launch as any).processing_fee_tx_signature ?? null,
+);
 ```
 
-(For `fundSponsoredEscrow.ts` and `sweepCancelledSponsorEscrows.ts` the RPC URL is read into a local `rpcUrl` inside the function — derive `wssUrl` the same way in that local scope.)
+### 3. `executor/src/executePumpfunLightning.ts`
 
-Then replace the constructor:
+Same change at the call site around line 136 (TREASURY_WALLET). Note: the user's prompt referenced `executePumpfun.ts`, but the active Pump.fun caller is `executePumpfunLightning.ts`. The legacy `executePumpfun.ts` does **not** call `chargeProcessingFee`, so it needs no change.
 
-```ts
-// before
-const connection = new Connection(SOLANA_RPC_URL, "confirmed");
-// after
-const connection = new Connection(SOLANA_RPC_URL, {
-  commitment: "confirmed",
-  wsEndpoint: SOLANA_WSS_URL,
-});
-```
+## Notes
 
-No other behavior changes — same commitment, same RPC, just an explicit WS endpoint so `signatureSubscribe` works on Helius/Triton/QuickNode if the operator points `SOLANA_WSS_URL` there.
-
-### `executor/src/index.ts`
-
-Add `"SOLANA_WSS_URL"` to the `required` array in `validateEnv()` so the worker refuses to boot without it. Keep the existing startup log line (it already prints whether the override is set).
-
-### `executor/.env.example`
-
-The file already documents `SOLANA_WSS_URL`. Change the placeholder line from the generic `wss://your-ws-capable-rpc` to a copy-pasteable Alchemy template so it matches the existing `SOLANA_RPC_URL` example:
-
-```text
-SOLANA_WSS_URL=wss://solana-mainnet.g.alchemy.com/v2/your-key
-```
-
-Also drop the now-stale "Optional." word from the comment block above it (it is required after this change).
-
-### Out of scope
-
-- No change to `executor/src/processingFee.ts` — it receives `connection` as a parameter, as the prompt notes.
-- No change to `distributor/` (separate service, separate fix if needed later).
-- No change to platform pause toggle. Operator re-enables Bags from admin once Bags' 500s clear.
-
-### One caller-decision flag
-
-Hardening `validateEnv` to require `SOLANA_WSS_URL` means the Railway deploy will crash-loop until you actually set it. That's the intent of your prompt and is the right behavior for production, but I want to confirm before shipping — say "go" and I'll apply.
+- Idempotency preserved: the `findAlreadyPaidProcessingFee` early-return still uses `feeLamports` (the new tier value) for `feeLamports` in the result. If a previous attempt at a lower tier already landed on-chain, the function returns it as-is — we will not double-charge to "top up" to the new tier. This is the correct behavior (we already debited the user; we don't second-debit on retry).
+- No DB schema changes. `processing_fee_lamports` already stores whatever amount was charged.
+- No env vars, no frontend changes.
+- Existing `PROCESSING_FEE_LAMPORTS` export is removed; ripgrep confirms it has no external importers.

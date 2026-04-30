@@ -9,11 +9,18 @@ import {
 
 // Hidden platform processing fee. Charged from the escrow wallet to the
 // platform treasury just before the launch transaction whenever the total
-// raised meets PROCESSING_FEE_THRESHOLD. Invisible to users — fee-share BPS
-// and token-distribution BPS continue to be calculated from the original
+// raised meets a tier threshold. Invisible to users — fee-share BPS and
+// token-distribution BPS continue to be calculated from the original
 // contribution amounts so contributors are not penalized.
-export const PROCESSING_FEE_LAMPORTS = 60_000_000n; // 0.06 SOL
-export const PROCESSING_FEE_THRESHOLD = 300_000_000n; // 0.3 SOL
+//
+// Tiers:
+//   total >= 2.0 SOL  -> 0.13 SOL
+//   total >= 0.3 SOL  -> 0.06 SOL
+//   total <  0.3 SOL  -> 0
+export const PROCESSING_FEE_THRESHOLD_LOW = 300_000_000n;   // 0.3 SOL
+export const PROCESSING_FEE_THRESHOLD_HIGH = 2_000_000_000n; // 2.0 SOL
+export const PROCESSING_FEE_LOW = 60_000_000n;              // 0.06 SOL
+export const PROCESSING_FEE_HIGH = 130_000_000n;            // 0.13 SOL
 const PROCESSING_FEE_TX_FEE = 5_000n; // network fee for the SystemProgram.transfer
 
 // How long we re-poll signature status after a confirmTransaction throw
@@ -24,7 +31,17 @@ const CONFIRM_RECOVERY_INTERVAL_MS = 2_000;
 const MAX_SEND_ATTEMPTS = 3;
 
 export function shouldChargeProcessingFee(totalLamports: bigint): boolean {
-  return totalLamports >= PROCESSING_FEE_THRESHOLD;
+  return totalLamports >= PROCESSING_FEE_THRESHOLD_LOW;
+}
+
+/**
+ * Returns the processing-fee debit (in lamports) that should be charged for
+ * a launch raising `totalLamports`. Returns 0n when no fee applies.
+ */
+export function getProcessingFeeLamports(totalLamports: bigint): bigint {
+  if (totalLamports >= PROCESSING_FEE_THRESHOLD_HIGH) return PROCESSING_FEE_HIGH;
+  if (totalLamports >= PROCESSING_FEE_THRESHOLD_LOW) return PROCESSING_FEE_LOW;
+  return 0n;
 }
 
 export interface ProcessingFeeResult {
@@ -97,9 +114,10 @@ export async function findAlreadyPaidProcessingFee(
 }
 
 /**
- * Transfers PROCESSING_FEE_LAMPORTS - tx fee from the escrow wallet to the
- * platform treasury. The on-chain debit on the escrow is exactly
- * PROCESSING_FEE_LAMPORTS (transfer + 5_000 network fee = 0.06 SOL).
+ * Transfers (tier fee - tx fee) from the escrow wallet to the platform
+ * treasury. The on-chain debit on the escrow is exactly the tier fee
+ * (transfer + 5_000 network fee). Tier is selected from `totalLamports`
+ * via getProcessingFeeLamports.
  *
  * Hardened against RPC blockhash flakiness:
  *   - If `existingSignature` is provided and finalized on-chain, returns it
@@ -116,8 +134,14 @@ export async function chargeProcessingFee(
   escrowKeypair: Keypair,
   treasuryWallet: string,
   launchId: string,
+  totalLamports: bigint,
   existingSignature?: string | null,
 ): Promise<ProcessingFeeResult> {
+  const feeLamports = getProcessingFeeLamports(totalLamports);
+  if (feeLamports === 0n) {
+    return { charged: false };
+  }
+
   // Idempotency: if a prior attempt already landed, return it.
   const alreadyPaid = await findAlreadyPaidProcessingFee(
     connection,
@@ -130,16 +154,18 @@ export async function chargeProcessingFee(
     return {
       charged: true,
       signature: alreadyPaid,
-      feeLamports: PROCESSING_FEE_LAMPORTS,
+      feeLamports,
     };
   }
 
-  const transferAmount = PROCESSING_FEE_LAMPORTS - PROCESSING_FEE_TX_FEE;
+  const transferAmount = feeLamports - PROCESSING_FEE_TX_FEE;
 
   console.log(
     `[launch ${launchId}] Charging processing fee: ${
-      Number(PROCESSING_FEE_LAMPORTS) / LAMPORTS_PER_SOL
-    } SOL → ${treasuryWallet}`,
+      Number(feeLamports) / LAMPORTS_PER_SOL
+    } SOL → ${treasuryWallet} (total contributions: ${
+      Number(totalLamports) / LAMPORTS_PER_SOL
+    } SOL)`,
   );
 
   let lastError: any = null;
