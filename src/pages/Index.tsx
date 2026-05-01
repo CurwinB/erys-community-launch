@@ -108,7 +108,7 @@ const Index = () => {
     <main className="min-h-screen">
       <Seo
         title="Erys — Fair-Launch Presales for Solana Tokens"
-        description="Run a fair-launch presale on Bags.fm or Pump.fun. Let your community ape in early, lock in allocations on-chain, and migrate to the DEX automatically."
+         description="Run a fair-launch presale on Bags.fm or Pump.fun. Let your community ape in early, lock in allocations on-chain, and launch on the DEX automatically."
         path="/"
         jsonLd={{
           "@context": "https://schema.org",
