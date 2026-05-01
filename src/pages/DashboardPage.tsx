@@ -165,7 +165,7 @@ const DashboardPage = () => {
       <main className="min-h-screen">
         <Seo
           title="Dashboard — Erys"
-        description="View your presale allocations, claim creator fees, and track migrations."
+         description="View your presale allocations, claim creator fees, and track launches."
           path="/dashboard"
           noindex
         />
@@ -379,10 +379,10 @@ const NotificationsTab = ({
             <Clock className="mt-0.5 h-5 w-5 text-primary shrink-0" />
             <div>
               <p className="text-[10px] uppercase tracking-widest text-primary">
-                Presale migrating soon
+                 Presale launching soon
               </p>
               <p className="mt-0.5 text-sm text-foreground">
-                {l?.token_name} migrates in{" "}
+               {l?.token_name} launches in{" "}
                 <span className="font-mono font-semibold">
                   {timeUntil(l?.launch_datetime)}
                 </span>

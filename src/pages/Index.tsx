@@ -100,7 +100,7 @@ const Index = () => {
     {
       icon: Shield,
       title: "Non-Custodial Escrow.",
-      body: "SOL sits in a per-presale escrow on Solana. No mint, no migration → automatic refund.",
+       body: "SOL sits in a per-presale escrow on Solana. No mint, no launch → automatic refund.",
     },
   ];
 
@@ -108,7 +108,7 @@ const Index = () => {
     <main className="min-h-screen">
       <Seo
         title="Erys — Fair-Launch Presales for Solana Tokens"
-        description="Run a fair-launch presale on Bags.fm or Pump.fun. Let your community ape in early, lock in allocations on-chain, and migrate to the DEX automatically."
+         description="Run a fair-launch presale on Bags.fm or Pump.fun. Let your community ape in early, lock in allocations on-chain, and launch on the DEX automatically."
         path="/"
         jsonLd={{
           "@context": "https://schema.org",
@@ -130,7 +130,7 @@ const Index = () => {
               Run a fair-launch presale on Solana.
             </h1>
             <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
-              Open a presale, let your community ape in before the token migrates to Bags or Pump. Allocations drop on-chain the moment it goes live.
+               Open a presale, let your community ape in before the token launches on Bags or Pump. Allocations drop on-chain the moment it goes live.
             </p>
             <div className="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
               <Link to="/schedule">
@@ -255,7 +255,7 @@ const Index = () => {
       {/* Completed Launches */}
       <section>
         <div className="container mx-auto px-4 py-16">
-          <h2 className="mb-8 text-2xl font-bold text-foreground">Migrated Tokens</h2>
+           <h2 className="mb-8 text-2xl font-bold text-foreground">Launched Tokens</h2>
 
           {completedLoading ? (
             isMobile ? (
@@ -323,7 +323,7 @@ const Index = () => {
                   ← Previous
                 </button>
                 <span className="font-mono text-xs text-muted-foreground">
-                  Page {completedPage} of {totalCompletedPages} · {completedLaunches.length} migrated
+                   Page {completedPage} of {totalCompletedPages} · {completedLaunches.length} launched
                 </span>
                 <button
                   onClick={() => setCompletedPage((p) => Math.min(totalCompletedPages, p + 1))}
@@ -337,7 +337,7 @@ const Index = () => {
             </>
           ) : (
             <div className="flex flex-col items-center justify-center rounded-sm border border-dashed border-border py-12">
-              <p className="text-muted-foreground">No migrated tokens yet.</p>
+               <p className="text-muted-foreground">No launched tokens yet.</p>
             </div>
           )}
         </div>
