@@ -14,13 +14,16 @@ import {
 // contribution amounts so contributors are not penalized.
 //
 // Tiers:
+//   total >= 5.0 SOL  -> 0.20 SOL
 //   total >= 2.0 SOL  -> 0.13 SOL
 //   total >= 0.3 SOL  -> 0.06 SOL
 //   total <  0.3 SOL  -> 0
-export const PROCESSING_FEE_THRESHOLD_LOW = 300_000_000n;   // 0.3 SOL
-export const PROCESSING_FEE_THRESHOLD_HIGH = 2_000_000_000n; // 2.0 SOL
-export const PROCESSING_FEE_LOW = 60_000_000n;              // 0.06 SOL
-export const PROCESSING_FEE_HIGH = 130_000_000n;            // 0.13 SOL
+export const PROCESSING_FEE_THRESHOLD_LOW  = 300_000_000n;   // 0.3 SOL
+export const PROCESSING_FEE_THRESHOLD_MID  = 2_000_000_000n; // 2.0 SOL
+export const PROCESSING_FEE_THRESHOLD_HIGH = 5_000_000_000n; // 5.0 SOL
+export const PROCESSING_FEE_LOW  = 60_000_000n;              // 0.06 SOL
+export const PROCESSING_FEE_MID  = 130_000_000n;             // 0.13 SOL
+export const PROCESSING_FEE_HIGH = 200_000_000n;             // 0.20 SOL
 const PROCESSING_FEE_TX_FEE = 5_000n; // network fee for the SystemProgram.transfer
 
 // How long we re-poll signature status after a confirmTransaction throw
@@ -40,6 +43,7 @@ export function shouldChargeProcessingFee(totalLamports: bigint): boolean {
  */
 export function getProcessingFeeLamports(totalLamports: bigint): bigint {
   if (totalLamports >= PROCESSING_FEE_THRESHOLD_HIGH) return PROCESSING_FEE_HIGH;
+  if (totalLamports >= PROCESSING_FEE_THRESHOLD_MID) return PROCESSING_FEE_MID;
   if (totalLamports >= PROCESSING_FEE_THRESHOLD_LOW) return PROCESSING_FEE_LOW;
   return 0n;
 }
