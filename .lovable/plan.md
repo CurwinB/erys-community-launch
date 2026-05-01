@@ -1,26 +1,67 @@
-## What's broken
+# Add third processing fee tier
 
-The previous security migration revoked the table-level `SELECT` GRANT on `public.launches` from `anon`/`authenticated` AND switched `launches_public` to `security_invoker=true`. The view now runs as the caller, so PostgREST checks the caller's grants on the underlying table — and since there are no grants, every query to `launches_public` returns `401 permission denied for table launches`. That's why the homepage shows "No launched tokens yet."
+Single-file change to `executor/src/processingFee.ts`. No other files touched. No DB, edge-function, or UI changes.
 
-## Fix
+## New tier ladder
 
-Restore column-level `SELECT` grants on **only the safe columns** of `public.launches` to `anon` and `authenticated`. This is exactly the column allowlist the `launches_public` view exposes. Sensitive columns (encrypted escrow private key, processing fee signature, worker lock fields, sponsor link token, encrypted pumpfun mint keypair, etc.) remain ungranted and unreadable.
+| Total raised | Processing fee |
+|---|---|
+| ≥ 5 SOL | 0.20 SOL |
+| ≥ 2 SOL | 0.13 SOL |
+| ≥ 0.3 SOL | 0.06 SOL |
+| < 0.3 SOL | 0 |
 
-This keeps the security improvements from the last migration (no full-table SELECT, view runs as invoker) while restoring the public read path the website depends on.
+## Changes inside `executor/src/processingFee.ts`
 
-## Migration
+### 1. Update the tier comment block at the top of the file
 
-```sql
-GRANT SELECT (
-  id, token_name, token_symbol, description, image_url,
-  twitter_url, telegram_url, website_url, token_mint_address,
-  ipfs_metadata_url, escrow_wallet_public_key, launch_datetime,
-  min_contribution_lamports, max_contribution_lamports, status,
-  created_by_wallet, created_at, platform, pumpfun_launch_signature,
-  distribution_completed, distribution_completed_at,
-  total_tokens_distributed, is_sponsored, sponsored_amount_lamports,
-  claimer_count, fee_share_config_key
-) ON public.launches TO anon, authenticated;
+Replace the existing 3-line tier table in the header comment to document all three tiers (≥5 / ≥2 / ≥0.3 / <0.3).
+
+### 2. Replace the threshold + fee constants
+
+Rename the current `_HIGH` constants to `_MID` (their values stay 2 SOL / 0.13 SOL), and add new `_HIGH` constants for the 5 SOL / 0.20 SOL tier:
+
+```ts
+export const PROCESSING_FEE_THRESHOLD_LOW  = 300_000_000n;    // 0.3 SOL
+export const PROCESSING_FEE_THRESHOLD_MID  = 2_000_000_000n;  // 2 SOL
+export const PROCESSING_FEE_THRESHOLD_HIGH = 5_000_000_000n;  // 5 SOL
+
+export const PROCESSING_FEE_LOW  = 60_000_000n;   // 0.06 SOL
+export const PROCESSING_FEE_MID  = 130_000_000n;  // 0.13 SOL
+export const PROCESSING_FEE_HIGH = 200_000_000n;  // 0.20 SOL
 ```
 
-No code changes needed — the frontend already queries `launches_public`.
+`PROCESSING_FEE_TX_FEE = 5_000n` is kept as-is (already named this way and referenced inside `chargeProcessingFee`; the prompt's `PROCESSING_FEE_TX_COST` appears to be a typo — keeping the existing name avoids breaking the internal `feeLamports - PROCESSING_FEE_TX_FEE` math).
+
+### 3. Update `getProcessingFeeLamports` to a 3-tier ladder
+
+```ts
+export function getProcessingFeeLamports(totalLamports: bigint): bigint {
+  if (totalLamports >= PROCESSING_FEE_THRESHOLD_HIGH) return PROCESSING_FEE_HIGH;
+  if (totalLamports >= PROCESSING_FEE_THRESHOLD_MID)  return PROCESSING_FEE_MID;
+  if (totalLamports >= PROCESSING_FEE_THRESHOLD_LOW)  return PROCESSING_FEE_LOW;
+  return 0n;
+}
+```
+
+### 4. Leave everything else untouched
+
+- `shouldChargeProcessingFee` — still keys off `PROCESSING_FEE_THRESHOLD_LOW`, semantics unchanged (any raise ≥ 0.3 SOL gets charged).
+- `findAlreadyPaidProcessingFee` — unchanged.
+- `chargeProcessingFee` — unchanged (still reads the fee via `getProcessingFeeLamports`, so it automatically picks up the new tier).
+- `waitForSignatureLanded` and all retry/recovery logic — unchanged.
+- All callers in `executor/src/executeBags.ts` and `executor/src/executePumpfun.ts` — unchanged.
+
+## Behavior impact
+
+- Launches raising **2 – 4.999… SOL**: fee stays at **0.13 SOL** (was previously the top tier at 2+ SOL — now correctly capped at MID).
+- Launches raising **≥ 5 SOL**: fee jumps to **0.20 SOL** (new tier).
+- Launches < 2 SOL: no behavior change.
+
+## Pre-flight check before editing
+
+Grep the repo for external imports of `PROCESSING_FEE_THRESHOLD_HIGH` / `PROCESSING_FEE_HIGH`. The prompt asserts no caller uses them, but since their numeric meaning shifts (2→5 SOL, 0.13→0.20 SOL), I'll confirm with `rg` first. If any external file imports them by name, I'll surface that rather than silently change their semantics.
+
+## Risks
+
+- None to existing flows: the only public surface that changes value is `getProcessingFeeLamports`, which is the intended behavior change. Idempotency via `findAlreadyPaidProcessingFee` is unaffected.
