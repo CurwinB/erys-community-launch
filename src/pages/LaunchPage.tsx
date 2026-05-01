@@ -179,7 +179,7 @@ const LaunchPage = () => {
   const shareUrl = `${window.location.origin}/launch/${launch.id}`;
   const platformTag = isPumpfun ? "@pumpfun" : "@BagsApp";
   const tweetText = encodeURIComponent(
-    `${launch.token_name} ($${launch.token_symbol}) is launching on @eryslive via ${platformTag}.\n\nGet in before it goes live and secure your early position.\n\n${shareUrl}`
+    `${launch.token_name} ($${launch.token_symbol}) presale is live on @eryslive via ${platformTag}.\n\nApe in before it migrates and lock your allocation on-chain.\n\n${shareUrl}`
   );
   const tweetHref = `https://twitter.com/intent/tweet?text=${tweetText}`;
 
@@ -192,10 +192,10 @@ const LaunchPage = () => {
   return (
     <main className="min-h-screen">
       <Seo
-        title={`${launch.token_name} ($${launch.token_symbol}) — Erys Launch`}
+        title={`${launch.token_name} ($${launch.token_symbol}) — Erys Presale`}
         description={
           launch.description?.slice(0, 155) ||
-          `Contribute to the ${launch.token_name} ($${launch.token_symbol}) community launch on ${isPumpfun ? "Pump.fun" : "Bags.fm"}, powered by Erys.`
+          `Ape into the ${launch.token_name} ($${launch.token_symbol}) presale on ${isPumpfun ? "Pump.fm" : "Bags.fm"}, powered by Erys.`
         }
         path={`/launch/${launch.id}`}
         image={launch.image_url || undefined}
