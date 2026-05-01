@@ -133,13 +133,13 @@ const LaunchPage = () => {
 
       if (error) throw error;
 
-      toast({ title: "Contribution Recorded!", description: `${sol} SOL contributed successfully.` });
+      toast({ title: "You're in.", description: `${sol} SOL allocation locked on-chain.` });
       setSolAmount("");
       setTokenDeliveryWallet("");
       queryClient.invalidateQueries({ queryKey: ["contributions", id] });
     } catch (err: any) {
       console.error("Contribution error:", err);
-      toast({ title: "Contribution Failed", description: err.message || "Something went wrong.", variant: "destructive" });
+      toast({ title: "Ape failed", description: err.message || "Something went wrong.", variant: "destructive" });
     } finally {
       setIsContributing(false);
     }
@@ -179,7 +179,7 @@ const LaunchPage = () => {
   const shareUrl = `${window.location.origin}/launch/${launch.id}`;
   const platformTag = isPumpfun ? "@pumpfun" : "@BagsApp";
   const tweetText = encodeURIComponent(
-    `${launch.token_name} ($${launch.token_symbol}) is launching on @eryslive via ${platformTag}.\n\nGet in before it goes live and secure your early position.\n\n${shareUrl}`
+    `${launch.token_name} ($${launch.token_symbol}) presale is live on @eryslive via ${platformTag}.\n\nApe in before it migrates and lock your allocation on-chain.\n\n${shareUrl}`
   );
   const tweetHref = `https://twitter.com/intent/tweet?text=${tweetText}`;
 
@@ -192,10 +192,10 @@ const LaunchPage = () => {
   return (
     <main className="min-h-screen">
       <Seo
-        title={`${launch.token_name} ($${launch.token_symbol}) — Erys Launch`}
+        title={`${launch.token_name} ($${launch.token_symbol}) — Erys Presale`}
         description={
           launch.description?.slice(0, 155) ||
-          `Contribute to the ${launch.token_name} ($${launch.token_symbol}) community launch on ${isPumpfun ? "Pump.fun" : "Bags.fm"}, powered by Erys.`
+          `Ape into the ${launch.token_name} ($${launch.token_symbol}) presale on ${isPumpfun ? "Pump.fun" : "Bags.fm"}, powered by Erys.`
         }
         path={`/launch/${launch.id}`}
         image={launch.image_url || undefined}
@@ -232,7 +232,7 @@ const LaunchPage = () => {
         <div className="space-y-6 lg:col-span-3">
           {isScheduled && (
             <div className="border border-border bg-card p-6">
-              <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Launches in</span>
+              <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Presale ends in</span>
               <CountdownTimer targetDate={launch.launch_datetime} size="lg" className="mt-3" />
             </div>
           )}
@@ -264,50 +264,50 @@ const LaunchPage = () => {
             {isScheduled && closingSoon && (
               <div className="border border-primary/40 bg-primary/5 p-3">
                 <p className="text-xs text-primary">
-                  Contribution window closes in less than 10 minutes.
+                  Presale closes in less than 10 minutes.
                 </p>
               </div>
             )}
             {isScheduled && windowClosed && (
               <div className="border border-border bg-muted p-3">
                 <p className="text-xs text-muted-foreground">
-                  Contribution window closed. Launch executes shortly.
+                  Presale closed. Migration to {platformName} executes shortly.
                 </p>
               </div>
             )}
             <div className="border border-primary/30 bg-card p-6 space-y-5">
-              <h3 className="font-semibold text-foreground">Contribute</h3>
+              <h3 className="font-semibold text-foreground">Ape In</h3>
 
               <div className="rounded-sm border border-border bg-background p-3 space-y-2">
-                <p className="text-xs font-semibold text-foreground">What you receive</p>
+                <p className="text-xs font-semibold text-foreground">Your allocation includes</p>
                 {isPumpfun ? (
                   <div className="space-y-1">
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <div className="h-1.5 w-1.5 rounded-full bg-success" />
-                      Tokens proportional to your SOL contribution
+                      Pro-rata token allocation based on your buy
                     </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <div className="h-1.5 w-1.5 rounded-full bg-success" />
-                      Earliest possible entry price
+                      First-block entry on the bonding curve
                     </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <div className="h-1.5 w-1.5 rounded-full bg-success" />
-                      Tokens sent to your wallet automatically at launch
+                      Tokens dropped to your wallet at migration — no claim
                     </div>
                   </div>
                 ) : (
                   <div className="space-y-1">
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <div className="h-1.5 w-1.5 rounded-full bg-success" />
-                      Tokens proportional to your SOL contribution
+                      Pro-rata token allocation based on your buy
                     </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <div className="h-1.5 w-1.5 rounded-full bg-success" />
-                      Permanent on-chain trading fee share proportional to your contribution
+                      Permanent on-chain creator-fee share, pro-rata to your buy
                     </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <div className="h-1.5 w-1.5 rounded-full bg-success" />
-                      Tokens and fees sent to your wallet automatically at launch
+                      Tokens and fee position assigned at migration — no claim
                     </div>
                   </div>
                 )}
@@ -315,8 +315,8 @@ const LaunchPage = () => {
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>Min: {formatSol(Number(launch.min_contribution_lamports))} SOL</span>
-                  {maxContrib && <span>Max: {formatSol(maxContrib)} SOL</span>}
+                  <span>Min buy: {formatSol(Number(launch.min_contribution_lamports))} SOL</span>
+                  {maxContrib && <span>Max buy: {formatSol(maxContrib)} SOL</span>}
                 </div>
                 <div className="relative">
                   <Input
@@ -333,7 +333,7 @@ const LaunchPage = () => {
 
               <div className="space-y-1">
                 <label className="text-xs text-muted-foreground">
-                  Receive tokens at a different wallet? (optional)
+                  Send allocation to a different wallet? (optional)
                 </label>
                 <Input
                   placeholder="Enter Solana wallet address"
@@ -344,8 +344,8 @@ const LaunchPage = () => {
                 />
                 <p className="text-[10px] text-muted-foreground">
                   {isPumpfun
-                    ? "Enter your Pump.fun wallet to trade immediately after launch."
-                    : "Enter your Bags wallet to claim fees and trade immediately after launch."}
+                    ? "Use your Pump.fun trading wallet to flip the second migration hits."
+                    : "Use your Bags wallet to claim creator fees and trade immediately after migration."}
                 </p>
               </div>
 
@@ -366,18 +366,18 @@ const LaunchPage = () => {
                   <Wallet className="h-4 w-4" />
                 )}
                 {!canContribute
-                  ? "Contributions Closed"
+                  ? "Presale Closed"
                   : !connected
-                    ? "Login to Contribute"
+                    ? "Connect to Ape In"
                     : isContributing
-                      ? "Sending..."
-                      : "Contribute SOL"}
+                      ? "Sending…"
+                      : "Ape In"}
               </Button>
 
               <p className="text-[10px] leading-relaxed text-muted-foreground">
                 {isPumpfun
-                  ? "Your SOL is held in escrow until launch. You will receive tokens at the earliest possible entry price proportional to your contribution. A small platform fee covers infrastructure costs. If this launch is cancelled your SOL is refunded automatically."
-                  : "Your SOL is held in escrow until launch. You will receive tokens AND be registered as a permanent Bags fee share recipient proportional to your contribution. If this launch is cancelled your SOL is refunded automatically."}
+                  ? "Your SOL sits in a non-custodial escrow until migration. Allocation is pro-rata at first-block entry on the bonding curve. A small platform fee covers infra. If the presale is cancelled your SOL is refunded automatically."
+                  : "Your SOL sits in a non-custodial escrow until migration. You receive a pro-rata token allocation AND a permanent on-chain creator-fee share. If the presale is cancelled your SOL is refunded automatically."}
               </p>
             </div>
 

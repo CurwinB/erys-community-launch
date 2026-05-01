@@ -89,26 +89,26 @@ const Index = () => {
   const features = [
     {
       icon: Coins,
-      title: "Two Platforms.",
-      body: "Choose Bags.fm for perpetual fee sharing or Pump.fun for early entry token positions.",
+      title: "Two Launchpads. One Presale Flow.",
+      body: "Pick Bags for permanent creator-fee share or Pump for first-block entry on the bonding curve.",
     },
     {
       icon: Clock,
-      title: "Community First.",
-      body: "Contributors get in before the token goes live and share in the upside from day one.",
+      title: "Apes Get Allocation, Not Promises.",
+      body: "Tokens hit presaler wallets the second the bonding curve opens. No claim, no vesting, no waiting.",
     },
     {
       icon: Shield,
-      title: "Transparent Escrow.",
-      body: "SOL is held securely until launch. If it doesn't launch you get refunded automatically.",
+      title: "Non-Custodial Escrow.",
+      body: "SOL sits in a per-presale escrow on Solana. No mint, no migration → automatic refund.",
     },
   ];
 
   return (
     <main className="min-h-screen">
       <Seo
-        title="Erys — Community Launch Platform for Solana Tokens"
-        description="Schedule your Solana token launch on Bags.fm or Pump.fun, build your community before going live, and let every contributor earn from day one."
+        title="Erys — Fair-Launch Presales for Solana Tokens"
+        description="Run a fair-launch presale on Bags.fm or Pump.fun. Let your community ape in early, lock in allocations on-chain, and migrate to the DEX automatically."
         path="/"
         jsonLd={{
           "@context": "https://schema.org",
@@ -116,7 +116,7 @@ const Index = () => {
           name: "Erys",
           url: "https://erys.live",
           description:
-            "Community launch platform for Solana tokens on Bags.fm and Pump.fun.",
+            "Fair-launch presale platform for Solana tokens on Bags.fm and Pump.fun.",
         }}
       />
       {/* Hero */}
@@ -124,15 +124,18 @@ const Index = () => {
         <div className="container mx-auto px-4 py-5 md:py-8">
           <div className="mx-auto max-w-2xl text-center">
             <div className="mb-2 inline-flex items-center gap-2 rounded-sm border border-primary/30 bg-primary/5 px-2 py-1">
-              <span className="text-[10px] font-medium text-primary">Launch on Bags.fm or Pump.fun</span>
+              <span className="text-[10px] font-medium text-primary">PRESALES ON BAGS.FM &amp; PUMP.FUN</span>
             </div>
             <h1 className="text-xl font-bold tracking-tight text-foreground md:text-2xl">
-              The Community Launch Platform for Solana Tokens.
+              Run a fair-launch presale on Solana.
             </h1>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
+              Open a presale, let your community ape in before the token migrates to Bags or Pump. Allocations drop on-chain the moment it goes live.
+            </p>
             <div className="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
               <Link to="/schedule">
                 <Button size="lg" className="w-full sm:w-auto">
-                  Schedule a Launch
+                  Launch a Presale
                 </Button>
               </Link>
               <Button
@@ -143,7 +146,7 @@ const Index = () => {
                   document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })
                 }
               >
-                How it works
+                How presales work
                 <ArrowDown className="ml-2 h-4 w-4" />
               </Button>
             </div>
@@ -226,7 +229,7 @@ const Index = () => {
                   ← Previous
                 </button>
                 <span className="font-mono text-xs text-muted-foreground">
-                  Page {currentPage} of {totalPages} · {liveLaunches.length} launches
+                  Page {currentPage} of {totalPages} · {liveLaunches.length} open presales
                 </span>
                 <button
                   onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
@@ -240,9 +243,9 @@ const Index = () => {
             </>
           ) : (
             <div className="mx-auto flex max-w-md flex-col items-center justify-center border border-border bg-card px-6 py-12 text-center">
-              <p className="mb-6 text-muted-foreground">No launches scheduled yet.</p>
+              <p className="mb-6 text-muted-foreground">No presales open yet.</p>
               <Link to="/schedule">
-                <Button>Schedule the First Launch</Button>
+                <Button>Open the First Presale</Button>
               </Link>
             </div>
           )}
@@ -252,7 +255,7 @@ const Index = () => {
       {/* Completed Launches */}
       <section>
         <div className="container mx-auto px-4 py-16">
-          <h2 className="mb-8 text-2xl font-bold text-foreground">Completed Launches</h2>
+          <h2 className="mb-8 text-2xl font-bold text-foreground">Migrated Tokens</h2>
 
           {completedLoading ? (
             isMobile ? (
@@ -320,7 +323,7 @@ const Index = () => {
                   ← Previous
                 </button>
                 <span className="font-mono text-xs text-muted-foreground">
-                  Page {completedPage} of {totalCompletedPages} · {completedLaunches.length} launches
+                  Page {completedPage} of {totalCompletedPages} · {completedLaunches.length} migrated
                 </span>
                 <button
                   onClick={() => setCompletedPage((p) => Math.min(totalCompletedPages, p + 1))}
@@ -334,7 +337,7 @@ const Index = () => {
             </>
           ) : (
             <div className="flex flex-col items-center justify-center rounded-sm border border-dashed border-border py-12">
-              <p className="text-muted-foreground">No completed launches yet.</p>
+              <p className="text-muted-foreground">No migrated tokens yet.</p>
             </div>
           )}
         </div>
@@ -344,7 +347,7 @@ const Index = () => {
       {/* How it works */}
       <section id="how-it-works" className="border-t border-border">
         <div className="container mx-auto px-4 py-16">
-          <h2 className="mb-8 text-2xl font-bold text-foreground">How it works</h2>
+          <h2 className="mb-8 text-2xl font-bold text-foreground">How presales work</h2>
           <div className="grid gap-4 md:grid-cols-3">
             {features.map((f) => (
               <div

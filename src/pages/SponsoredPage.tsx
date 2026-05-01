@@ -302,7 +302,7 @@ const SponsoredPage = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <Seo title="Sponsored Launch · erys" description="Claim your sponsored token launch" />
+      <Seo title="Featured Presale Slot · erys" description="Claim your sponsored presale slot" />
 
       <header className="border-b border-border">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
@@ -337,13 +337,13 @@ const SponsoredPage = () => {
           <>
             <div className="mb-8">
               <h1 className="text-3xl font-bold tracking-tight mb-3">
-                You have been selected for an Erys sponsored launch.
+                You've been selected for a featured Erys presale slot.
               </h1>
               <p className="text-muted-foreground mb-6">
-                Erys will fund your token launch on Pump.fun with{" "}
+                Erys seeds your Pump.fun presale with{" "}
                 <span className="text-primary font-semibold">{seedSol} SOL</span> at no cost to
-                you. Pick your own launch time below — we'll auto-shift forward by a few
-                minutes if your chosen minute is already booked.
+                you. Pick your own migration time below — we'll auto-shift forward by a few
+                minutes if your chosen slot is already booked.
               </p>
               <Card className="rounded-none border-border bg-card p-4">
                 <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">
@@ -382,7 +382,7 @@ const SponsoredPage = () => {
                   />
                 </div>
                 <div>
-                  <Label htmlFor="launch_dt">Launch time (1–72h ahead) *</Label>
+                  <Label htmlFor="launch_dt">Migration time (1–72h ahead) *</Label>
                   <Input
                     id="launch_dt"
                     type="datetime-local"
@@ -394,8 +394,7 @@ const SponsoredPage = () => {
                     className="rounded-none mt-1"
                   />
                   <p className="text-[10px] text-muted-foreground mt-1">
-                    If your chosen minute is full, we'll slide forward to the next open
-                    Pump.fun slot.
+                    If your chosen minute is full, we'll slide forward to the next open Pump.fun migration slot.
                   </p>
                 </div>
                 <div>
@@ -456,9 +455,7 @@ const SponsoredPage = () => {
                     Pump.fun wallet (optional)
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    Receive your token allocation at a wallet you control so you can
-                    trade immediately when the launch goes live on Pump.fun. Leave
-                    blank to skip — you can claim later via Erys.
+                    Send your allocation to a wallet you control so you can trade the second the presale migrates to Pump.fun. Leave blank to claim later via Erys.
                   </p>
                   <Input
                     id="delivery_wallet"
@@ -478,10 +475,10 @@ const SponsoredPage = () => {
                   {submitting ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Setting up your launch...
+                      Setting up your presale…
                     </>
                   ) : (
-                    "Claim sponsored launch"
+                    "Claim featured presale slot"
                   )}
                 </Button>
               </form>
@@ -492,11 +489,11 @@ const SponsoredPage = () => {
         {state.kind === "funding" && (
           <Card className="rounded-none border-primary/40 bg-card p-8 text-center">
             <Loader2 className="mx-auto h-10 w-10 text-primary animate-spin mb-4" />
-            <h1 className="text-2xl font-bold mb-2">Funding your launch…</h1>
+            <h1 className="text-2xl font-bold mb-2">Funding your presale…</h1>
             <p className="text-muted-foreground mb-2">
               We're transferring{" "}
               <span className="text-foreground font-semibold">{seedSol} SOL</span>{" "}
-              from the Erys treasury to your launch escrow on Solana.
+              from the Erys treasury to your presale escrow on Solana.
             </p>
             <p className="text-xs text-muted-foreground">
               This usually takes 5–15 seconds. Don't close this tab.
@@ -509,10 +506,9 @@ const SponsoredPage = () => {
             <div className="mx-auto h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center mb-4">
               <Check className="h-6 w-6 text-primary" />
             </div>
-            <h1 className="text-2xl font-bold mb-2">Your launch is scheduled.</h1>
+            <h1 className="text-2xl font-bold mb-2">Your presale is live.</h1>
             <p className="text-muted-foreground mb-6">
-              <span className="text-foreground font-semibold">{state.tokenName}</span> will
-              launch on Pump.fun at{" "}
+              <span className="text-foreground font-semibold">{state.tokenName}</span> migrates to Pump.fun at{" "}
               <span className="text-foreground">{fmtDate(state.launchDatetime)}</span>.
             </p>
             {state.wasAdjusted && (
@@ -547,20 +543,20 @@ const SponsoredPage = () => {
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <a
                 href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(
-                  `I just scheduled a community token launch on @eryslive via Pump.fun.\n\nGet in before it goes live and secure your early position.\n\n${state.launchUrl}`,
+                  `I just opened a presale on @eryslive via Pump.fun.\n\nApe in before migration and lock your allocation on-chain.\n\n${state.launchUrl}`,
                 )}`}
                 target="_blank"
                 rel="noreferrer"
               >
                 <Button className="rounded-none w-full sm:w-auto">
                   <Twitter className="h-4 w-4 mr-2" />
-                  Tweet your launch
+                  Tweet your presale
                 </Button>
               </a>
               <Link to={state.launchUrl.replace(window.location.origin, "")}>
                 <Button variant="outline" className="rounded-none w-full sm:w-auto">
                   <ExternalLink className="h-4 w-4 mr-2" />
-                  View launch page
+                  View presale page
                 </Button>
               </Link>
             </div>

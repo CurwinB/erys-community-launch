@@ -28,9 +28,9 @@ type Tab = "notifications" | "tokens" | "fees" | "contributions";
 
 const tabs: { id: Tab; label: string }[] = [
   { id: "notifications", label: "Notifications" },
-  { id: "tokens", label: "My Tokens" },
-  { id: "fees", label: "My Fees" },
-  { id: "contributions", label: "My Contributions" },
+  { id: "tokens", label: "My Allocations" },
+  { id: "fees", label: "My Creator Fees" },
+  { id: "contributions", label: "My Presales" },
 ];
 
 const tradeUrl = (platform: string | undefined, mint: string | null | undefined) => {
@@ -165,7 +165,7 @@ const DashboardPage = () => {
       <main className="min-h-screen">
         <Seo
           title="Dashboard — Erys"
-          description="View your contributions, claim trading fees, and track distributions."
+        description="View your presale allocations, claim creator fees, and track migrations."
           path="/dashboard"
           noindex
         />
@@ -300,10 +300,10 @@ const NotificationsTab = ({
               <TokenAvatar image={l?.image_url} symbol={l?.token_symbol} />
               <div>
                 <p className="text-[10px] uppercase tracking-widest text-success">
-                  Tokens received
+                  Allocation delivered
                 </p>
                 <p className="mt-0.5 text-sm text-foreground">
-                  You received{" "}
+                  Your allocation:{" "}
                   <span className="font-mono font-semibold">
                     {formatInt(c.token_amount)}
                   </span>{" "}
@@ -347,12 +347,12 @@ const NotificationsTab = ({
               <TokenAvatar image={l?.image_url} symbol={l?.token_symbol} />
               <div>
                 <p className="text-[10px] uppercase tracking-widest text-amber-400">
-                  Trading fees available
+                  Creator fees claimable
                 </p>
                 <p className="mt-0.5 text-sm text-foreground">
                   You have{" "}
                   <span className="font-mono font-semibold">{claimable.toFixed(4)} SOL</span>{" "}
-                  in claimable fees from {l?.token_name}
+                  in unclaimed creator fees from {l?.token_name}
                 </p>
               </div>
             </div>
@@ -379,10 +379,10 @@ const NotificationsTab = ({
             <Clock className="mt-0.5 h-5 w-5 text-primary shrink-0" />
             <div>
               <p className="text-[10px] uppercase tracking-widest text-primary">
-                Launch executing soon
+                Presale migrating soon
               </p>
               <p className="mt-0.5 text-sm text-foreground">
-                {l?.token_name} launches in{" "}
+                {l?.token_name} migrates in{" "}
                 <span className="font-mono font-semibold">
                   {timeUntil(l?.launch_datetime)}
                 </span>
@@ -390,13 +390,13 @@ const NotificationsTab = ({
                 <span className="font-mono">
                   {lamportsToSol(Number(c.amount_lamports)).toFixed(4)} SOL
                 </span>{" "}
-                is in escrow.
+                is locked in the presale escrow.
               </p>
               <Link
                 to={`/launch/${l?.id}`}
                 className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
               >
-                View launch →
+                View presale →
               </Link>
             </div>
           </div>
@@ -413,13 +413,13 @@ const TokensTab = ({ contributions }: { contributions: any[] }) => {
     return (
       <div className="flex flex-col items-center justify-center rounded-sm border border-dashed border-border py-12">
         <Coins className="mb-3 h-8 w-8 text-muted-foreground" />
-        <p className="text-sm font-medium text-foreground">No tokens yet</p>
+        <p className="text-sm font-medium text-foreground">No allocations yet</p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Contribute to a launch to receive tokens.
+          Ape into a presale to lock in an allocation.
         </p>
         <Link to="/" className="mt-4">
           <Button size="sm" variant="outline">
-            View launches →
+            Browse presales →
           </Button>
         </Link>
       </div>
@@ -449,7 +449,7 @@ const TokensTab = ({ contributions }: { contributions: any[] }) => {
                   {formatInt(c.token_amount)}
                 </p>
                 <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
-                  tokens received
+                  allocation
                 </p>
                 <a
                   href={tradeUrl(l?.platform, l?.token_mint_address)}
@@ -462,8 +462,8 @@ const TokensTab = ({ contributions }: { contributions: any[] }) => {
               </div>
             </div>
             <div className="mt-3 flex justify-between border-t border-border pt-2 font-mono text-[11px] text-muted-foreground">
-              <span>Contributed {formatSol(Number(c.amount_lamports))} SOL</span>
-              <span>Received {formatDate(l?.distribution_completed_at)}</span>
+              <span>Aped {formatSol(Number(c.amount_lamports))} SOL</span>
+              <span>Delivered {formatDate(l?.distribution_completed_at)}</span>
             </div>
           </div>
         );
@@ -495,9 +495,9 @@ const FeesTab = ({
     return (
       <div className="flex flex-col items-center justify-center rounded-sm border border-dashed border-border py-12">
         <Coins className="mb-3 h-8 w-8 text-muted-foreground" />
-        <p className="text-sm font-medium text-foreground">No fee positions</p>
+        <p className="text-sm font-medium text-foreground">No creator-fee positions</p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Contribute to a Bags.fm launch to earn permanent trading fees.
+          Ape into a Bags.fm presale to earn permanent creator fees.
         </p>
       </div>
     );
@@ -566,14 +566,13 @@ const FeesTab = ({
                 Your share:{" "}
                 {c.basis_points != null ? `${(c.basis_points / 100).toFixed(2)}%` : "—"}
               </span>
-              <span>Contributed {formatSol(Number(c.amount_lamports))} SOL</span>
+              <span>Aped {formatSol(Number(c.amount_lamports))} SOL</span>
             </div>
             {isExcluded && (
               <div className="mt-3 flex items-start gap-2 rounded-sm border border-destructive/30 bg-destructive/5 p-2.5">
                 <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
                 <p className="text-xs text-destructive">
-                  Excluded from fee share due to 100 claimer limit. Your SOL was still used in
-                  the launch.
+                  Excluded from fee share due to the 100-claimer cap. Your SOL was still used in the presale.
                 </p>
               </div>
             )}
@@ -591,10 +590,10 @@ const ContributionsTab = ({ contributions }: { contributions: any[] }) => {
     return (
       <div className="flex flex-col items-center justify-center rounded-sm border border-dashed border-border py-12">
         <Rocket className="mb-3 h-8 w-8 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">No contributions yet.</p>
+        <p className="text-sm text-muted-foreground">No presales aped yet.</p>
         <Link to="/" className="mt-3">
           <Button size="sm" variant="outline">
-            Browse launches
+            Browse presales
           </Button>
         </Link>
       </div>
@@ -629,14 +628,14 @@ const ContributionsTab = ({ contributions }: { contributions: any[] }) => {
               <span>Platform: {platformLabel(l?.platform)}</span>
               <span>Date: {formatDate(c.contributed_at)}</span>
               <span>
-                Tokens:{" "}
+                Allocation:{" "}
                 {c.tokens_distributed ? formatInt(c.token_amount) : "Pending"}
               </span>
               <Link
                 to={`/launch/${l?.id}`}
                 className="text-primary hover:underline sm:text-right"
               >
-                View launch →
+                View presale →
               </Link>
             </div>
           </div>

@@ -15,7 +15,7 @@ const Footer = () => {
               </span>
             </Link>
             <p className="mt-3 max-w-xs text-sm text-muted-foreground">
-              The community launch platform for Solana tokens. Schedule launches on Bags.fm or Pump.fun.
+              The fair-launch presale platform for Solana tokens. Open a presale on Bags.fm or Pump.fun and let your community ape in early.
             </p>
           </div>
 
@@ -26,7 +26,7 @@ const Footer = () => {
             <ul className="space-y-2 text-sm">
               <li>
                 <Link to="/schedule" className="text-foreground transition-colors hover:text-primary">
-                  Schedule a Launch
+                  Launch a Presale
                 </Link>
               </li>
               <li>

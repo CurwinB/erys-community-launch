@@ -15,6 +15,7 @@ Dynamic.xyz for wallet auth, NOT Privy. embeddedWallets: createOnLogin: 'users-w
 Alchemy RPC: SOLANA_RPC_URL (Supabase secret) + VITE_SOLANA_RPC_URL (frontend .env).
 Pump.fun mints are Token-2022 — executor + distributor must detect mint owner program for ATA/transfer ops.
 Refunds blocked when Pump.fun mint exists on-chain (signature persisted or status launched/sweep_recovery).
+Copy voice: crypto-native — use "presale", "ape in", "allocation", "presaler", "raised", "min buy", "migrate". Avoid "community launch", "contribute", "contributor", "escrow" in user-facing copy. Admin and legal pages exempt.
 
 ## Memories
 - [Brand tokens](mem://design/brand) — Full color palette, font choices, glow effects
@@ -28,3 +29,4 @@ Refunds blocked when Pump.fun mint exists on-chain (signature persisted or statu
 - [Token delivery wallet](mem://features/token-delivery-wallet) — Optional per-contribution override for token + Bags fee-share recipient; falls back to wallet_address
 - [Creator token floor](mem://features/creator-token-floor) — Hard 5% creator floor on token-supply distribution, enforced with pre-send invariant assertion in distributor
 - [Sweep recovery](mem://features/sweep-recovery) — sweep_recovery status auto-recovers post-mint sweep failures; refunds blocked once mint exists; Token-2022 detection end-to-end
+- [Copy voice](mem://design/copy-voice) — Full crypto-native copy glossary (presale/ape/allocation/migrate)
