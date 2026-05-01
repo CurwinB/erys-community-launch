@@ -271,7 +271,7 @@ const LaunchPage = () => {
             {isScheduled && windowClosed && (
               <div className="border border-border bg-muted p-3">
                 <p className="text-xs text-muted-foreground">
-                  Presale closed. Migration to {platformName} executes shortly.
+                   Presale closed. Launching on {platformName} shortly.
                 </p>
               </div>
             )}
@@ -292,7 +292,7 @@ const LaunchPage = () => {
                     </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <div className="h-1.5 w-1.5 rounded-full bg-success" />
-                      Tokens dropped to your wallet at migration — no claim
+                       Tokens dropped to your wallet at launch — no claim
                     </div>
                   </div>
                 ) : (
@@ -307,7 +307,7 @@ const LaunchPage = () => {
                     </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <div className="h-1.5 w-1.5 rounded-full bg-success" />
-                      Tokens and fee position assigned at migration — no claim
+                       Tokens and fee position assigned at launch — no claim
                     </div>
                   </div>
                 )}
@@ -344,8 +344,8 @@ const LaunchPage = () => {
                 />
                 <p className="text-[10px] text-muted-foreground">
                   {isPumpfun
-                    ? "Use your Pump.fun trading wallet to flip the second migration hits."
-                    : "Use your Bags wallet to claim creator fees and trade immediately after migration."}
+                     ? "Use your Pump.fun trading wallet to flip the second launch hits."
+                     : "Use your Bags wallet to claim creator fees and trade immediately after launch."}
                 </p>
               </div>
 
@@ -376,8 +376,8 @@ const LaunchPage = () => {
 
               <p className="text-[10px] leading-relaxed text-muted-foreground">
                 {isPumpfun
-                  ? "Your SOL sits in a non-custodial escrow until migration. Allocation is pro-rata at first-block entry on the bonding curve. A small platform fee covers infra. If the presale is cancelled your SOL is refunded automatically."
-                  : "Your SOL sits in a non-custodial escrow until migration. You receive a pro-rata token allocation AND a permanent on-chain creator-fee share. If the presale is cancelled your SOL is refunded automatically."}
+                   ? "Your SOL sits in a non-custodial escrow until launch. Allocation is pro-rata at first-block entry on the bonding curve. A small platform fee covers infra. If the presale is cancelled your SOL is refunded automatically."
+                   : "Your SOL sits in a non-custodial escrow until launch. You receive a pro-rata token allocation AND a permanent on-chain creator-fee share. If the presale is cancelled your SOL is refunded automatically."}
               </p>
             </div>
 
