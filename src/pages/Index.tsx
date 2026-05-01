@@ -255,7 +255,7 @@ const Index = () => {
       {/* Completed Launches */}
       <section>
         <div className="container mx-auto px-4 py-16">
-          <h2 className="mb-8 text-2xl font-bold text-foreground">Migrated Tokens</h2>
+           <h2 className="mb-8 text-2xl font-bold text-foreground">Launched Tokens</h2>
 
           {completedLoading ? (
             isMobile ? (
@@ -323,7 +323,7 @@ const Index = () => {
                   ← Previous
                 </button>
                 <span className="font-mono text-xs text-muted-foreground">
-                  Page {completedPage} of {totalCompletedPages} · {completedLaunches.length} migrated
+                   Page {completedPage} of {totalCompletedPages} · {completedLaunches.length} launched
                 </span>
                 <button
                   onClick={() => setCompletedPage((p) => Math.min(totalCompletedPages, p + 1))}
@@ -337,7 +337,7 @@ const Index = () => {
             </>
           ) : (
             <div className="flex flex-col items-center justify-center rounded-sm border border-dashed border-border py-12">
-              <p className="text-muted-foreground">No migrated tokens yet.</p>
+               <p className="text-muted-foreground">No launched tokens yet.</p>
             </div>
           )}
         </div>
