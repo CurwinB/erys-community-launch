@@ -264,7 +264,7 @@ const RowVariant = ({
             <span className="font-mono text-xs font-semibold text-primary">{countdown}</span>
           </div>
         ) : (
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Migrated</span>
+           <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Launched</span>
         )}
         <button
           type="button"
