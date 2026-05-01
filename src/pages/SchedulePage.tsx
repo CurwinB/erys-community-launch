@@ -496,7 +496,7 @@ const SchedulePage = () => {
   const platformLabel = platform === "pumpfun" ? "Pump.fun" : "Bags.fm";
   const platformTag = platform === "pumpfun" ? "@pumpfun" : "@BagsApp";
   const tweetText = encodeURIComponent(
-    `I just scheduled a community token launch on @eryslive via ${platformTag}.\n\nGet in before it goes live and secure your early position.\n\n${successData?.url || ""}`
+    `I just opened a presale on @eryslive via ${platformTag}.\n\nApe in before migration and lock your allocation on-chain.\n\n${successData?.url || ""}`
   );
 
   if (step === "success" && successData) {
@@ -507,12 +507,12 @@ const SchedulePage = () => {
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-success/10">
               <Check className="h-8 w-8 text-success" />
             </div>
-            <h2 className="text-2xl font-bold text-foreground">Launch Scheduled!</h2>
+            <h2 className="text-2xl font-bold text-foreground">Presale is live.</h2>
             <p className="text-xs uppercase tracking-widest text-primary">
-              Launching on {platformLabel}
+              Migrating to {platformLabel}
             </p>
             <p className="text-sm text-muted-foreground">
-              Your {form.creatorContribution} SOL seed contribution is in escrow. Share this link with your community.
+              Your {form.creatorContribution} SOL seed buy is in the presale escrow. Share this link with your community.
             </p>
 
             {adjustedNotice && (
@@ -557,7 +557,7 @@ const SchedulePage = () => {
             </a>
 
             <Button variant="ghost" className="w-full" onClick={() => navigate(`/launch/${successData.id}`)}>
-              View Launch Page
+              View Presale Page
             </Button>
           </div>
         </div>
@@ -566,32 +566,32 @@ const SchedulePage = () => {
   }
 
   const submitLabel = (() => {
-    if (!connected) return "Log in to Schedule";
+    if (!connected) return "Connect to Open Presale";
     switch (step) {
       case "creating":
-        return "Creating launch…";
+        return "Creating presale…";
       case "awaiting_signature":
         return "Sign the transaction in your wallet…";
       case "confirming":
         return "Confirming on-chain…";
       case "recording":
-        return "Recording contribution…";
+        return "Locking your allocation…";
       default:
-        return "Schedule Launch & Contribute";
+        return "Open Presale & Ape In";
     }
   })();
 
   return (
     <main className="min-h-screen">
       <Seo
-        title="Schedule a Launch — Erys"
-        description="Configure your Solana token launch on Bags.fm or Pump.fun. Set the date, contribution limits, and let your community fund it before going live."
+        title="Launch a Presale — Erys"
+        description="Open a fair-launch presale on Bags.fm or Pump.fun. Set the migration time, min/max buys, and let your community ape in before the bonding curve opens."
         path="/schedule"
       />
       <div className="container mx-auto max-w-xl px-4 py-12">
-        <h1 className="text-2xl font-bold text-foreground md:text-3xl">Schedule a Token Launch.</h1>
+        <h1 className="text-2xl font-bold text-foreground md:text-3xl">Launch a Presale.</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Choose your launch platform and let your community contribute SOL before go-live.
+          Pick your launchpad and let your community ape SOL into a non-custodial presale escrow before migration.
         </p>
 
         <div className="mt-6 space-y-3">
@@ -631,8 +631,8 @@ const SchedulePage = () => {
           </div>
           <p className="text-xs leading-relaxed text-muted-foreground">
             {platform === "bags"
-              ? "Contributors earn permanent on-chain trading fee shares proportional to their contribution."
-              : "Contributors receive tokens at the earliest possible entry price. Higher liquidity and trading volume."}
+              ? "Presalers earn a permanent on-chain creator-fee share, pro-rata to their buy. Forever."
+              : "Presalers get first-block entry on the bonding curve. Earliest possible price on Pump."}
           </p>
         </div>
 
@@ -693,7 +693,7 @@ const SchedulePage = () => {
           </div>
 
           <div className="space-y-4 border border-border bg-card p-6">
-            <h3 className="text-sm font-semibold text-foreground">Launch Time</h3>
+            <h3 className="text-sm font-semibold text-foreground">Migration Time</h3>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Date</Label>
@@ -705,7 +705,7 @@ const SchedulePage = () => {
               </div>
             </div>
             <p className="text-[10px] text-muted-foreground">
-              Launch must be between 10 minutes and 72 hours from now. Contributions close 5 min before launch. Your timezone: {Intl.DateTimeFormat().resolvedOptions().timeZone}
+              Migration must be between 10 minutes and 72 hours from now. Presale closes 5 min before migration. Your timezone: {Intl.DateTimeFormat().resolvedOptions().timeZone}
             </p>
             {form.launchDate && form.launchTime && (
               <div className="mt-2 text-xs">
@@ -718,8 +718,7 @@ const SchedulePage = () => {
                   <p className="flex items-start gap-1.5 text-amber-500">
                     <AlertCircle className="mt-0.5 h-3 w-3 flex-shrink-0" />
                     <span>
-                      That slot is full on {platformLabel}. Your launch will be
-                      scheduled for{" "}
+                      That slot is full on {platformLabel}. Your presale migrates at{" "}
                       <strong>
                         {new Date(slotPreview.adjustedTime).toLocaleString([], {
                           dateStyle: "medium",
@@ -740,18 +739,18 @@ const SchedulePage = () => {
           </div>
 
           <div className="space-y-4 border border-border bg-card p-6">
-            <h3 className="text-sm font-semibold text-foreground">Contribution Limits</h3>
+            <h3 className="text-sm font-semibold text-foreground">Buy Limits</h3>
             <div className="space-y-2">
-              <Label>Minimum Contribution (SOL)</Label>
+              <Label>Minimum Buy (SOL)</Label>
               <Input type="number" step="0.01" min="0.01" value={form.minContribution} onChange={(e) => update("minContribution", e.target.value)} placeholder="0.1" className="font-mono" required />
             </div>
             <div className="flex items-center gap-3">
               <Switch checked={form.enableMaxContribution} onCheckedChange={(v) => update("enableMaxContribution", v)} />
-              <Label>Enable maximum contribution per wallet</Label>
+              <Label>Enable maximum buy per wallet</Label>
             </div>
             {form.enableMaxContribution && (
               <div className="space-y-2">
-                <Label>Maximum Contribution (SOL)</Label>
+                <Label>Maximum Buy (SOL)</Label>
                 <Input type="number" step="0.01" min="0.01" value={form.maxContribution} onChange={(e) => update("maxContribution", e.target.value)} placeholder="10" className="font-mono" required />
               </div>
             )}
@@ -759,9 +758,9 @@ const SchedulePage = () => {
 
           <div className="space-y-3 border border-primary/40 bg-card p-6">
             <div>
-              <Label className="text-sm font-semibold text-foreground">Your Contribution (SOL)</Label>
+              <Label className="text-sm font-semibold text-foreground">Your Seed Buy (SOL)</Label>
               <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                As the creator you must contribute SOL to seed your launch. This goes directly to the escrow wallet and demonstrates commitment to your community.
+                As the creator you seed the presale with your own SOL. It goes straight to the non-custodial escrow and signals skin-in-the-game to your community.
               </p>
             </div>
             <Input
@@ -789,7 +788,7 @@ const SchedulePage = () => {
 
             <div className="space-y-1 pt-2">
               <Label className="text-xs text-muted-foreground">
-                Receive your tokens at a different wallet? (optional)
+                Send your allocation to a different wallet? (optional)
               </Label>
               <Input
                 placeholder="Enter Solana wallet address"
@@ -799,8 +798,8 @@ const SchedulePage = () => {
               />
               <p className="text-[10px] text-muted-foreground">
                 {platform === "pumpfun"
-                  ? "Enter your Pump.fun wallet to trade immediately after launch."
-                  : "Enter your Bags wallet to claim fees and trade immediately after launch."}
+                  ? "Use your Pump.fun trading wallet to flip the second migration hits."
+                  : "Use your Bags wallet to claim creator fees and trade immediately after migration."}
               </p>
             </div>
           </div>
@@ -808,8 +807,8 @@ const SchedulePage = () => {
           <div className="border-l-2 border-primary bg-muted p-4">
             <p className="text-xs leading-relaxed text-muted-foreground">
               {platform === "pumpfun"
-                ? "A unique escrow wallet and token mint address are generated when you schedule. Your seed SOL transfers to escrow immediately. All contributor SOL is held there until your token launches automatically on Pump.fun at the scheduled time."
-                : "A unique escrow wallet is generated for this launch. Your seed SOL transfers to escrow immediately. All contributor SOL is held there until your token launches automatically on Bags.fm at the scheduled time."}
+                ? "A unique non-custodial escrow and token mint are generated the moment you open the presale. Your seed SOL transfers in immediately. All presaler SOL is held there until the token migrates automatically to Pump.fun at the scheduled time."
+                : "A unique non-custodial escrow is generated for this presale. Your seed SOL transfers in immediately. All presaler SOL is held there until the token migrates automatically to Bags.fm at the scheduled time."}
             </p>
           </div>
 
