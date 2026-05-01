@@ -361,15 +361,15 @@ const SchedulePage = () => {
       if (diffMinutes < 10) {
         toast({
           title: "Launch time too soon",
-          description: "Migration must be at least 10 minutes from now (presale closes 5 min before migration).",
+           description: "Launch must be at least 10 minutes from now (presale closes 5 min before launch).",
           variant: "destructive",
         });
         return;
       }
       if (diffMinutes > 72 * 60) {
         toast({
-          title: "Migration time too far",
-          description: "Migration must be scheduled within 72 hours from now.",
+           title: "Launch time too far",
+           description: "Launch must be scheduled within 72 hours from now.",
           variant: "destructive",
         });
         return;

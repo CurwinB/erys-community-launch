@@ -455,7 +455,7 @@ const SponsoredPage = () => {
                     Pump.fun wallet (optional)
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    Send your allocation to a wallet you control so you can trade the second the presale migrates to Pump.fun. Leave blank to claim later via Erys.
+                     Send your allocation to a wallet you control so you can trade the second the presale launches on Pump.fun. Leave blank to claim later via Erys.
                   </p>
                   <Input
                     id="delivery_wallet"
@@ -508,7 +508,7 @@ const SponsoredPage = () => {
             </div>
             <h1 className="text-2xl font-bold mb-2">Your presale is live.</h1>
             <p className="text-muted-foreground mb-6">
-              <span className="text-foreground font-semibold">{state.tokenName}</span> migrates to Pump.fun at{" "}
+               <span className="text-foreground font-semibold">{state.tokenName}</span> launches on Pump.fun at{" "}
               <span className="text-foreground">{fmtDate(state.launchDatetime)}</span>.
             </p>
             {state.wasAdjusted && (
