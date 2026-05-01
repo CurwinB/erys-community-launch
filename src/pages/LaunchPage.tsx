@@ -179,7 +179,7 @@ const LaunchPage = () => {
   const shareUrl = `${window.location.origin}/launch/${launch.id}`;
   const platformTag = isPumpfun ? "@pumpfun" : "@BagsApp";
   const tweetText = encodeURIComponent(
-    `${launch.token_name} ($${launch.token_symbol}) presale is live on @eryslive via ${platformTag}.\n\nApe in before it migrates and lock your allocation on-chain.\n\n${shareUrl}`
+     `${launch.token_name} ($${launch.token_symbol}) presale is live on @eryslive via ${platformTag}.\n\nApe in before it launches and lock your allocation on-chain.\n\n${shareUrl}`
   );
   const tweetHref = `https://twitter.com/intent/tweet?text=${tweetText}`;
 

@@ -7,7 +7,7 @@ const bagsSteps = [
   {
     step: "2",
     title: "Get Your Allocation",
-    body: "Tokens drop straight to your wallet the moment the presale migrates to Bags. No claim, no wait.",
+     body: "Tokens drop straight to your wallet the moment the presale launches on Bags. No claim, no wait.",
   },
   {
     step: "3",
@@ -30,7 +30,7 @@ const pumpfunSteps = [
   {
     step: "3",
     title: "No Claim, No Wait",
-    body: "Tokens are in your wallet the second the presale migrates. Trade immediately — no claim flow, no delay.",
+     body: "Tokens are in your wallet the second the presale launches. Trade immediately — no claim flow, no delay.",
   },
 ];
 
