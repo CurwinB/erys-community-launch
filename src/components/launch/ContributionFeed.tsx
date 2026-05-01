@@ -13,7 +13,7 @@ interface ContributionFeedProps {
 const ContributionFeed = ({ contributions }: ContributionFeedProps) => (
   <div className="border border-border bg-card">
     <div className="border-b border-border p-4">
-      <h3 className="text-sm font-semibold text-foreground">Recent Contributions</h3>
+      <h3 className="text-sm font-semibold text-foreground">Recent Apes</h3>
     </div>
     <div className="max-h-64 overflow-y-auto">
       {contributions.length > 0 ? (
@@ -24,7 +24,7 @@ const ContributionFeed = ({ contributions }: ContributionFeedProps) => (
           </div>
         ))
       ) : (
-        <div className="px-4 py-8 text-center text-sm text-muted-foreground">No contributions yet. Be the first.</div>
+        <div className="px-4 py-8 text-center text-sm text-muted-foreground">No apes yet. Be first in.</div>
       )}
     </div>
   </div>

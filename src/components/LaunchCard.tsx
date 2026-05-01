@@ -73,7 +73,7 @@ const LaunchCard = ({
       {isLive && (
         <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5">
           <span className="h-2 w-2 rounded-full bg-success animate-pulse-glow" />
-          <span className="text-[10px] font-medium uppercase tracking-wider text-success">Live</span>
+          <span className="text-[10px] font-medium uppercase tracking-wider text-success">Presale Live</span>
         </div>
       )}
 
@@ -107,7 +107,7 @@ const LaunchCard = ({
       <div className="flex-1 p-4 space-y-4">
         {isLive && (
           <div>
-            <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Launches in</span>
+            <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Presale ends in</span>
             <CountdownTimer targetDate={launchDatetime} size="sm" className="mt-1" />
           </div>
         )}
@@ -116,21 +116,21 @@ const LaunchCard = ({
           <div className="flex items-center gap-2">
             <Coins className="h-3.5 w-3.5 text-primary" />
             <div>
-              <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Escrow</span>
+              <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Raised</span>
               <p className="font-mono text-sm font-semibold text-foreground">{formatSol(totalEscrowLamports)} SOL</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <Users className="h-3.5 w-3.5 text-primary" />
             <div>
-              <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Contributors</span>
+              <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Presalers</span>
               <p className="font-mono text-sm font-semibold text-foreground">{contributorCount}</p>
             </div>
           </div>
         </div>
 
         <div>
-          <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Min Contribution</span>
+          <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Min Buy</span>
           <p className="font-mono text-xs text-foreground">{formatSol(minContributionLamports)} SOL</p>
         </div>
       </div>
@@ -139,7 +139,7 @@ const LaunchCard = ({
         <div className="flex items-center gap-2">
           <Link to={`/launch/${id}`} className="flex-1">
             <Button className="w-full" size="sm">
-              {isLive ? "Participate" : "View Details"}
+              {isLive ? "Ape In" : "View Token"}
             </Button>
           </Link>
           <Button
@@ -259,12 +259,12 @@ const RowVariant = ({
           <div className="flex flex-col items-end">
             <div className="flex items-center gap-1">
               <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse-glow" />
-              <span className="text-[9px] font-medium uppercase tracking-wider text-success">Live</span>
+              <span className="text-[9px] font-medium uppercase tracking-wider text-success">Live Presale</span>
             </div>
             <span className="font-mono text-xs font-semibold text-primary">{countdown}</span>
           </div>
         ) : (
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Launched</span>
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Migrated</span>
         )}
         <button
           type="button"

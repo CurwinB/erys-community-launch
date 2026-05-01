@@ -7,10 +7,10 @@ interface StatusBadgeProps {
 }
 
 const statusConfig = {
-  scheduled: { label: "Scheduled", className: "border-primary/50 bg-primary/10 text-primary" },
-  executing: { label: "Executing", className: "border-yellow-500/50 bg-yellow-500/10 text-yellow-400" },
-  launched: { label: "Completed", className: "border-success/50 bg-success/10 text-success" },
-  execution_failed: { label: "Failed", className: "border-destructive/50 bg-destructive/10 text-destructive" },
+  scheduled: { label: "Presale Open", className: "border-primary/50 bg-primary/10 text-primary" },
+  executing: { label: "Migrating", className: "border-yellow-500/50 bg-yellow-500/10 text-yellow-400" },
+  launched: { label: "Live on DEX", className: "border-success/50 bg-success/10 text-success" },
+  execution_failed: { label: "Refund Available", className: "border-destructive/50 bg-destructive/10 text-destructive" },
   cancelled: { label: "Cancelled", className: "border-muted-foreground/50 bg-muted/50 text-muted-foreground" },
   sponsor_pending: { label: "Awaiting Details", className: "border-amber-500/50 bg-amber-500/10 text-amber-400" },
 };
