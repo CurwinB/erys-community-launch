@@ -130,7 +130,7 @@ const Index = () => {
               Run a fair-launch presale on Solana.
             </h1>
             <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
-              Open a presale, let your community ape in before the token migrates to Bags or Pump. Allocations drop on-chain the moment it goes live.
+               Open a presale, let your community ape in before the token launches on Bags or Pump. Allocations drop on-chain the moment it goes live.
             </p>
             <div className="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
               <Link to="/schedule">
