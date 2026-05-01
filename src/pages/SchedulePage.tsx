@@ -333,13 +333,13 @@ const SchedulePage = () => {
     if (!currentPlatformEnabled) {
       toast({
         title: "Platform paused",
-        description: `${platform === "bags" ? "Bags.fm" : "Pump.fun"} launches are temporarily paused for maintenance.`,
+        description: `${platform === "bags" ? "Bags.fm" : "Pump.fun"} presales are temporarily paused for maintenance.`,
         variant: "destructive",
       });
       return;
     }
     if (creatorContribError || form.creatorContribution === "") {
-      toast({ title: "Invalid contribution", description: creatorContribError || "Enter your contribution amount.", variant: "destructive" });
+      toast({ title: "Invalid seed buy", description: creatorContribError || "Enter your seed buy amount.", variant: "destructive" });
       return;
     }
 
@@ -361,15 +361,15 @@ const SchedulePage = () => {
       if (diffMinutes < 10) {
         toast({
           title: "Launch time too soon",
-          description: "Launch must be scheduled at least 10 minutes from now (contributions close 5 min before launch).",
+          description: "Migration must be at least 10 minutes from now (presale closes 5 min before migration).",
           variant: "destructive",
         });
         return;
       }
       if (diffMinutes > 72 * 60) {
         toast({
-          title: "Launch time too far",
-          description: "Launch must be scheduled within 72 hours from now.",
+          title: "Migration time too far",
+          description: "Migration must be scheduled within 72 hours from now.",
           variant: "destructive",
         });
         return;

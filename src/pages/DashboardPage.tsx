@@ -495,9 +495,9 @@ const FeesTab = ({
     return (
       <div className="flex flex-col items-center justify-center rounded-sm border border-dashed border-border py-12">
         <Coins className="mb-3 h-8 w-8 text-muted-foreground" />
-        <p className="text-sm font-medium text-foreground">No fee positions</p>
+        <p className="text-sm font-medium text-foreground">No creator-fee positions</p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Contribute to a Bags.fm launch to earn permanent trading fees.
+          Ape into a Bags.fm presale to earn permanent creator fees.
         </p>
       </div>
     );
@@ -566,14 +566,13 @@ const FeesTab = ({
                 Your share:{" "}
                 {c.basis_points != null ? `${(c.basis_points / 100).toFixed(2)}%` : "—"}
               </span>
-              <span>Contributed {formatSol(Number(c.amount_lamports))} SOL</span>
+              <span>Aped {formatSol(Number(c.amount_lamports))} SOL</span>
             </div>
             {isExcluded && (
               <div className="mt-3 flex items-start gap-2 rounded-sm border border-destructive/30 bg-destructive/5 p-2.5">
                 <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
                 <p className="text-xs text-destructive">
-                  Excluded from fee share due to 100 claimer limit. Your SOL was still used in
-                  the launch.
+                  Excluded from fee share due to the 100-claimer cap. Your SOL was still used in the presale.
                 </p>
               </div>
             )}
@@ -591,10 +590,10 @@ const ContributionsTab = ({ contributions }: { contributions: any[] }) => {
     return (
       <div className="flex flex-col items-center justify-center rounded-sm border border-dashed border-border py-12">
         <Rocket className="mb-3 h-8 w-8 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">No contributions yet.</p>
+        <p className="text-sm text-muted-foreground">No presales aped yet.</p>
         <Link to="/" className="mt-3">
           <Button size="sm" variant="outline">
-            Browse launches
+            Browse presales
           </Button>
         </Link>
       </div>
@@ -629,14 +628,14 @@ const ContributionsTab = ({ contributions }: { contributions: any[] }) => {
               <span>Platform: {platformLabel(l?.platform)}</span>
               <span>Date: {formatDate(c.contributed_at)}</span>
               <span>
-                Tokens:{" "}
+                Allocation:{" "}
                 {c.tokens_distributed ? formatInt(c.token_amount) : "Pending"}
               </span>
               <Link
                 to={`/launch/${l?.id}`}
                 className="text-primary hover:underline sm:text-right"
               >
-                View launch →
+                View presale →
               </Link>
             </div>
           </div>
