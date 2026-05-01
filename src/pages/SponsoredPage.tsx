@@ -342,7 +342,7 @@ const SponsoredPage = () => {
               <p className="text-muted-foreground mb-6">
                 Erys seeds your Pump.fun presale with{" "}
                 <span className="text-primary font-semibold">{seedSol} SOL</span> at no cost to
-                you. Pick your own migration time below — we'll auto-shift forward by a few
+                 you. Pick your own launch time below — we'll auto-shift forward by a few
                 minutes if your chosen slot is already booked.
               </p>
               <Card className="rounded-none border-border bg-card p-4">
@@ -382,7 +382,7 @@ const SponsoredPage = () => {
                   />
                 </div>
                 <div>
-                  <Label htmlFor="launch_dt">Migration time (1–72h ahead) *</Label>
+                   <Label htmlFor="launch_dt">Launch time (1–72h ahead) *</Label>
                   <Input
                     id="launch_dt"
                     type="datetime-local"
@@ -394,7 +394,7 @@ const SponsoredPage = () => {
                     className="rounded-none mt-1"
                   />
                   <p className="text-[10px] text-muted-foreground mt-1">
-                    If your chosen minute is full, we'll slide forward to the next open Pump.fun migration slot.
+                     If your chosen minute is full, we'll slide forward to the next open Pump.fun launch slot.
                   </p>
                 </div>
                 <div>
@@ -543,7 +543,7 @@ const SponsoredPage = () => {
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <a
                 href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(
-                  `I just opened a presale on @eryslive via Pump.fun.\n\nApe in before migration and lock your allocation on-chain.\n\n${state.launchUrl}`,
+                   `I just opened a presale on @eryslive via Pump.fun.\n\nApe in before launch and lock your allocation on-chain.\n\n${state.launchUrl}`,
                 )}`}
                 target="_blank"
                 rel="noreferrer"

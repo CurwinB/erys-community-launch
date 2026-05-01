@@ -100,7 +100,7 @@ const Index = () => {
     {
       icon: Shield,
       title: "Non-Custodial Escrow.",
-      body: "SOL sits in a per-presale escrow on Solana. No mint, no migration → automatic refund.",
+       body: "SOL sits in a per-presale escrow on Solana. No mint, no launch → automatic refund.",
     },
   ];
 

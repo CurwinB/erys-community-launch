@@ -496,7 +496,7 @@ const SchedulePage = () => {
   const platformLabel = platform === "pumpfun" ? "Pump.fun" : "Bags.fm";
   const platformTag = platform === "pumpfun" ? "@pumpfun" : "@BagsApp";
   const tweetText = encodeURIComponent(
-    `I just opened a presale on @eryslive via ${platformTag}.\n\nApe in before migration and lock your allocation on-chain.\n\n${successData?.url || ""}`
+     `I just opened a presale on @eryslive via ${platformTag}.\n\nApe in before launch and lock your allocation on-chain.\n\n${successData?.url || ""}`
   );
 
   if (step === "success" && successData) {
@@ -585,13 +585,13 @@ const SchedulePage = () => {
     <main className="min-h-screen">
       <Seo
         title="Launch a Presale — Erys"
-        description="Open a fair-launch presale on Bags.fm or Pump.fun. Set the migration time, min/max buys, and let your community ape in before the bonding curve opens."
+         description="Open a fair-launch presale on Bags.fm or Pump.fun. Set the launch time, min/max buys, and let your community ape in before the bonding curve opens."
         path="/schedule"
       />
       <div className="container mx-auto max-w-xl px-4 py-12">
         <h1 className="text-2xl font-bold text-foreground md:text-3xl">Launch a Presale.</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Pick your launchpad and let your community ape SOL into a non-custodial presale escrow before migration.
+           Pick your launchpad and let your community ape SOL into a non-custodial presale escrow before launch.
         </p>
 
         <div className="mt-6 space-y-3">
@@ -693,7 +693,7 @@ const SchedulePage = () => {
           </div>
 
           <div className="space-y-4 border border-border bg-card p-6">
-            <h3 className="text-sm font-semibold text-foreground">Migration Time</h3>
+             <h3 className="text-sm font-semibold text-foreground">Launch Time</h3>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Date</Label>
@@ -705,7 +705,7 @@ const SchedulePage = () => {
               </div>
             </div>
             <p className="text-[10px] text-muted-foreground">
-              Migration must be between 10 minutes and 72 hours from now. Presale closes 5 min before migration. Your timezone: {Intl.DateTimeFormat().resolvedOptions().timeZone}
+               Launch must be between 10 minutes and 72 hours from now. Presale closes 5 min before launch. Your timezone: {Intl.DateTimeFormat().resolvedOptions().timeZone}
             </p>
             {form.launchDate && form.launchTime && (
               <div className="mt-2 text-xs">
