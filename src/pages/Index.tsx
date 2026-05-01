@@ -244,9 +244,9 @@ const Index = () => {
           ) : (
             <div className="mx-auto flex max-w-md flex-col items-center justify-center border border-border bg-card px-6 py-12 text-center">
               <p className="mb-6 text-muted-foreground">No presales open yet.</p>
-              <Link to="/schedule">
-                <Button>Open the First Presale</Button>
-              </Link>
+               <Link to="/schedule">
+                 <Button>Open Presale</Button>
+               </Link>
             </div>
           )}
         </div>
