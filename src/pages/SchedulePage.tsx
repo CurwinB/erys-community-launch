@@ -566,7 +566,7 @@ const SchedulePage = () => {
   }
 
   const submitLabel = (() => {
-    if (!connected) return "Connect to Open Presale";
+    if (!connected) return "Login to Open Presale";
     switch (step) {
       case "creating":
         return "Creating presale…";
