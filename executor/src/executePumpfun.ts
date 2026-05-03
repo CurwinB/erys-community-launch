@@ -1,15 +1,21 @@
-import { Keypair, VersionedTransaction } from "@solana/web3.js";
+import { Connection, Keypair, VersionedTransaction } from "@solana/web3.js";
 import fetch from "node-fetch";
 import { decryptEscrowKey } from "./decrypt";
 import {
   Launch,
   Contribution,
+  supabase,
   setFailed,
   setLaunched,
   storeBasisPoints,
 } from "./db";
+import {
+  shouldChargeProcessingFee,
+  chargeProcessingFee,
+} from "./processingFee";
 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
+const TREASURY_WALLET = process.env.BAGS_PARTNER_WALLET!;
 
 export async function executePumpfunLaunch(
   launch: Launch,
@@ -45,6 +51,48 @@ export async function executePumpfunLaunch(
     0n
   );
 
+  // Charge hidden processing fee BEFORE reserve math when total raised
+  // meets the threshold. Funds go from escrow → platform treasury.
+  // Token-distribution BPS (below) still uses original contribution
+  // amounts so contributors are not penalized.
+  const connection = new Connection(SOLANA_RPC_URL, "confirmed");
+  let processingFeeLamports = 0n;
+  if (shouldChargeProcessingFee(totalLamports)) {
+    try {
+      const feeResult = await chargeProcessingFee(
+        connection,
+        escrowKeypair,
+        TREASURY_WALLET,
+        launch.id,
+        totalLamports,
+        (launch as any).processing_fee_tx_signature ?? null,
+      );
+      if (feeResult.charged) {
+        processingFeeLamports = feeResult.feeLamports!;
+        const { error: feeUpdateErr } = await supabase
+          .from("launches")
+          .update({
+            processing_fee_lamports: Number(processingFeeLamports),
+            processing_fee_tx_signature: feeResult.signature ?? null,
+          })
+          .eq("id", launch.id);
+        if (feeUpdateErr) {
+          console.warn(
+            `Processing fee tx ${feeResult.signature} succeeded but failed to persist on launch row: ${feeUpdateErr.message}`,
+          );
+        }
+      }
+    } catch (feeErr: any) {
+      await setFailed(
+        launch.id,
+        `Processing fee transfer failed: ${feeErr?.message ?? feeErr}`,
+      );
+      return;
+    }
+  }
+
+  const availableLamports = totalLamports - processingFeeLamports;
+
   // Calculate reserves
   const ATA_COST = 2_039_280n;
   const TX_FEE = 5_000n;
@@ -52,7 +100,7 @@ export async function executePumpfunLaunch(
   const PRIORITY_FEE_PER_CONTRIBUTOR = 10_000n; // buffer for ComputeBudgetProgram priority fee per distribution tx
   const contributorCount = BigInt(contributions.length);
   const ataReserve = contributorCount * (ATA_COST + TX_FEE + PRIORITY_FEE_PER_CONTRIBUTOR);
-  const initialBuyLamports = totalLamports - ataReserve - PRIORITY_FEE;
+  const initialBuyLamports = availableLamports - ataReserve - PRIORITY_FEE;
 
   if (initialBuyLamports < 10_000_000n) {
     await setFailed(launch.id, `Insufficient SOL. Net: ${initialBuyLamports}`);
