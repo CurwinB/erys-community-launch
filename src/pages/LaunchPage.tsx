@@ -320,7 +320,11 @@ const LaunchPage = () => {
             </div>
           )}
 
-          <LaunchStats totalEscrow={totalEscrow} contributorCount={contributorCount} />
+          <LaunchStats
+            totalEscrow={totalEscrow}
+            contributorCount={contributorCount}
+            onChainLamports={onChainEscrowLamports ?? null}
+          />
 
           {maxContrib && (
             <div className="border border-border bg-card p-4">
