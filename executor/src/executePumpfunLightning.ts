@@ -136,7 +136,7 @@ export async function executePumpfunLightningLaunch(
     console.log(
       `Launch ${launch.id} below minimum pool (${totalLamports} < ${MINIMUM_POOL_LAMPORTS}). Cancelling and refunding.`
     );
-    await cancelAndRefund(connection, launch, contributions, escrowKeypair);
+    await cancelAndRefund(launch, contributions);
     return;
   }
 
