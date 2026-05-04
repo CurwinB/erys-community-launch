@@ -226,20 +226,46 @@ export async function launchWithLocalSigning(
   LOG(`uri original=${originalUri} rewritten=${uriField}`);
   LOG(`publicKey type=${typeof launch.escrow_wallet_public_key} len=${pubkeyField.length} value=${pubkeyField}`);
 
-  // Inline diagnostic: confirm the URI we're about to hand to PumpPortal
-  // is publicly accessible and returns valid JSON with name/symbol/image.
-  try {
-    const diagRes = await fetch(uriField, { method: "GET" });
-    const diagText = await diagRes.text().catch(() => "");
-    LOG(`metadata URI diagnostic: status=${diagRes.status} bytes=${diagText.length} body=${diagText.slice(0, 600)}`);
+  // Inline diagnostic + fail-fast: confirm the URI we're about to hand to
+  // PumpPortal returns valid JSON with non-empty name/symbol/image. If
+  // any are missing, abort BEFORE /trade-local so we surface a clean
+  // diagnostic instead of PumpPortal's cryptic toBuffer 400.
+  {
+    let diagOk = false;
+    let diagReason = "no attempt";
     try {
-      const parsed = JSON.parse(diagText);
-      LOG(`metadata fields: name=${parsed?.name} symbol=${parsed?.symbol} image=${parsed?.image}`);
-    } catch {
-      LOG(`metadata URI did NOT return valid JSON`);
+      const diagRes = await fetch(uriField, { method: "GET" });
+      const diagText = await diagRes.text().catch(() => "");
+      LOG(`metadata URI diagnostic: status=${diagRes.status} bytes=${diagText.length} body=${diagText.slice(0, 600)}`);
+      if (!diagRes.ok) {
+        diagReason = `metadata GET ${diagRes.status}`;
+      } else {
+        try {
+          const parsed = JSON.parse(diagText);
+          const n = typeof parsed?.name === "string" ? parsed.name.trim() : "";
+          const s = typeof parsed?.symbol === "string" ? parsed.symbol.trim() : "";
+          const i = typeof parsed?.image === "string" ? parsed.image.trim() : "";
+          LOG(`metadata fields: name=${n} symbol=${s} image=${i}`);
+          if (!n || !s || !i) {
+            diagReason = `metadata missing required fields (name=${!!n} symbol=${!!s} image=${!!i})`;
+          } else {
+            diagOk = true;
+          }
+        } catch {
+          diagReason = "metadata URI did NOT return valid JSON";
+          LOG(diagReason);
+        }
+      }
+    } catch (e: any) {
+      diagReason = `metadata URI diagnostic fetch threw: ${e?.message ?? e}`;
+      LOG(diagReason);
     }
-  } catch (e: any) {
-    LOG(`metadata URI diagnostic fetch threw: ${e?.message ?? e}`);
+    if (!diagOk && !dryRun) {
+      const msg = `Aborting before /trade-local: ${diagReason}`;
+      ERR(msg);
+      await setFailed(launch.id, msg);
+      return;
+    }
   }
   if (!mintField || !uriField || !pubkeyField) {
     const msg = `Refusing /trade-local call: mintEmpty=${!mintField} uriEmpty=${!uriField} pubkeyEmpty=${!pubkeyField}`;
