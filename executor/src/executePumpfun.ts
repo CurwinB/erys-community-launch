@@ -150,7 +150,9 @@ export async function executePumpfunLaunch(
       );
       return;
     }
-    console.log(`PumpPortal reachable (${probeRes.status}): ${probeText.slice(0, 500)}`);
+    // GET /trade-local is not a supported method; 400/405 here is normal
+    // and means the host is up. Only 5xx counts as down.
+    console.log(`PumpPortal endpoint up (GET status ${probeRes.status} is normal): ${probeText.slice(0, 200)}`);
   } catch (probeErr: any) {
     await setFailed(
       launch.id,

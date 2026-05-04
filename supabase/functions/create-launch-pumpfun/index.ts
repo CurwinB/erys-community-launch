@@ -108,12 +108,13 @@ Deno.serve(async (req) => {
         if (!imgCid) {
           return errorResponse(`Pinata image upload returned no CID: ${JSON.stringify(imgPinData)}`, 500);
         }
-        // Use Pinata HTTPS gateway (matches PumpPortal's official docs
-        // example exactly). The `ipfs://` scheme is technically valid per
-        // Metaplex but PumpPortal's create handler eagerly fetches the
-        // `image` field server-side and an `ipfs://` URL there can land
-        // in their `undefined.toBuffer()` crash path.
-        finalImageUrl = `https://gateway.pinata.cloud/ipfs/${imgCid}`;
+        // Use ipfs.io public gateway exactly as PumpPortal's official
+        // /trade-local example does. gateway.pinata.cloud is the shared
+        // free-tier gateway and frequently returns 429 / HTML challenges
+        // to server-side fetchers like PumpPortal — when that happens
+        // their create handler crashes with the cryptic
+        // `Cannot read properties of undefined (reading 'toBuffer')` 400.
+        finalImageUrl = `https://ipfs.io/ipfs/${imgCid}`;
       } catch (err: any) {
         return errorResponse(`Image IPFS upload failed: ${err.message}`, 500);
       }
@@ -160,103 +161,15 @@ Deno.serve(async (req) => {
       if (!metadataCid) {
         return errorResponse(`Pinata metadata upload returned no CID: ${JSON.stringify(metaPinData)}`, 500);
       }
-      // Use Pinata's dedicated gateway instead of public ipfs.io. Public
-      // ipfs.io is frequently rate-limited / slow / unreachable from
-      // PumpPortal's servers, which causes their /trade-local handler to
-      // crash with `Cannot read properties of undefined (reading 'toBuffer')`
-      // when the metadata fetch fails. Pinata's gateway serves CIDs we
-      // pinned ourselves with sub-second latency and high availability.
-      ipfsMetadataUrl = `https://gateway.pinata.cloud/ipfs/${metadataCid}`;
+      // Use ipfs.io — matches PumpPortal's official example exactly.
+      // gateway.pinata.cloud rate-limits server-side fetchers and trips
+      // PumpPortal's `undefined.toBuffer()` 400 path.
+      ipfsMetadataUrl = `https://ipfs.io/ipfs/${metadataCid}`;
     } catch (err: any) {
       return errorResponse(`Metadata IPFS upload failed: ${err.message}`, 500);
     }
 
-    // Step 2a (defense-in-depth): also publish to pump.fun's canonical
-    // /api/ipfs endpoint and prefer the metadataUri it returns. PumpPortal
-    // /trade-local fetches and parses the URI synchronously inside the
-    // create handler, and pump.fun's own gateway has zero-second propagation
-    // and never trips their `undefined.toBuffer()` crash path. Self-hosted
-    // Pinata URIs work most of the time but are a documented intermittent
-    // failure mode. Falls back to the Pinata URL if pump.fun is unreachable.
-    try {
-      const pumpForm = new FormData();
-      // Re-fetch the image bytes once for the multipart upload.
-      if (finalImageUrl) {
-        const imgRes = await fetch(finalImageUrl);
-        if (imgRes.ok) {
-          const imgBlob = await imgRes.blob();
-          const ct = imgRes.headers.get("content-type") || "image/png";
-          const ext = ct.split("/")[1]?.split(";")[0] || "png";
-          pumpForm.append("file", imgBlob, `image.${ext}`);
-        }
-      }
-      pumpForm.append("name", token_name);
-      pumpForm.append("symbol", symbolUpper);
-      pumpForm.append("description", description || "");
-      if (twitter_url) pumpForm.append("twitter", twitter_url);
-      if (telegram_url) pumpForm.append("telegram", telegram_url);
-      if (website_url) pumpForm.append("website", website_url);
-      pumpForm.append("showName", "true");
-
-      // pump.fun's Cloudflare front blocks default Deno fetch headers with
-      // a 403. Send a realistic browser UA + Origin/Referer so the upload
-      // actually succeeds. Retry up to 3x with backoff on 403/5xx.
-      const browserHeaders: Record<string, string> = {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        Origin: "https://pump.fun",
-        Referer: "https://pump.fun/create",
-        Accept: "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-      };
-      let pumpUri: string | undefined;
-      for (let attempt = 1; attempt <= 3 && !pumpUri; attempt++) {
-        try {
-          const pumpCtrl = new AbortController();
-          const pumpTimeout = setTimeout(() => pumpCtrl.abort(), 10_000);
-          const pumpRes = await fetch("https://pump.fun/api/ipfs", {
-            method: "POST",
-            headers: browserHeaders,
-            body: pumpForm,
-            signal: pumpCtrl.signal,
-          });
-          clearTimeout(pumpTimeout);
-          if (pumpRes.ok) {
-            const pumpJson = await pumpRes.json().catch(() => null);
-            const uri: string | undefined = pumpJson?.metadataUri;
-            if (uri && /^https?:\/\//.test(uri)) {
-              console.log(
-                `Using pump.fun canonical metadataUri (attempt ${attempt}): ${uri}`
-              );
-              pumpUri = uri;
-              ipfsMetadataUrl = uri;
-              break;
-            }
-            console.warn(
-              `pump.fun /api/ipfs returned 200 but no metadataUri (attempt ${attempt})`
-            );
-          } else {
-            console.warn(
-              `pump.fun /api/ipfs returned ${pumpRes.status} (attempt ${attempt})`
-            );
-          }
-        } catch (e: any) {
-          console.warn(
-            `pump.fun /api/ipfs threw (attempt ${attempt}): ${e?.message ?? e}`
-          );
-        }
-        if (!pumpUri && attempt < 3) {
-          await new Promise((r) => setTimeout(r, 1_500 * attempt));
-        }
-      }
-      if (!pumpUri) {
-        console.warn("pump.fun /api/ipfs failed after 3 attempts; keeping Pinata URL");
-      }
-    } catch (pumpErr: any) {
-      console.warn(`pump.fun /api/ipfs upload skipped: ${pumpErr?.message ?? pumpErr}`);
-    }
-
-    // Step 2b: Verify the EXACT URL we're about to store is fully fetchable
+    // Step 2a: Verify the EXACT URL we're about to store is fully fetchable
     // (JSON parses + image field returns 200). PumpPortal fetches this URL
     // synchronously inside /trade-local; if it 404s or the `image` it
     // references is unreachable, PumpPortal crashes with the cryptic
@@ -499,6 +412,17 @@ async function verifyMetadataReachable(
         } catch {
           lastReason = "metadata not valid JSON yet";
           await new Promise((r) => setTimeout(r, 1_500));
+          continue;
+        }
+        // PumpPortal reads name/symbol/image synchronously to build the
+        // Metaplex record. Any missing/empty value here will crash their
+        // handler with `undefined.toBuffer()`. Reject early.
+        const name = typeof json?.name === "string" ? json.name.trim() : "";
+        const symbol = typeof json?.symbol === "string" ? json.symbol.trim() : "";
+        const imageStr = typeof json?.image === "string" ? json.image.trim() : "";
+        if (!name || !symbol || !imageStr) {
+          lastReason = `metadata missing required fields (name=${!!name} symbol=${!!symbol} image=${!!imageStr})`;
+          await new Promise((r) => setTimeout(r, 1_000));
           continue;
         }
         const imageUrl: string | undefined = json?.image;
