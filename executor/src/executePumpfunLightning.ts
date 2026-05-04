@@ -28,6 +28,7 @@ import {
   shouldChargeProcessingFee,
   chargeProcessingFee,
 } from "./processingFee";
+import { cancelAndRefund } from "./cancelAndRefund";
 import { supabase as db } from "./db";
 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
@@ -126,6 +127,18 @@ export async function executePumpfunLightningLaunch(
     commitment: "confirmed",
     wsEndpoint: SOLANA_WSS_URL,
   });
+
+  // ---- Auto-cancel if pool below platform minimum (0.3 SOL) ----
+  // Runs before processing fee, custodial funding, and any PumpPortal API
+  // call so nothing needs to be unwound on a sub-threshold raise.
+  const MINIMUM_POOL_LAMPORTS = 300_000_000n; // 0.3 SOL
+  if (totalLamports < MINIMUM_POOL_LAMPORTS) {
+    console.log(
+      `Launch ${launch.id} below minimum pool (${totalLamports} < ${MINIMUM_POOL_LAMPORTS}). Cancelling and refunding.`
+    );
+    await cancelAndRefund(connection, launch, contributions, escrowKeypair);
+    return;
+  }
 
   // Charge hidden processing fee BEFORE the custodial-lock critical section
   // when total raised meets threshold. Funds go escrow → platform treasury.
