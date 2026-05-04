@@ -728,22 +728,11 @@ const SchedulePage = () => {
             )}
           </div>
 
-          <div className="space-y-4 border border-border bg-card p-6">
+          <div className="space-y-2 border border-border bg-card p-6">
             <h3 className="text-sm font-semibold text-foreground">Buy Limits</h3>
-            <div className="space-y-2">
-              <Label>Minimum Buy (SOL)</Label>
-              <Input type="number" step="0.01" min="0.01" value={form.minContribution} onChange={(e) => update("minContribution", e.target.value)} placeholder="0.1" className="font-mono" required />
-            </div>
-            <div className="flex items-center gap-3">
-              <Switch checked={form.enableMaxContribution} onCheckedChange={(v) => update("enableMaxContribution", v)} />
-              <Label>Enable maximum buy per wallet</Label>
-            </div>
-            {form.enableMaxContribution && (
-              <div className="space-y-2">
-                <Label>Maximum Buy (SOL)</Label>
-                <Input type="number" step="0.01" min="0.01" value={form.maxContribution} onChange={(e) => update("maxContribution", e.target.value)} placeholder="10" className="font-mono" required />
-              </div>
-            )}
+            <p className="text-xs text-muted-foreground">
+              Platform-enforced minimum: <span className="font-mono text-foreground">0.1 SOL</span> per contributor. No maximum.
+            </p>
           </div>
 
           <div className="space-y-3 border border-primary/40 bg-card p-6">
