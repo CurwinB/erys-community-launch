@@ -1,50 +1,63 @@
-## Goal
+## Why Louey failed
 
-Stop Pump.fun launches from failing with PumpPortal `400 — Cannot read properties of undefined (reading 'toBuffer')`. The fee-reorder fix already worked for Loopy (no processing fee charged, contributors refunded), but the launch itself still failed. Root cause analysis points to **our own pre-flight probe being the trigger**: it POSTs `{action: "create"}` with no `mint`/`publicKey`/`tokenMetadata`, which is exactly the malformed shape that crashes their `toBuffer` path — and we make that call ~1 second before the real one from the same IP.
+PumpPortal returned `400 Cannot read properties of undefined (reading 'toBuffer')` on both `/trade-local` attempts. The earlier `ipfs://` image fix worked (the metadata JSON now correctly uses an HTTPS Pinata URL). The remaining trigger is the **token name**: it is stored and sent as `"Louey "` — with a trailing space. PumpPortal's create handler runs server-side metadata processing on `name`/`symbol`, and the trailing whitespace is the most likely cause of the `undefined.toBuffer()` crash this round (the symbol is also uppercased to `LOUEY` but the name space is passed through verbatim).
+
+A second, related fragility: we pass our own Pinata `metadataUri` to `/trade-local` instead of using PumpPortal's canonical `https://pump.fun/api/ipfs` upload. Self-hosted URIs work most of the time but are a documented source of intermittent `toBuffer` 400s because PumpPortal fetches and parses the JSON synchronously inside the request handler.
 
 ## Changes
 
-### 1. Replace the broken probe with a passive health check
+### 1. Sanitize name/symbol everywhere they hit PumpPortal
 
-In `executor/src/executePumpfunLightning.ts` and `executor/src/launchWithLocalSigning.ts`:
+**`executor/src/launchWithLocalSigning.ts`** and **`executor/src/executePumpfun.ts`** / **`executor/src/executePumpfunLightning.ts`** (wherever `tokenMetadata` is built):
 
-- Remove the `POST /trade-local` probe entirely.
-- Replace with a lightweight `GET https://pumpportal.fun/api/trade-local` (or HEAD) with a 5s timeout. We only treat a 5xx or network error as "down". Any 4xx (including 405 Method Not Allowed) means the service is reachable — proceed.
-- Rationale: we're no longer feeding their server the exact malformed payload that bricks the next request from our IP.
+- `name: launch.token_name.trim()`
+- `symbol: launch.token_symbol.trim().toUpperCase()`
+- Reject (skip + setFailed early) if either is empty after trim.
 
-### 2. Add a single automatic retry on the real `/trade-local` call
+**`supabase/functions/create-launch-pumpfun/index.ts`**:
 
-In both `executePumpfunLightning.ts` and `launchWithLocalSigning.ts`:
+- Trim `name` and `symbol` before writing to the metadata JSON and before persisting `token_name` / `token_symbol` on the `launches` row. Existing trailing-space rows stay as-is (cosmetic) but new launches won't reproduce the bug.
 
-- If the first `/trade-local` call returns a 5xx, a `400` whose body matches `/toBuffer|undefined/i`, or a network error: wait 2.5s, retry once.
-- If the second attempt also fails, then call `setFailed` and trigger the existing auto-refund flow.
-- Log both attempts clearly (`[attempt 1/2]`, `[attempt 2/2]`).
-- Safety: in `launchWithLocalSigning.ts` the processing fee is already charged AFTER `/trade-local` succeeds, so retrying `/trade-local` cannot strand contributor funds.
+### 2. Use pump.fun's canonical IPFS upload (defense-in-depth)
 
-### 3. Manual reimbursement for Loopy short-changed contributor
+In `create-launch-pumpfun/index.ts`, after pinning the image to Pinata:
 
-Wallet `62aKWrHctoH4TUCfmmqoKCbaXXJWYWoLGL5Zc9izubaV` was refunded but is short **890,880 lamports** (~0.0009 SOL) due to on-chain tx fees from create+refund attempts. This is below the dust threshold and not caused by the new fee-reorder logic (the processing fee was correctly NOT charged). I'll surface it in the existing admin RefundsTab "shortfall" column (already wired) — no code change needed, just verify it's visible. Optional: send a manual treasury transfer; flag this for you with a copy-pastable address + amount but do not auto-execute.
+- Build a multipart form (file + `name`, `symbol`, `description`, `twitter`, `telegram`, `website`, `showName=true`).
+- POST to `https://pump.fun/api/ipfs`.
+- Use the returned `metadataUri` for `launch.ipfs_metadata_url`.
+- Keep the Pinata image pin as fallback (so we still own the asset). If the pump.fun upload fails, fall back to the current Pinata-hosted metadata JSON path so we never block a launch on their service.
+
+### 3. Manual fix for Louey's stored name
+
+One-off SQL update via migration to trim the trailing space on the existing Louey row so a manual retry works without redeploy ordering games:
+
+```sql
+update launches set token_name = trim(token_name), token_symbol = trim(token_symbol)
+where id = 'f3c209e1-9283-4d1e-a39c-b0eaa921a8a2';
+```
+
+(Optionally extend to all rows where `token_name <> trim(token_name)`.)
 
 ### 4. Update plan.md
 
-Replace the now-stale `.lovable/plan.md` notes about the probe with the new probe-removal rationale so future debugging doesn't re-introduce it.
+Replace probe-removal notes with the new "trim + canonical IPFS" rationale.
 
 ## Files
 
-- `executor/src/executePumpfunLightning.ts` — replace probe, add retry
-- `executor/src/launchWithLocalSigning.ts` — replace probe, add retry
-- `executor/src/executePumpfun.ts` — replace probe (same pattern)
-- `.lovable/plan.md` — update notes
+- `executor/src/launchWithLocalSigning.ts`
+- `executor/src/executePumpfun.ts`
+- `executor/src/executePumpfunLightning.ts`
+- `supabase/functions/create-launch-pumpfun/index.ts`
+- new migration: trim existing token_name/symbol
+- `.lovable/plan.md`
 
 ## Out of scope
 
-- Switching off PumpPortal entirely (would need direct on-chain Pump.fun program calls; large change).
-- Auto-reimbursing dust shortfalls from treasury (deferred — separate security review).
-- Backfilling `processing_fee_refund_owed_lamports` for Loopy (it's null because no fee was charged — correct behavior).
+- Refunds: already completed automatically (refunded=2, partial=1 as expected — partial is the on-chain tx-fee shortfall, surfaced in admin RefundsTab).
+- Auto-retrying the failed Louey launch — handled by existing admin "retry" flow once the trim migration runs.
 
 ## Verification
 
-After deploy, the next scheduled Pump.fun launch will exercise:
-1. New passive probe (should log `OK` with a 405 or 200, not crash PumpPortal's cache).
-2. Real `/trade-local` call. If it 400s on `toBuffer`, the retry will fire 2.5s later.
-3. If both fail, contributors get full refund (no fee charged), launch marked `execution_failed`, no funds stranded.
+After deploy:
+1. Re-run Louey from admin → name is now `"Louey"` → `/trade-local` should succeed.
+2. Next fresh launch will use pump.fun's IPFS endpoint, removing the last variable in the metadata path.

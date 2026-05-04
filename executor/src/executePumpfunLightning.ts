@@ -296,8 +296,8 @@ async function runCustodialCriticalSection(
       body: JSON.stringify({
         action: "create",
         tokenMetadata: {
-          name: launch.token_name,
-          symbol: launch.token_symbol.toUpperCase(),
+          name: (launch.token_name ?? "").trim(),
+          symbol: (launch.token_symbol ?? "").trim().toUpperCase(),
           uri: launch.ipfs_metadata_url,
         },
         mint: mintBs58Secret,
