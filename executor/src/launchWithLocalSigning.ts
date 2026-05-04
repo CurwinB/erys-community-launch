@@ -244,9 +244,19 @@ export async function launchWithLocalSigning(
   LOG(`Locally signed transaction: ${signedBytes.length} bytes`);
 
   if (dryRun) {
-    LOG(
-      "[DRY-RUN] Skipping RPC submission. Keypair load + tx construction + local sign all succeeded."
-    );
+    LOG(`Signed transaction size: ${signedBytes.length} bytes`);
+    LOG(`Escrow public key: ${escrowKeypair.publicKey.toBase58()}`);
+    LOG(`Mint public key:   ${mintKeypair.publicKey.toBase58()}`);
+    if (mintKeypair.publicKey.toBase58() === launch.token_mint_address) {
+      LOG(
+        `Mint match confirmed: derived mint === launch.token_mint_address (${launch.token_mint_address})`
+      );
+    } else {
+      ERR(
+        `Mint MISMATCH: derived ${mintKeypair.publicKey.toBase58()} !== launch.token_mint_address ${launch.token_mint_address}`
+      );
+    }
+    console.log("[DRY RUN] Transaction ready \u2014 not submitted");
     return;
   }
 
