@@ -13,6 +13,7 @@ import RefundsTab from "@/components/admin/RefundsTab";
 import RecoveryTab from "@/components/admin/RecoveryTab";
 import AccountingTab from "@/components/admin/AccountingTab";
 import SponsoredTab from "@/components/admin/SponsoredTab";
+import LocalSigningTestTab from "@/components/admin/LocalSigningTestTab";
 import { lamportsToSol } from "@/lib/adminFormat";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { useWallet } from "@/hooks/useWallet";
@@ -146,6 +147,12 @@ const AdminPage = () => {
             >
               Sponsored
             </TabsTrigger>
+            <TabsTrigger
+              value="local-signing"
+              className="rounded-none data-[state=active]:bg-background data-[state=active]:text-destructive px-4 py-2 font-mono text-xs uppercase tracking-widest"
+            >
+              Local Signing Test
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="launches" className="mt-4">
@@ -175,6 +182,12 @@ const AdminPage = () => {
           </TabsContent>
           <TabsContent value="sponsored" className="mt-4">
             <SponsoredTab launches={launches as any} />
+          </TabsContent>
+          <TabsContent value="local-signing" className="mt-4">
+            <LocalSigningTestTab
+              launches={launches as any}
+              adminWallet={publicKey!}
+            />
           </TabsContent>
         </Tabs>
       </div>
