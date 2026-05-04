@@ -207,15 +207,33 @@ export async function launchWithLocalSigning(
   // from these without manual intervention. Safe to retry: the processing
   // fee has not been charged yet, and the mint pubkey is deterministic
   // (re-using the same mint on retry is the correct behavior).
+  // Defensive coercion + diagnostics. PumpPortal /trade-local responds 400
+  // with `Cannot read properties of undefined (reading 'toBuffer')` when
+  // either `mint` or `tokenMetadata.uri` is null/undefined or not a plain
+  // base58 string — their handler tries to wrap it in a PublicKey/Buffer
+  // and crashes. Force both to plain strings here and log types so any
+  // future regression is immediately diagnosable in Railway logs.
+  const mintField = String(launch.token_mint_address ?? "").trim();
+  const uriField = String(launch.ipfs_metadata_url ?? "").trim();
+  const pubkeyField = String(launch.escrow_wallet_public_key ?? "").trim();
+  LOG(`mint type=${typeof launch.token_mint_address} len=${mintField.length} value=${mintField}`);
+  LOG(`uri type=${typeof launch.ipfs_metadata_url} len=${uriField.length} value=${uriField}`);
+  LOG(`publicKey type=${typeof launch.escrow_wallet_public_key} len=${pubkeyField.length} value=${pubkeyField}`);
+  if (!mintField || !uriField || !pubkeyField) {
+    const msg = `Refusing /trade-local call: mintEmpty=${!mintField} uriEmpty=${!uriField} pubkeyEmpty=${!pubkeyField}`;
+    ERR(msg);
+    if (!dryRun) await setFailed(launch.id, msg);
+    return;
+  }
   const tradeLocalBody = JSON.stringify({
-    publicKey: launch.escrow_wallet_public_key,
+    publicKey: pubkeyField,
     action: "create",
     tokenMetadata: {
       name: (launch.token_name ?? "").trim(),
       symbol: (launch.token_symbol ?? "").trim().toUpperCase(),
-      uri: launch.ipfs_metadata_url,
+      uri: uriField,
     },
-    mint: launch.token_mint_address,
+    mint: mintField,
     denominatedInSol: "true",
     amount: Number(initialBuyLamports) / 1e9,
     slippage: 15,
