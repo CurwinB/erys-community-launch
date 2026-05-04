@@ -1,27 +1,39 @@
-Plan to implement the requested diagnostics:
+Add Pinata→public-gateway rewrite + inline metadata diagnostics before `/trade-local`.
 
-1. Update the local-signing reachability check in `executor/src/launchWithLocalSigning.ts`
-   - Read the response body for every PumpPortal GET reachability response, not only 5xx.
-   - Log it as:
-     ```ts
-     LOG(`PumpPortal reachable (${probeRes.status}): ${probeText}`);
-     ```
-   - Keep the existing behavior that only aborts on 5xx/network errors, but include the response body in both success and failure logs.
+## Changes
 
-2. Log the exact `/trade-local` request JSON before sending it
-   - Build the body as a plain object first, then stringify it.
-   - Log:
-     ```ts
-     LOG(`/trade-local request body: ${JSON.stringify(requestBody)}`);
-     ```
-   - Continue using the same string-coerced `publicKey`, `mint`, and `tokenMetadata.uri` values.
+### 1. `executor/src/launchWithLocalSigning.ts`
 
-3. Mirror the same diagnostics in `executor/src/executePumpfun.ts`
-   - This is the older Pump.fun local-signing path and has the same reachability check pattern.
-   - Add full reachability body logging and full request-body logging there too, so either execution route gives comparable logs.
+Add a small helper near the bottom of the file:
 
-4. Keep secrets safe
-   - The request body only contains public values: escrow public key, mint public key, metadata URI, token name/symbol, SOL amount, slippage, priority fee, and pool.
-   - Do not log decrypted escrow or mint secret keys.
+```ts
+function rewriteToPublicIpfsGateway(url: string): string {
+  if (!url) return url;
+  // gateway.pinata.cloud/ipfs/<cid>/...  →  https://ipfs.io/ipfs/<cid>/...
+  const m = url.match(/^https?:\/\/[^/]*pinata[^/]*\/ipfs\/(.+)$/i);
+  if (m) return `https://ipfs.io/ipfs/${m[1]}`;
+  // ipfs://<cid>/... → https://ipfs.io/ipfs/<cid>/...
+  const ipfsProto = url.match(/^ipfs:\/\/(.+)$/i);
+  if (ipfsProto) return `https://ipfs.io/ipfs/${ipfsProto[1]}`;
+  return url;
+}
+```
 
-No database changes or UI changes are needed.
+Right before building `requestBody` for `/trade-local`:
+- Compute `originalUri` from `launch.ipfs_metadata_url`.
+- Run it through `rewriteToPublicIpfsGateway` to get `uriField`.
+- Log both: `LOG(\`uri original=${originalUri} rewritten=${uriField}\`)`.
+- Inline diagnostic `fetch(uriField)`: log status, byte length, first 600 chars of body, and parsed `name`/`symbol`/`image` fields (or "did NOT return valid JSON").
+- Pass the rewritten `uriField` as `tokenMetadata.uri`.
+
+### 2. `executor/src/executePumpfun.ts`
+
+Mirror the same helper + diagnostic + rewrite immediately before the `/trade-local` POST. Update the existing `verifyMetadataReachable` call site so the rewritten URI is what gets verified and what gets sent.
+
+### 3. No DB / config / UI changes
+
+No schema migration, no edge function changes, no secrets. Helper is local to each executor file (or extracted to a tiny shared util if both files end up identical — single-file duplication is fine for one tiny function).
+
+## Why
+
+PumpPortal fetches `tokenMetadata.uri` server-side during `create` and crashes with `Cannot read properties of undefined (reading 'toBuffer')` when the body isn't valid JSON with `name`/`symbol`/`image`. Pinata's public gateway frequently rate-limits or returns HTML challenges to server-side fetchers. `ipfs.io` is the more reliable public gateway for this case; the inline diagnostic confirms parseability before we hand it off.
