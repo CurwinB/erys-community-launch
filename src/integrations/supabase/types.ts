@@ -60,6 +60,7 @@ export type Database = {
           id: string
           is_fee_claimer: boolean | null
           launch_id: string
+          pending_orphan_refund: boolean
           refund_shortfall_lamports: number | null
           refund_tx_signature: string | null
           token_amount: number | null
@@ -77,6 +78,7 @@ export type Database = {
           id?: string
           is_fee_claimer?: boolean | null
           launch_id: string
+          pending_orphan_refund?: boolean
           refund_shortfall_lamports?: number | null
           refund_tx_signature?: string | null
           token_amount?: number | null
@@ -94,6 +96,7 @@ export type Database = {
           id?: string
           is_fee_claimer?: boolean | null
           launch_id?: string
+          pending_orphan_refund?: boolean
           refund_shortfall_lamports?: number | null
           refund_tx_signature?: string | null
           token_amount?: number | null
@@ -515,6 +518,7 @@ export type Database = {
           id: string
           is_fee_claimer: boolean | null
           launch_id: string
+          pending_orphan_refund: boolean
           refund_shortfall_lamports: number | null
           refund_tx_signature: string | null
           token_amount: number | null

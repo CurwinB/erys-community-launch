@@ -1,73 +1,70 @@
-## Problem
+## Problem recap
 
-When a user apes an amount below the platform minimum (0.1 SOL), the toast shows:
+`handleContribute` signs and sends SOL to escrow **before** the `contribute` edge function validates anything. Any server-side rejection (under 0.1 SOL, window closed, status not `scheduled`, signer/amount mismatch, RPC slow to confirm, duplicate tx) leaves SOL stranded on-chain with no DB row. The UI's "Total Escrow" reads from the `contributions` table sum, so stranded SOL is invisible.
 
-> **Ape failed** — Edge Function returned a non-2xx status code
+## Fix — three changes, one PR
 
-That's the generic `FunctionsHttpError.message` from `supabase.functions.invoke`. The real, helpful message ("Minimum contribution is 0.1 SOL. You sent 0.05 SOL.") lives in the edge function's JSON response body but is never read.
+### 1. Pre-flight validation edge function (prevents stranding)
 
-Note: the `contribute` edge function currently only enforces a single platform floor of **0.1 SOL** — there is no creator-set min/max anymore (per-launch overrides were removed). So in practice the only "below min" case is < 0.1 SOL, and there is no "above max" case. The fix focuses on surfacing whatever message the edge function returns, plus a client-side pre-check for the common case.
+New edge function: `supabase/functions/validate-contribution/index.ts`.
 
-## Fix
+Runs every check `contribute` does, except the on-chain tx verification:
+- `launch_id` exists
+- `status === 'scheduled'`
+- `launch_datetime > now() + 5min`
+- `amount_lamports >= 100_000_000` (0.1 SOL platform floor)
+- `token_delivery_wallet` format if provided
+- `wallet_address` format
 
-Edit `src/pages/LaunchPage.tsx` `handleContribute`:
+Returns `{ ok: true }` on 200 or `{ error: "<human message>" }` on 400/404.
 
-1. **Client-side pre-check before signing.** If `sol < 0.1`, show a friendly toast immediately and return — no wallet popup, no tx, no edge call:
-   - Title: `Below minimum buy`
-   - Description: `Minimum ape is 0.1 SOL. You entered {sol} SOL.`
+**Client change** in `src/pages/LaunchPage.tsx` `handleContribute`:
+1. Keep the existing client-side `< 0.1 SOL` early toast (cheap UX win).
+2. **Before** building the tx, call `supabase.functions.invoke("validate-contribution", …)`. On error, show the same status-aware toast we already added and return — no wallet popup.
+3. Only on `{ ok: true }` proceed to sign/send and then call `contribute`.
 
-2. **Read the real edge-function error body.** When `supabase.functions.invoke("contribute", …)` returns an `error`, parse `error.context` (the underlying `Response`) to extract the JSON `{ error: "..." }` field returned by the function, and use that as the toast description. Fallback to `err.message` only if parsing fails.
+This closes ~all stranding paths because the only failures left at the `contribute` step are:
+- RPC hasn't confirmed yet (handled with retry — already in `contribute`)
+- Signer/amount mismatch (impossible if client built the tx correctly)
+- Race: launch flipped to `executing` between validate and confirm (rare; covered by #3)
 
-3. **Friendlier titles by status code:**
-   - 400 / 422 → `Couldn't place ape` (validation / not-confirmed-yet)
-   - 404 → `Launch unavailable`
-   - 409 → `Already recorded` (duplicate tx)
-   - 500 / other → keep `Ape failed`
+### 2. Show on-chain escrow balance, not DB sum
 
-4. **Tweak the input helper text** under the SOL input from `Min buy: 0.1 SOL` to make it clear it's a hard floor (already says this — no change needed unless we also want to disable the Ape In button when amount < 0.1, which is a nice touch). Add: button stays enabled but the pre-check in step 1 catches it.
+In `LaunchPage.tsx`:
+- Add a React Query (`["escrowBalance", launch.escrow_wallet_public_key]`, `refetchInterval: 30s`) that calls `connection.getBalance(escrow_wallet_public_key)` via the existing `VITE_SOLANA_RPC_URL`.
+- Pass the on-chain lamports to `LaunchStats` as the source of truth for "Total Escrow". Keep the contributor count from the DB (still accurate for "N apes").
+- If on-chain > DB sum, show a small muted note: `"X.XX SOL pending confirmation"` (the diff). Disappears once `contribute` catches up.
 
-## Technical detail
+No backend changes required for this part.
 
-```ts
-// Replace the catch / error branch:
-const { error } = await supabase.functions.invoke("contribute", { body: {...} });
-if (error) {
-  let serverMsg = error.message;
-  let status = 0;
-  try {
-    const ctx = (error as any).context as Response | undefined;
-    if (ctx) {
-      status = ctx.status;
-      const body = await ctx.clone().json();
-      if (body?.error) serverMsg = body.error;
-    }
-  } catch {}
-  const title =
-    status === 400 || status === 422 ? "Couldn't place ape"
-    : status === 404 ? "Launch unavailable"
-    : status === 409 ? "Already recorded"
-    : "Ape failed";
-  toast({ title, description: serverMsg, variant: "destructive" });
-  return;
-}
+### 3. Auto-recovery for stranded SOL (safety net)
+
+Modify `supabase/functions/contribute/index.ts`: when the on-chain tx **is verified successfully** but a downstream validation rule fails (e.g. status flipped to `executing`, window closed by the time we got here), instead of just returning 400 and leaving SOL stranded:
+
+1. Insert the contribution row anyway with `refund_shortfall_lamports = 0` and a new flag `pending_orphan_refund = true` (new column on `contributions`, default `false`).
+2. Return `{ error, queued_for_refund: true }` so the UI can say "Your SOL was returned to a refund queue."
+
+A new lightweight worker pass in the existing executor (`refundFailedLaunch`-style) picks up rows where `pending_orphan_refund = true` and refunds them using the same path as `cancelAndRefund`.
+
+DB migration:
+```sql
+ALTER TABLE public.contributions
+  ADD COLUMN pending_orphan_refund boolean NOT NULL DEFAULT false;
 ```
 
-And add at the top of `handleContribute`, right after the existing `sol <= 0` check:
+The existing `< 0.1 SOL` case never gets here because validate-contribution catches it client-side before signing — so this only fires for true races.
 
-```ts
-if (sol < 0.1) {
-  toast({
-    title: "Below minimum buy",
-    description: `Minimum ape is 0.1 SOL. You entered ${sol} SOL.`,
-    variant: "destructive",
-  });
-  return;
-}
-```
+## Files touched
 
-No edge-function, DB, or executor changes. Single file edit: `src/pages/LaunchPage.tsx`.
+- `supabase/functions/validate-contribution/index.ts` (new)
+- `supabase/functions/contribute/index.ts` (orphan-refund branch)
+- `supabase/migrations/<ts>_add_pending_orphan_refund.sql` (new column)
+- `src/pages/LaunchPage.tsx` (pre-flight call + escrow balance query)
+- `src/components/launch/LaunchStats.tsx` (accept `onChainLamports` prop, optional pending diff)
+- `executor/src/index.ts` + new `executor/src/refundOrphanContributions.ts` (sweep loop)
 
-## Out of scope
+## Out of scope (per your call)
 
-- Re-introducing per-launch creator min/max (none exists today; would require schema + edge changes).
-- Changing the platform 0.1 SOL floor.
+- Refunding the specific stuck SOL from your earlier test.
+- Rate limiting on validate-contribution.
+- Per-launch creator min/max (not currently in schema).
