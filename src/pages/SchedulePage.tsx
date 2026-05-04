@@ -82,9 +82,6 @@ const SchedulePage = () => {
     websiteUrl: "",
     launchDate: "",
     launchTime: "",
-    minContribution: "",
-    maxContribution: "",
-    enableMaxContribution: false,
     creatorContribution: "",
     creatorDeliveryWallet: "",
   });
@@ -201,7 +198,6 @@ const SchedulePage = () => {
 
   // Live validation for creator contribution
   const creatorContribNum = parseFloat(form.creatorContribution);
-  const minContribNum = parseFloat(form.minContribution);
   const maxAffordable = solBalance !== null ? Math.max(0, solBalance - FEE_RESERVE_SOL) : null;
   const minCreatorSol = platform === "bags" ? MIN_CREATOR_SOL_BAGS : MIN_CREATOR_SOL_PUMPFUN;
 
@@ -213,8 +209,6 @@ const SchedulePage = () => {
       creatorContribError = `Minimum ${minCreatorSol} SOL (required by ${platform === "bags" ? "Bags.fm" : "Pump.fun"})`;
     } else if (maxAffordable !== null && creatorContribNum > maxAffordable) {
       creatorContribError = `Insufficient balance. Max ${maxAffordable.toFixed(4)} SOL (after ${FEE_RESERVE_SOL} SOL fee reserve)`;
-    } else if (!isNaN(minContribNum) && creatorContribNum < minContribNum) {
-      creatorContribError = `Must be ≥ launch minimum (${minContribNum} SOL)`;
     }
   }
 
@@ -402,10 +396,6 @@ const SchedulePage = () => {
           telegram_url: form.telegramUrl || null,
           website_url: form.websiteUrl || null,
           launch_datetime: launchDatetime,
-          min_contribution_lamports: solToLamports(parseFloat(form.minContribution)),
-          max_contribution_lamports: form.enableMaxContribution
-            ? solToLamports(parseFloat(form.maxContribution))
-            : null,
           created_by_wallet: publicKey,
         },
       });
