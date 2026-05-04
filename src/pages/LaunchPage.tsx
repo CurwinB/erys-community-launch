@@ -66,6 +66,21 @@ const LaunchPage = () => {
   const totalEscrow = contributions?.reduce((sum, c) => sum + Number(c.amount_lamports), 0) || 0;
   const contributorCount = contributions?.length || 0;
 
+  const { data: onChainEscrowLamports } = useQuery({
+    queryKey: ["escrowBalance", launch?.escrow_wallet_public_key],
+    enabled: !!launch?.escrow_wallet_public_key,
+    refetchInterval: 30000,
+    queryFn: async () => {
+      const { Connection, PublicKey } = await import("@solana/web3.js");
+      const connection = new Connection(
+        import.meta.env.VITE_SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com",
+        "confirmed"
+      );
+      const lamports = await connection.getBalance(new PublicKey(launch!.escrow_wallet_public_key));
+      return lamports;
+    },
+  });
+
   const handleContribute = async () => {
     if (!connected || !publicKey || !wallet) {
       toast({ title: "Connect Wallet", description: "Please connect your wallet first.", variant: "destructive" });
@@ -109,6 +124,39 @@ const LaunchPage = () => {
 
     setIsContributing(true);
     try {
+      // Pre-flight validation BEFORE asking the user to sign anything.
+      // Stops SOL from being stranded in escrow when validation would fail.
+      const { error: validateErr } = await supabase.functions.invoke("validate-contribution", {
+        body: {
+          launch_id: id,
+          wallet_address: publicKey,
+          amount_lamports: lamports,
+          token_delivery_wallet: trimmedDelivery || null,
+        },
+      });
+      if (validateErr) {
+        let serverMsg = validateErr.message || "Validation failed.";
+        let status = 0;
+        try {
+          const ctx = (validateErr as any).context as Response | undefined;
+          if (ctx) {
+            status = ctx.status;
+            const body = await ctx.clone().json();
+            if (body?.error) serverMsg = body.error;
+          }
+        } catch {
+          // keep default
+        }
+        const title =
+          status === 400 || status === 422
+            ? "Couldn't place ape"
+            : status === 404
+            ? "Launch unavailable"
+            : "Ape failed";
+        toast({ title, description: serverMsg, variant: "destructive" });
+        return;
+      }
+
       const { Connection, PublicKey, SystemProgram, Transaction } = await import("@solana/web3.js");
 
       const connection = new Connection(import.meta.env.VITE_SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com", "confirmed");
@@ -162,6 +210,8 @@ const LaunchPage = () => {
             ? "Already recorded"
             : "Ape failed";
         toast({ title, description: serverMsg, variant: "destructive" });
+        queryClient.invalidateQueries({ queryKey: ["escrowBalance", launch.escrow_wallet_public_key] });
+        queryClient.invalidateQueries({ queryKey: ["contributions", id] });
         return;
       }
 
@@ -169,6 +219,7 @@ const LaunchPage = () => {
       setSolAmount("");
       setTokenDeliveryWallet("");
       queryClient.invalidateQueries({ queryKey: ["contributions", id] });
+      queryClient.invalidateQueries({ queryKey: ["escrowBalance", launch.escrow_wallet_public_key] });
     } catch (err: any) {
       console.error("Contribution error:", err);
       toast({ title: "Ape failed", description: err.message || "Something went wrong.", variant: "destructive" });
