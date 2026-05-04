@@ -78,6 +78,15 @@ const LaunchPage = () => {
       return;
     }
 
+    if (sol < 0.1) {
+      toast({
+        title: "Below minimum buy",
+        description: `Minimum ape is 0.1 SOL. You entered ${sol} SOL.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (!launch) return;
 
     const lamports = solToLamports(sol);
@@ -131,7 +140,30 @@ const LaunchPage = () => {
         },
       });
 
-      if (error) throw error;
+      if (error) {
+        let serverMsg = error.message || "Something went wrong.";
+        let status = 0;
+        try {
+          const ctx = (error as any).context as Response | undefined;
+          if (ctx) {
+            status = ctx.status;
+            const body = await ctx.clone().json();
+            if (body?.error) serverMsg = body.error;
+          }
+        } catch {
+          // keep default serverMsg
+        }
+        const title =
+          status === 400 || status === 422
+            ? "Couldn't place ape"
+            : status === 404
+            ? "Launch unavailable"
+            : status === 409
+            ? "Already recorded"
+            : "Ape failed";
+        toast({ title, description: serverMsg, variant: "destructive" });
+        return;
+      }
 
       toast({ title: "You're in.", description: `${sol} SOL allocation locked on-chain.` });
       setSolAmount("");
