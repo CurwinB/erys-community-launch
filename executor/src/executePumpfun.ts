@@ -165,7 +165,8 @@ export async function executePumpfunLaunch(
   // (HTTP 400) if either is unreachable. This runs before any on-chain
   // mutation so contributors can be refunded cleanly on failure.
   {
-    const metaCheck = await verifyMetadataReachable(launch.ipfs_metadata_url ?? "");
+    const rewritten = rewriteToPublicIpfsGateway(launch.ipfs_metadata_url ?? "");
+    const metaCheck = await verifyMetadataReachable(rewritten);
     if (!metaCheck.ok) {
       await setFailed(
         launch.id,
@@ -185,13 +186,29 @@ export async function executePumpfunLaunch(
   const pumpTimeout = setTimeout(() => pumpController.abort(), 30_000);
   let pumpRes: any;
   try {
+    const originalUri = String(launch.ipfs_metadata_url ?? "").trim();
+    const rewrittenUri = rewriteToPublicIpfsGateway(originalUri);
+    console.log(`uri original=${originalUri} rewritten=${rewrittenUri}`);
+    try {
+      const diagRes = await fetch(rewrittenUri, { method: "GET" });
+      const diagText = await diagRes.text().catch(() => "");
+      console.log(`metadata URI diagnostic: status=${diagRes.status} bytes=${diagText.length} body=${diagText.slice(0, 600)}`);
+      try {
+        const parsed = JSON.parse(diagText);
+        console.log(`metadata fields: name=${parsed?.name} symbol=${parsed?.symbol} image=${parsed?.image}`);
+      } catch {
+        console.log(`metadata URI did NOT return valid JSON`);
+      }
+    } catch (e: any) {
+      console.log(`metadata URI diagnostic fetch threw: ${e?.message ?? e}`);
+    }
     const requestBody = {
       publicKey: String(launch.escrow_wallet_public_key ?? "").trim(),
       action: "create",
       tokenMetadata: {
         name: (launch.token_name ?? "").trim(),
         symbol: (launch.token_symbol ?? "").trim().toUpperCase(),
-        uri: String(launch.ipfs_metadata_url ?? "").trim(),
+        uri: rewrittenUri,
       },
       mint: String(launch.token_mint_address ?? "").trim(),
       denominatedInSol: "true",
@@ -334,4 +351,13 @@ async function verifyMetadataReachable(
     await new Promise((r) => setTimeout(r, 1_000));
   }
   return { ok: false, reason: `${lastReason} (after ${attempt} attempts)` };
+}
+
+function rewriteToPublicIpfsGateway(url: string): string {
+  if (!url) return url;
+  const m = url.match(/^https?:\/\/[^/]*pinata[^/]*\/ipfs\/(.+)$/i);
+  if (m) return `https://ipfs.io/ipfs/${m[1]}`;
+  const ipfsProto = url.match(/^ipfs:\/\/(.+)$/i);
+  if (ipfsProto) return `https://ipfs.io/ipfs/${ipfsProto[1]}`;
+  return url;
 }

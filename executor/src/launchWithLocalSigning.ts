@@ -214,11 +214,31 @@ export async function launchWithLocalSigning(
   // and crashes. Force both to plain strings here and log types so any
   // future regression is immediately diagnosable in Railway logs.
   const mintField = String(launch.token_mint_address ?? "").trim();
-  const uriField = String(launch.ipfs_metadata_url ?? "").trim();
+  const originalUri = String(launch.ipfs_metadata_url ?? "").trim();
+  // Pinata's public gateway often rate-limits / returns HTML to server-side
+  // fetchers like PumpPortal, which then crashes with `toBuffer`. Rewrite
+  // to ipfs.io which is more reliable for server-side fetches.
+  const uriField = rewriteToPublicIpfsGateway(originalUri);
   const pubkeyField = String(launch.escrow_wallet_public_key ?? "").trim();
   LOG(`mint type=${typeof launch.token_mint_address} len=${mintField.length} value=${mintField}`);
-  LOG(`uri type=${typeof launch.ipfs_metadata_url} len=${uriField.length} value=${uriField}`);
+  LOG(`uri original=${originalUri} rewritten=${uriField}`);
   LOG(`publicKey type=${typeof launch.escrow_wallet_public_key} len=${pubkeyField.length} value=${pubkeyField}`);
+
+  // Inline diagnostic: confirm the URI we're about to hand to PumpPortal
+  // is publicly accessible and returns valid JSON with name/symbol/image.
+  try {
+    const diagRes = await fetch(uriField, { method: "GET" });
+    const diagText = await diagRes.text().catch(() => "");
+    LOG(`metadata URI diagnostic: status=${diagRes.status} bytes=${diagText.length} body=${diagText.slice(0, 600)}`);
+    try {
+      const parsed = JSON.parse(diagText);
+      LOG(`metadata fields: name=${parsed?.name} symbol=${parsed?.symbol} image=${parsed?.image}`);
+    } catch {
+      LOG(`metadata URI did NOT return valid JSON`);
+    }
+  } catch (e: any) {
+    LOG(`metadata URI diagnostic fetch threw: ${e?.message ?? e}`);
+  }
   if (!mintField || !uriField || !pubkeyField) {
     const msg = `Refusing /trade-local call: mintEmpty=${!mintField} uriEmpty=${!uriField} pubkeyEmpty=${!pubkeyField}`;
     ERR(msg);
@@ -432,4 +452,13 @@ async function verifyMetadataReachable(
     await new Promise((r) => setTimeout(r, 1_000));
   }
   return { ok: false, reason: `${lastReason} (after ${attempt} attempts)` };
+}
+
+function rewriteToPublicIpfsGateway(url: string): string {
+  if (!url) return url;
+  const m = url.match(/^https?:\/\/[^/]*pinata[^/]*\/ipfs\/(.+)$/i);
+  if (m) return `https://ipfs.io/ipfs/${m[1]}`;
+  const ipfsProto = url.match(/^ipfs:\/\/(.+)$/i);
+  if (ipfsProto) return `https://ipfs.io/ipfs/${ipfsProto[1]}`;
+  return url;
 }
