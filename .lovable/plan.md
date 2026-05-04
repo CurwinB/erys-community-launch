@@ -1,131 +1,70 @@
-## Plan: Two independent fixes to processing-fee logic
+## Two changes, applied as one batch
 
-Both changes are scoped, single-file, and have no DB/edge-function impact.
+Two corrections to your prompts before I write code — both would have broken things.
 
----
+### Correction A: escrow key decoding bug in proposed cancelAndRefund.ts
 
-### Fix 1 — Charge processing fee on Pump.fun launches
+Your snippet does `decryptEscrowKey(...).toString("utf8")` then re-decodes hex. That's wrong. `decryptEscrowKey` already returns the raw 64-byte secret key as a Buffer (see `executor/src/decrypt.ts` line 23). Existing files do `Keypair.fromSecretKey(new Uint8Array(escrowSecret))` directly. I'll mirror that pattern — no utf8/hex round-trip.
 
-**File:** `executor/src/executePumpfun.ts`
+### Correction B: contribute/index.ts already reads `min_contribution_lamports` from the launch row
 
-Currently `chargeProcessingFee` is never called for Pump.fun, so launches ≥ 0.3 SOL skip the platform fee. Mirror the exact pattern used in `executeBags.ts` (lines 416–452, 463–474).
-
-Steps inside `executePumpfunLaunch`, applied **after** `totalLamports` is computed and **before** the `ATA_COST` reserve math:
-
-1. **Add imports** at the top:
-   ```ts
-   import { Connection } from "@solana/web3.js";
-   import { supabase } from "./db";
-   import { shouldChargeProcessingFee, chargeProcessingFee } from "./processingFee";
-   ```
-   (`supabase` and `Connection` are not currently imported in this file.)
-
-2. **Construct a Connection** (this file currently talks to RPC only via raw `fetch`; `chargeProcessingFee` needs a `Connection` object). Place near the top of the function:
-   ```ts
-   const connection = new Connection(SOLANA_RPC_URL, "confirmed");
-   ```
-
-3. **Charge the fee** after `totalLamports` is summed:
-   ```ts
-   let processingFeeLamports = 0n;
-   if (shouldChargeProcessingFee(totalLamports)) {
-     try {
-       const feeResult = await chargeProcessingFee(
-         connection,
-         escrowKeypair,
-         process.env.BAGS_PARTNER_WALLET!, // shared treasury, same as Bags
-         launch.id,
-         totalLamports,
-         (launch as any).processing_fee_tx_signature ?? null,
-       );
-       if (feeResult.charged) {
-         processingFeeLamports = feeResult.feeLamports!;
-         await supabase
-           .from("launches")
-           .update({
-             processing_fee_lamports: Number(processingFeeLamports),
-             processing_fee_tx_signature: feeResult.signature ?? null,
-           })
-           .eq("id", launch.id);
-       }
-     } catch (feeErr: any) {
-       await setFailed(launch.id, `Processing fee transfer failed: ${feeErr?.message ?? feeErr}`);
-       return;
-     }
-   }
-   const availableLamports = totalLamports - processingFeeLamports;
-   ```
-
-4. **Use `availableLamports`** in the existing reserve math (replace `totalLamports` only in this one spot):
-   ```ts
-   const initialBuyLamports = availableLamports - ataReserve - PRIORITY_FEE;
-   ```
-
-5. **Leave basis-point storage unchanged** — the `storeBasisPoints` loop must keep using `totalLamports` so contributors are not penalized in their token-distribution share. Already correct in current code.
-
-**Out of scope for this fix:**
-- `executePumpfunLightning.ts` — separate file, separate flow. Flag for follow-up but do not touch per user instruction ("one file only").
-- DB schema — `processing_fee_lamports` / `processing_fee_tx_signature` columns already exist (used by Bags path).
-- Idempotency — `chargeProcessingFee` already handles this via `existingSignature`.
+There's no per-request min coming from the client. I'll just hardcode the constant in the check and skip the launch-row lookup of that field. The DB column stays (existing rows have it set) but new launches all write `100_000_000`.
 
 ---
 
-### Fix 2 — Smooth fee tiers (remove 5 SOL cliff)
+### Change 1 — Platform-enforced 0.1 SOL min, remove creator-set min/max
 
-**File:** `executor/src/processingFee.ts`
+Files:
+- `src/pages/SchedulePage.tsx` — remove min-contribution input, max-contribution toggle + input, `minContribution` and `enableMaxContribution`/`maxContribution` from form state. Hardcode `100_000_000` in the create-launch payload (or omit and let edge function default it).
+- `supabase/functions/create-launch/index.ts` — drop `min_contribution_lamports` / `max_contribution_lamports` from body destructuring; insert `min_contribution_lamports: 100_000_000` and `max_contribution_lamports: null` always.
+- `supabase/functions/create-launch-pumpfun/index.ts` — same treatment.
+- `supabase/functions/contribute/index.ts` — replace the launch-row min/max check with:
+  ```ts
+  const PLATFORM_MIN_CONTRIBUTION = 100_000_000;
+  if (amount < PLATFORM_MIN_CONTRIBUTION) return errorResponse(...);
+  ```
+  Drop the max check entirely.
+- `src/pages/LaunchPage.tsx` — replace `formatSol(Number(launch.min_contribution_lamports))` with literal `0.1`. Remove `maxContrib` derivation and any UI using it.
 
-Replace the three-tier structure with two tiers: flat below 2 SOL, percentage at and above.
+### Change 2 — Auto-cancel + waterfall refund below 0.3 SOL pool
 
-1. **Update header comment block** (lines 11–18) to:
-   ```
-   //   total >= 2.0 SOL  -> 5% of total
-   //   total >= 0.3 SOL  -> 0.06 SOL
-   //   total <  0.3 SOL  -> 0
-   ```
+New file `executor/src/cancelAndRefund.ts`:
+- Connection + decrypt escrow key the *correct* way (`new Uint8Array(decryptEscrowKey(...))`).
+- Mark launch `status='cancelled'`, set `execution_error`, clear worker lock.
+- Track `escrowAvailable` locally minus `RENT_EXEMPT_RESERVE` (890_880n) — same pattern as `refundFailedLaunch.ts` — so we don't drain rent.
+- Use `sendRefundWithRetry` helper (copy the proven one from `refundFailedLaunch.ts` — handles blockhash expiry, signature recovery on confirm timeout). Do **not** use the naive single-shot `sendRawTransaction` from your snippet; it produced silent failures we already fixed in the existing refund path.
+- Waterfall:
+  1. Regular contributors first (exclude `created_by_wallet`, exclude rows where `wallet_address === BAGS_PARTNER_WALLET` for sponsored seed). Pro-rata down if `escrowAvailable` runs short, recording `refund_shortfall_lamports`.
+  2. Creator's contribution row (if they apéd in) refunded next.
+  3. Sponsored seed: send remainder up to `sponsored_amount_lamports - TX_FEE` to `BAGS_PARTNER_WALLET`. Sweep mechanic in `sweepCancelledSponsorEscrows.ts` already handles dust + sets `sponsor_recovery_*` columns, so we can either (a) let it pick up the cancelled row afterward, or (b) call the same logic inline. **I'll go with (a)** — write `status='cancelled'` and let the existing sweeper recover the seed. Less duplicated code, already battle-tested.
+- Token-delivery-wallet preference: refund to `token_delivery_wallet ?? wallet_address`. Matches token distribution behavior.
 
-2. **Remove constants:** `PROCESSING_FEE_THRESHOLD_MID`, `PROCESSING_FEE_MID`. Rename `PROCESSING_FEE_THRESHOLD_HIGH` value from `5_000_000_000n` (5 SOL) to `2_000_000_000n` (2 SOL).
-   ```ts
-   export const PROCESSING_FEE_THRESHOLD_LOW  = 300_000_000n;   // 0.3 SOL
-   export const PROCESSING_FEE_THRESHOLD_HIGH = 2_000_000_000n; // 2.0 SOL
-   export const PROCESSING_FEE_LOW  = 60_000_000n;              // 0.06 SOL flat
-   export const PROCESSING_FEE_HIGH_PERCENT = 5n;               // 5% above 2 SOL
-   ```
+Modified `executor/src/executeBags.ts` and `executor/src/executePumpfun.ts`:
+- After contributions are loaded and `totalLamports` summed, before any on-chain work, fee charging, or Bags API calls:
+  ```ts
+  const MINIMUM_POOL_LAMPORTS = 300_000_000n;
+  if (totalLamports < MINIMUM_POOL_LAMPORTS) {
+    await cancelAndRefund(launch, contributions);
+    return;
+  }
+  ```
+- Place this **before** `chargeProcessingFee` (don't charge fee on a cancelled raise) and **before** any Bags `create-token-info` / Pump.fun mint (don't burn an IPFS upload on a doomed launch).
 
-3. **Simplify `getProcessingFeeLamports`:**
-   ```ts
-   export function getProcessingFeeLamports(totalLamports: bigint): bigint {
-     if (totalLamports >= PROCESSING_FEE_THRESHOLD_HIGH) {
-       return (totalLamports * PROCESSING_FEE_HIGH_PERCENT) / 100n;
-     }
-     if (totalLamports >= PROCESSING_FEE_THRESHOLD_LOW) {
-       return PROCESSING_FEE_LOW;
-     }
-     return 0n;
-   }
-   ```
+Modified `executor/src/db.ts`:
+- Add to `Launch` interface: `is_sponsored: boolean | null;` and `sponsored_amount_lamports: number | null;` and `created_by_wallet` (already there). Add to `Contribution` interface: `wallet_address` (already there) and confirm `token_delivery_wallet` (already there).
 
-**Verification (`rg`):** `PROCESSING_FEE_MID` and `PROCESSING_FEE_THRESHOLD_MID` are referenced only inside `processingFee.ts`, so removal is safe. `PROCESSING_FEE_THRESHOLD_HIGH` is also only referenced in this file.
+### Out of scope / explicitly not touching
 
-**Resulting tier table:**
+- `executor/src/executePumpfunLightning.ts` — same flag as last round; user said "two execute files" so leaving lightning alone. **Note for follow-up**: lightning path will also skip the cancel check until added.
+- `refund-launch` edge function — handles creator-initiated cancel of `scheduled` launches, separate flow. Already has its own waterfall logic.
+- DB schema — no migration. `min_contribution_lamports` column kept for backward-compat with existing rows.
+- Admin UI surfaces showing min/max — I'll search and remove any read sites that break (LaunchCard, admin tables).
 
-| Total raised | Fee |
-|---|---|
-| ≥ 2 SOL | 5% of total |
-| 0.3 – 1.99 SOL | 0.06 SOL flat |
-| < 0.3 SOL | 0 |
+### Risks acknowledged
 
-Remaining boundary jump: at exactly 2.00 SOL, fee jumps from 0.06 → 0.10 SOL (a 0.04 SOL bump for hitting the 2 SOL mark). Smaller than the prior 0.12 SOL cliff but still present. Acceptable per user spec; can be further smoothed later if needed.
+- **Refund gas:** 100 contributors × ~0.000005 SOL tx fee = 0.0005 SOL. On a 0.299 SOL pool, refund cost is negligible vs. pool but contributors take a 5_000 lamport haircut each (already standard in `refundFailedLaunch`).
+- **Status enum:** `cancelled` already exists in the launch_status enum (memory confirms).
+- **Idempotency:** if executor re-claims the row after partial refund, the `refund_tx_signature IS NOT NULL` check skips already-refunded contribs (same as existing path).
+- **0.1 SOL floor + 0.3 raise = 3 wallets minimum** to clear threshold. You confirmed this is intentional.
 
----
-
-### Order of application
-
-Fixes are independent and can be applied in either order. I'll do Fix 1 first (Pump.fun parity) then Fix 2 (tier smoothing) so each commit is reviewable on its own.
-
-### Out of scope (both fixes)
-
-- `executePumpfunLightning.ts`
-- `refundProcessingFee.ts` — refund logic reads `processing_fee_lamports` from the DB row, not from `getProcessingFeeLamports`, so tier changes don't break historical refunds.
-- UI / admin panels — fee is hidden, no surface displays the tier table.
-
-Approve and I'll apply both edits.
+Approve and I'll ship both prompts in one edit pass.

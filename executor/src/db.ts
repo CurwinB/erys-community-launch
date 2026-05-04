@@ -37,6 +37,8 @@ export interface Launch {
   worker_id: string | null;
   processing_fee_lamports: number;
   processing_fee_tx_signature: string | null;
+  is_sponsored: boolean | null;
+  sponsored_amount_lamports: number | null;
 }
 
 export interface Contribution {
@@ -47,6 +49,7 @@ export interface Contribution {
   basis_points: number | null;
   tokens_distributed: boolean;
   token_delivery_wallet: string | null;
+  refund_tx_signature?: string | null;
 }
 
 export async function getExecutingLaunches(): Promise<Launch[]> {

@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
 import Seo from "@/components/Seo";
 import { supabase } from "@/integrations/supabase/client";
 import { solToLamports, lamportsToSol } from "@/lib/constants";
@@ -82,9 +81,6 @@ const SchedulePage = () => {
     websiteUrl: "",
     launchDate: "",
     launchTime: "",
-    minContribution: "",
-    maxContribution: "",
-    enableMaxContribution: false,
     creatorContribution: "",
     creatorDeliveryWallet: "",
   });
@@ -201,7 +197,6 @@ const SchedulePage = () => {
 
   // Live validation for creator contribution
   const creatorContribNum = parseFloat(form.creatorContribution);
-  const minContribNum = parseFloat(form.minContribution);
   const maxAffordable = solBalance !== null ? Math.max(0, solBalance - FEE_RESERVE_SOL) : null;
   const minCreatorSol = platform === "bags" ? MIN_CREATOR_SOL_BAGS : MIN_CREATOR_SOL_PUMPFUN;
 
@@ -213,8 +208,6 @@ const SchedulePage = () => {
       creatorContribError = `Minimum ${minCreatorSol} SOL (required by ${platform === "bags" ? "Bags.fm" : "Pump.fun"})`;
     } else if (maxAffordable !== null && creatorContribNum > maxAffordable) {
       creatorContribError = `Insufficient balance. Max ${maxAffordable.toFixed(4)} SOL (after ${FEE_RESERVE_SOL} SOL fee reserve)`;
-    } else if (!isNaN(minContribNum) && creatorContribNum < minContribNum) {
-      creatorContribError = `Must be ≥ launch minimum (${minContribNum} SOL)`;
     }
   }
 
@@ -402,10 +395,6 @@ const SchedulePage = () => {
           telegram_url: form.telegramUrl || null,
           website_url: form.websiteUrl || null,
           launch_datetime: launchDatetime,
-          min_contribution_lamports: solToLamports(parseFloat(form.minContribution)),
-          max_contribution_lamports: form.enableMaxContribution
-            ? solToLamports(parseFloat(form.maxContribution))
-            : null,
           created_by_wallet: publicKey,
         },
       });
@@ -738,22 +727,11 @@ const SchedulePage = () => {
             )}
           </div>
 
-          <div className="space-y-4 border border-border bg-card p-6">
+          <div className="space-y-2 border border-border bg-card p-6">
             <h3 className="text-sm font-semibold text-foreground">Buy Limits</h3>
-            <div className="space-y-2">
-              <Label>Minimum Buy (SOL)</Label>
-              <Input type="number" step="0.01" min="0.01" value={form.minContribution} onChange={(e) => update("minContribution", e.target.value)} placeholder="0.1" className="font-mono" required />
-            </div>
-            <div className="flex items-center gap-3">
-              <Switch checked={form.enableMaxContribution} onCheckedChange={(v) => update("enableMaxContribution", v)} />
-              <Label>Enable maximum buy per wallet</Label>
-            </div>
-            {form.enableMaxContribution && (
-              <div className="space-y-2">
-                <Label>Maximum Buy (SOL)</Label>
-                <Input type="number" step="0.01" min="0.01" value={form.maxContribution} onChange={(e) => update("maxContribution", e.target.value)} placeholder="10" className="font-mono" required />
-              </div>
-            )}
+            <p className="text-xs text-muted-foreground">
+              Platform-enforced minimum: <span className="font-mono text-foreground">0.1 SOL</span> per contributor. No maximum.
+            </p>
           </div>
 
           <div className="space-y-3 border border-primary/40 bg-card p-6">

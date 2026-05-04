@@ -27,6 +27,9 @@ import {
   shouldChargeProcessingFee,
   chargeProcessingFee,
 } from "./processingFee";
+import { cancelAndRefund } from "./cancelAndRefund";
+
+const MINIMUM_POOL_LAMPORTS = 300_000_000n; // 0.3 SOL
 
 const BAGS_API_KEY = process.env.BAGS_API_KEY!;
 const BAGS_PARTNER_WALLET = process.env.BAGS_PARTNER_WALLET!;
@@ -330,6 +333,21 @@ export async function executeBagsLaunch(
   const validationErr = validateBagsMetadata(launch);
   if (validationErr) {
     await setFailed(launch.id, `Bags metadata validation failed: ${validationErr}`);
+    return;
+  }
+
+  // Auto-cancel + refund if the raised pool is below the platform
+  // minimum (0.3 SOL). Done BEFORE any Bags API calls or fee charges so
+  // we don't burn an IPFS upload or platform fee on a doomed launch.
+  const preTotalLamports = contributions.reduce(
+    (sum, c) => sum + BigInt(c.amount_lamports),
+    0n,
+  );
+  if (preTotalLamports < MINIMUM_POOL_LAMPORTS) {
+    console.log(
+      `Insufficient pool: ${Number(preTotalLamports) / 1e9} SOL. Minimum 0.3 SOL. Cancelling launch ${launch.id}.`,
+    );
+    await cancelAndRefund(launch, contributions);
     return;
   }
 

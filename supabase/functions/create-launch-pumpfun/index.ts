@@ -53,12 +53,10 @@ Deno.serve(async (req) => {
       telegram_url,
       website_url,
       launch_datetime,
-      min_contribution_lamports,
-      max_contribution_lamports,
       created_by_wallet,
     } = body;
 
-    if (!token_name || !token_symbol || !launch_datetime || !min_contribution_lamports || !created_by_wallet) {
+    if (!token_name || !token_symbol || !launch_datetime || !created_by_wallet) {
       return errorResponse("Missing required fields", 400);
     }
 
@@ -197,8 +195,8 @@ Deno.serve(async (req) => {
         telegram_url: telegram_url || null,
         website_url: website_url || null,
         launch_datetime: slot.adjustedTime,
-        min_contribution_lamports,
-        max_contribution_lamports: max_contribution_lamports || null,
+        min_contribution_lamports: 100_000_000, // platform-enforced 0.1 SOL
+        max_contribution_lamports: null,
         escrow_wallet_public_key: escrow.publicKey,
         escrow_wallet_encrypted_private_key: encryptedEscrowPk,
         created_by_wallet,

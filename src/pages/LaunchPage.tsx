@@ -315,7 +315,7 @@ const LaunchPage = () => {
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>Min buy: {formatSol(Number(launch.min_contribution_lamports))} SOL</span>
+                  <span>Min buy: 0.1 SOL</span>
                   {maxContrib && <span>Max buy: {formatSol(maxContrib)} SOL</span>}
                 </div>
                 <div className="relative">
