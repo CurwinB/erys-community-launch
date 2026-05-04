@@ -137,7 +137,9 @@ export async function launchWithLocalSigning(
         await setFailed(launch.id, msg);
         return;
       }
-      LOG(`PumpPortal reachable (${probeRes.status}): ${probeText.slice(0, 500)}`);
+      // GET /trade-local is not a supported method, so 400/405 here is
+      // EXPECTED and means the host is up. Only 5xx counts as down.
+      LOG(`PumpPortal endpoint up (GET status ${probeRes.status} is normal): ${probeText.slice(0, 200)}`);
     } catch (probeErr: any) {
       const msg = `PumpPortal reachability check threw: ${probeErr?.message ?? probeErr}`;
       ERR(msg);
@@ -291,7 +293,9 @@ export async function launchWithLocalSigning(
       const statusText = res.statusText || "";
       const combined = [statusText, errBody].filter(Boolean).join(" | ");
       const transient =
-        res.status >= 500 || /toBuffer|undefined/i.test(combined);
+        res.status >= 500 ||
+        res.status === 429 ||
+        /toBuffer|undefined/i.test(combined);
       return {
         ok: false,
         transient,
