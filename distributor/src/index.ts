@@ -8,6 +8,7 @@ import {
 } from "./db";
 import { distributeTokensForLaunch } from "./distribute";
 import { claimPumpfunFeesBatch } from "./claimPumpfunFeesBatch";
+import { claimLocalSigningFeesBatch } from "./claimLocalSigningFees";
 import { getAllWallets } from "./pumpportalWalletPool";
 import { supabase } from "./db";
 
@@ -67,6 +68,16 @@ async function pollAndClaimFees(): Promise<void> {
       const before = Date.now();
       await claimPumpfunFeesBatch();
       // If a batch took <1s it likely returned no work — exit.
+      if (Date.now() - before < 1_000) break;
+    }
+
+    // Parallel path: launches executed via local signing (escrow IS the
+    // on-chain creator). PumpPortal can't claim these — we sign the
+    // on-chain collect_creator_fee instruction with the escrow keypair.
+    let localHops = 0;
+    while (localHops++ < 5) {
+      const before = Date.now();
+      await claimLocalSigningFeesBatch();
       if (Date.now() - before < 1_000) break;
     }
   } catch (err: any) {

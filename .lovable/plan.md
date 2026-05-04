@@ -1,58 +1,89 @@
-## Files I read first
+## Verification: local-signing path end-to-end
 
-- `src/pages/SchedulePage.tsx` — the live user launch form (fields, validation, submit flow, edge function call, contribution step).
-- `supabase/functions/create-launch-pumpfun/index.ts` — the edge function the form invokes (Pinata upload, escrow + mint keypair generation, row insert with `status='scheduled'`, `platform='pumpfun'`, `pumpfun_mint_keypair_encrypted`).
-- `executor/src/executeLaunch.ts` — the Railway worker. `claimNextExecutingLaunch` claims rows where `status='executing'`; for `platform='pumpfun'` it branches on `process.env.USE_LOCAL_SIGNING === "true"` and calls `launchWithLocalSigning(launch, contributions)`.
-- `executor/src/launchWithLocalSigning.ts` — the local-signing path that will run on Railway.
-- `src/components/admin/LocalSigningTestTab.tsx` — the current synthetic test tab (to be replaced).
+I traced the full lifecycle (create → execute → distribute → claim fees) against `launchWithLocalSigning.ts` and our PumpPortal `/trade-local` integration. **Three of the four invariants hold. One does NOT — fee claiming is broken for any launch executed via local signing.**
 
-## What changes
+### 1. Launch creation via PumpPortal — OK
 
-Confirmed end-to-end: the existing user form already creates a row that the executor picks up; with `USE_LOCAL_SIGNING=true` on Railway, Pump.fun launches automatically run through `launchWithLocalSigning`. No new edge function, no manual trigger, no Lightning API.
+`launchWithLocalSigning` calls `https://pumpportal.fun/api/trade-local` with `action: "create"`, the metadata URI, mint pubkey, dev-buy amount, and `pool: "pump"`. PumpPortal returns unsigned tx bytes; we sign with `[mintKeypair, escrowKeypair]` and submit via our own RPC. This matches PumpPortal's documented Local Trading API. Confirmed.
 
-So the LOCAL SIGNING TEST tab becomes a 1:1 admin-side replica of `SchedulePage`, hardcoded to `pumpfun`.
+### 2. Wallet ownership — OK, but different from Lightning path
 
-### 1. Replace `src/components/admin/LocalSigningTestTab.tsx`
+| Role | Lightning path | Local-signing path |
+|---|---|---|
+| Initial buyer / dev wallet | PumpPortal custodial wallet | **Escrow wallet** (decrypted) |
+| On-chain creator | PumpPortal custodial wallet | **Escrow wallet** |
+| Tokens land in | Custodial ATA (then swept to escrow) | **Escrow ATA directly** |
+| Mint authority | Mint keypair (signs create) | Mint keypair (signs create) |
 
-Rewrite as a full clone of `SchedulePage.tsx`'s pumpfun branch. Specifically:
+This is actually simpler — no custodial sweep required, escrow already holds the tokens.
 
-- Identical form fields: `tokenName`, `tokenSymbol`, `description`, image upload (Supabase storage `token-images`), `twitterUrl`, `telegramUrl`, `websiteUrl`, `launchDate`, `launchTime`, `creatorContribution`, `creatorDeliveryWallet`.
-- Identical client-side validation: pumpfun symbol regex `[A-Z0-9]{1,10}`, name ≤ 32 chars, ≥ 10 min and ≤ 72 h from now, min creator SOL `0.1`, wallet balance ≥ contribution + `FEE_RESERVE_SOL`, platform-paused check via `get_launch_platform_status`.
-- Same submit flow:
-  1. Upload image to `token-images` bucket (if provided).
-  2. `supabase.functions.invoke("create-launch-pumpfun", { body: { token_name, token_symbol, description, image_url, twitter_url, telegram_url, website_url, launch_datetime, created_by_wallet } })`.
-  3. Run the same contribution flow (`performContribution`) — connect via `useWallet`, build SOL transfer to `escrow_wallet`, sign with the connected wallet, confirm, then record via the existing `contribute` edge function.
-- Same step state machine (`idle → creating → awaiting_signature → confirming → recording → success / error`), same retry handler, same slot-adjustment notice.
-- Same success card with launch URL + copy button.
-- Hardcode `platform = "pumpfun"`; remove the bags toggle.
-- Keep the existing admin styling (sharp edges, mono labels) and add a single banner at the top: "This form creates a real launch using the same flow as the public form. With `USE_LOCAL_SIGNING=true` on Railway, the executor will run `launchWithLocalSigning` when launch_datetime is reached. No manual execution trigger."
+### 3. Token distribution to contributors — OK
 
-Implementation note: extract the form into a shared component or just duplicate the JSX/handlers from `SchedulePage.tsx` verbatim — duplication is acceptable here since the goal is an isolated test surface that mirrors production exactly.
+`distribute.ts` reads the token balance from `escrow_wallet_encrypted_private_key`'s ATA and fans out to contributors (with the 5% creator floor enforced). Because local-signing buys directly into the escrow ATA, distribution works unchanged. Gas is paid from the escrow's residual SOL just like today.
 
-### 2. Remove the synthetic test plumbing
+### 4. Gas accounting on launch — OK
 
-- Delete `supabase/functions/test-local-signing/index.ts`.
-- Remove its entry from `supabase/config.toml`.
-- Remove the `launches` and `adminWallet` props that the old tab consumed; the new tab uses `useWallet()` like the public form.
+Same reserve math as `executePumpfun.ts`: `ataReserve = N * (ATA_COST + TX_FEE + PRIORITY_FEE_PER_CONTRIBUTOR)`, plus `PRIORITY_FEE`. Subtracted from pool before computing `initialBuyLamports`. Processing fee (`shouldChargeProcessingFee`) is charged escrow → treasury before the buy. Min 0.3 SOL pool → otherwise `cancelAndRefund`. All identical to production.
 
-### 3. Tab wiring in `src/pages/AdminPage.tsx`
+### 5. Creator fee claiming — BROKEN
 
-- Keep the `LOCAL SIGNING TEST` tab. Update the props it passes (drop `launches`, drop `adminWallet`), since the new component is self-contained.
-- Keep the `data-[state=active]:text-destructive` styling on the trigger.
+This is the problem. Our fee-claim system in `distributor/src/claimPumpfunFeesBatch.ts` assumes the on-chain creator is one of the PumpPortal custodial wallets in the pool:
 
-## What does NOT change
+```text
+distributor cycle:
+  for each wallet in pumpportal pool:
+    rows = claim_pumpfun_launches_batch_for_worker(p_wallet_pubkey = wallet.pubkey)
+    vaultPda = PDA(["creator-vault", wallet.pubkey])  // <-- custodial, not escrow
+    PumpPortal collectCreatorFee with that wallet's API key
+    sweep wallet -> treasury
+```
 
-- `executor/src/launchWithLocalSigning.ts` — untouched.
-- `executor/src/executeLaunch.ts` — untouched.
-- `executor/scripts/testLocalSigning.ts` — kept as a Railway-side fallback CLI.
-- `supabase/functions/create-launch-pumpfun/index.ts` — untouched. The admin tab calls it as-is.
-- `supabase/functions/contribute/index.ts` — untouched.
-- The `USE_LOCAL_SIGNING` env flag — already true on Railway, no app-side toggle.
+For a local-signing launch:
+- `pumpportal_wallet_pubkey` is **never set** (we skipped `resolveLaunchWallet` / the `db.update`).
+- The DB filter `pumpportal_wallet_pubkey IS NOT DISTINCT FROM p_wallet_pubkey` therefore **never matches** any pool wallet — these launches are silently skipped forever.
+- Even if we hacked the filter, the creator vault PDA is derived from the **escrow** pubkey, not any custodial wallet. PumpPortal's `collectCreatorFee` is keyed by API-key → wallet, so no pool API key can claim it.
+- The escrow keypair can sign, but PumpPortal does not expose `collectCreatorFee` for arbitrary externally-held wallets, and our own tooling has no path to call the on-chain `collect_creator_fee` instruction directly from the escrow.
 
-## Behavior the user gets
+**Net effect:** every coin launched via the local-signing path will accrue creator fees into a PDA we control (escrow is creator) but never sweeps them. Funds are recoverable later but not by current code.
 
-1. Admin fills the form on the LOCAL SIGNING TEST tab and submits.
-2. `create-launch-pumpfun` runs (Pinata pin, keypair generation, row insert with `status='scheduled'`).
-3. Connected wallet signs the seed contribution; recorded via `contribute`. The launch appears on the homepage immediately and accepts contributions from any wallet under all existing rules (min/max, presale window, etc.).
-4. At `launch_datetime`, the scheduler flips it to `status='executing'`. Railway's executor claims it and, because `USE_LOCAL_SIGNING=true`, runs `launchWithLocalSigning` — no Lightning API call.
-5. On success, status moves to `launched` with the on-chain signature; distribution and fee-claim flows continue as normal.
+### 6. Other invariants — verified
+
+- Escrow encryption: AES-256-GCM, `ESCROW_ENCRYPTION_KEY`, decrypted only in executor process. Local-signing uses identical `decryptEscrowKey` helper. OK.
+- Contribution flow / on-chain tx verification: unchanged (uses production `contribute` edge function from the admin form). OK.
+- 5% creator-token floor: enforced in `distribute.ts` against `created_by_wallet`. OK — admin form already passes this.
+- Status transitions: `scheduled → executing → launched | execution_failed | cancelled`. Local signing calls `setLaunched` / `setFailed` / `cancelAndRefund` exactly like Lightning path. OK.
+- Worker locking via `claim_executing_launch_for_worker` + `releaseLaunchLock`. OK.
+
+## Required fix before testing on mainnet
+
+Add a creator-fee claim path for local-signing launches. Two viable options — pick one:
+
+**Option A (recommended): direct on-chain `collect_creator_fee` call.**
+Build the Pump.fun `collect_creator_fee` instruction in `claimPumpfunFees.ts`, signed by the escrow keypair (decrypted with `decryptEscrowKey`). PDA: `["creator-vault", escrowPubkey]`. Sweep proceeds escrow → treasury. Add a new worker claim function (`claim_pumpfun_local_signing_launches_batch_for_worker`) that filters `pumpportal_wallet_pubkey IS NULL AND platform='pumpfun' AND status='launched'`. Same throttle / empty-claim / vault-balance gates as the existing path.
+
+**Option B: assign a pool wallet as creator at launch time.**
+Add the custodial wallet as a co-signer on the create+buy tx so it appears as creator on-chain, and stash `pumpportal_wallet_pubkey` on the row. The existing batch claim path then works unchanged. Costs one extra signature and adds funding pressure on the pool, but reuses everything.
+
+I recommend **Option A** — it keeps the local-signing path self-contained (the whole point of removing the custodial dependency) and only touches the distributor.
+
+## What I will build (Option A)
+
+1. **DB migration** — new RPC `claim_local_signing_pumpfun_launches_batch_for_worker(p_worker_id, p_limit, p_lock_expiry_seconds)` that selects `platform='pumpfun' AND status='launched' AND pumpportal_wallet_pubkey IS NULL` with the same throttle / empty-claim / lock semantics.
+
+2. **`distributor/src/claimLocalSigningFees.ts`** — new module:
+   - decrypts escrow key per launch
+   - peeks `creator-vault` PDA balance, applies the same `PUMPFUN_MIN_CLAIM_LAMPORTS` gate
+   - constructs and signs the on-chain `collect_creator_fee` instruction with the escrow keypair
+   - sweeps `escrow → treasury` minus rent floor + tx fee
+   - records via existing `recordPumpfunFeeTreasurySweep` / `recordPumpfunEmptyClaim` / `recordPumpfunFeeClaimFailure`
+
+3. **`distributor/src/index.ts`** — also call the new claim path inside `pollAndClaimFees()` after the existing pool batch.
+
+4. **Smoke test in admin** — once deployed, schedule a small (0.3 SOL) launch from the LOCAL SIGNING TEST tab, confirm:
+   - launch executes via Railway (`USE_LOCAL_SIGNING=true`)
+   - tokens distribute to contributors (existing flow)
+   - creator fees accrue and the new claim job sweeps them to treasury
+
+No env vars need to be added; everything reuses `SOLANA_RPC_URL`, `BAGS_PARTNER_WALLET`, `ESCROW_ENCRYPTION_KEY`.
+
+Approve to switch to default mode and implement.
