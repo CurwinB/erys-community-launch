@@ -32,6 +32,7 @@ interface Launch {
   id: string;
   token_symbol: string;
   status: string;
+  processing_fee_refund_owed_lamports?: number | null;
 }
 
 interface Props {
@@ -77,6 +78,14 @@ const RefundsTab = ({ contributions, launches }: Props) => {
 
   const hasShortfalls = totalShortfallSol > 0;
 
+  const owedLaunches = useMemo(
+    () =>
+      launches.filter(
+        (l) => Number(l.processing_fee_refund_owed_lamports ?? 0) > 0,
+      ),
+    [launches],
+  );
+
   const handleExport = () => {
     const rows = refunded.map((c) => ({
       launch_id: c.launch_id,
@@ -95,6 +104,28 @@ const RefundsTab = ({ contributions, launches }: Props) => {
 
   return (
     <div className="space-y-3">
+      {owedLaunches.length > 0 && (
+        <div className="bg-card border border-primary/40 rounded-none p-4">
+          <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-2">
+            Treasury Reimbursement Owed (failed launches w/ pre-charged fee)
+          </div>
+          <div className="space-y-1">
+            {owedLaunches.map((l) => (
+              <div
+                key={l.id}
+                className="flex items-center justify-between font-mono text-xs"
+              >
+                <span className="text-foreground">
+                  {l.token_symbol} · {truncate(l.id, 6, 4)}
+                </span>
+                <span className="text-primary font-bold">
+                  {formatSol(Number(l.processing_fee_refund_owed_lamports ?? 0))}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="flex items-center justify-between gap-3">
         <div className="bg-card border border-destructive/40 rounded-none p-4 flex-1">
           <div className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground mb-1">

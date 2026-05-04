@@ -112,46 +112,45 @@ export async function launchWithLocalSigning(
 
   const connection = new Connection(SOLANA_RPC_URL, "confirmed");
 
-  // ---- Hidden processing fee (skipped on dry-run) ----
-  let processingFeeLamports = 0n;
-  if (shouldChargeProcessingFee(totalLamports)) {
-    if (dryRun) {
-      LOG("[DRY-RUN] Would charge processing fee — skipping");
-    } else {
-      try {
-        const feeResult = await chargeProcessingFee(
-          connection,
-          escrowKeypair,
-          TREASURY_WALLET,
-          launch.id,
-          totalLamports,
-          (launch as any).processing_fee_tx_signature ?? null
-        );
-        if (feeResult.charged) {
-          processingFeeLamports = feeResult.feeLamports!;
-          const { error: feeUpdateErr } = await supabase
-            .from("launches")
-            .update({
-              processing_fee_lamports: Number(processingFeeLamports),
-              processing_fee_tx_signature: feeResult.signature ?? null,
-            })
-            .eq("id", launch.id);
-          if (feeUpdateErr) {
-            WARN(
-              `Processing fee tx ${feeResult.signature} succeeded but failed to persist: ${feeUpdateErr.message}`
-            );
-          }
-        }
-      } catch (feeErr: any) {
-        const msg = `Processing fee transfer failed: ${feeErr?.message ?? feeErr}`;
+  // ---- Pre-flight PumpPortal health probe ----
+  // Mirrors the probe in executePumpfun.ts. Catches transient
+  // "Cannot read properties of undefined (reading 'toBuffer')" style
+  // failures BEFORE we touch contributor funds. The processing fee is
+  // charged only AFTER /trade-local + local signing succeed (see below),
+  // so a probe failure here leaves contributor SOL fully refundable.
+  if (!dryRun) {
+    try {
+      const probeCtrl = new AbortController();
+      const probeTimeout = setTimeout(() => probeCtrl.abort(), 10_000);
+      const probeRes = await fetch("https://pumpportal.fun/api/trade-local", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create" }),
+        signal: probeCtrl.signal,
+      });
+      clearTimeout(probeTimeout);
+      const probeStatusText = probeRes.statusText || "";
+      if (probeRes.status >= 500 || /toBuffer|undefined/i.test(probeStatusText)) {
+        const probeBody = await probeRes.text().catch(() => "");
+        const msg = `PumpPortal health probe failed (${probeRes.status} ${probeStatusText}). Endpoint appears broken; aborting before committing funds. Body: ${probeBody.slice(0, 300)}`;
         ERR(msg);
         await setFailed(launch.id, msg);
         return;
       }
+      LOG(`PumpPortal health probe OK (${probeRes.status} ${probeStatusText})`);
+    } catch (probeErr: any) {
+      const msg = `PumpPortal health probe threw: ${probeErr?.message ?? probeErr}`;
+      ERR(msg);
+      await setFailed(launch.id, msg);
+      return;
     }
   }
 
-  const availableLamports = totalLamports - processingFeeLamports;
+  // Reserves are computed against the FULL pool — the processing fee
+  // is charged after signing, from whatever residual the escrow holds
+  // after the buy + ATA reserves. This guarantees full refundability
+  // up until the moment we actually submit the on-chain launch.
+  const availableLamports = totalLamports;
 
   // ---- Reserve math (matches executePumpfun.ts exactly) ----
   const ATA_COST = 2_039_280n;
@@ -258,6 +257,47 @@ export async function launchWithLocalSigning(
     }
     console.log("[DRY RUN] Transaction ready \u2014 not submitted");
     return;
+  }
+
+  // ---- Hidden processing fee (charged AFTER successful local sign,
+  //      BEFORE on-chain submission). Order rationale: any failure in
+  //      probe / /trade-local / sign leaves contributor SOL fully
+  //      refundable. Once we charge the fee we submit immediately, so
+  //      the only window where SOL can be stranded is a true on-chain
+  //      send failure — which is logged as a fee-shortfall in
+  //      refundFailedLaunch for manual treasury reimbursement.
+  let processingFeeLamports = 0n;
+  if (shouldChargeProcessingFee(totalLamports)) {
+    try {
+      const feeResult = await chargeProcessingFee(
+        connection,
+        escrowKeypair,
+        TREASURY_WALLET,
+        launch.id,
+        totalLamports,
+        (launch as any).processing_fee_tx_signature ?? null
+      );
+      if (feeResult.charged) {
+        processingFeeLamports = feeResult.feeLamports!;
+        const { error: feeUpdateErr } = await supabase
+          .from("launches")
+          .update({
+            processing_fee_lamports: Number(processingFeeLamports),
+            processing_fee_tx_signature: feeResult.signature ?? null,
+          })
+          .eq("id", launch.id);
+        if (feeUpdateErr) {
+          WARN(
+            `Processing fee tx ${feeResult.signature} succeeded but failed to persist: ${feeUpdateErr.message}`
+          );
+        }
+      }
+    } catch (feeErr: any) {
+      const msg = `Processing fee transfer failed: ${feeErr?.message ?? feeErr}`;
+      ERR(msg);
+      await setFailed(launch.id, msg);
+      return;
+    }
   }
 
   // ---- Submit via Connection.sendRawTransaction ----

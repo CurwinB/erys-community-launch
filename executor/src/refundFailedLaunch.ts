@@ -24,7 +24,7 @@ export async function refundFailedLaunch(launchId: string): Promise<void> {
   const { data: launch, error: launchErr } = await supabase
     .from("launches")
     .select(
-      "escrow_wallet_encrypted_private_key, status, platform, pumpfun_launch_signature"
+      "escrow_wallet_encrypted_private_key, status, platform, pumpfun_launch_signature, processing_fee_tx_signature, processing_fee_lamports"
     )
     .eq("id", launchId)
     .single();
@@ -152,6 +152,28 @@ export async function refundFailedLaunch(launchId: string): Promise<void> {
   console.log(
     `refundFailedLaunch ${launchId}: refunded=${refunded} partial=${partial} unrecoverable=${unrecoverable} failed=${failed} total=${contributions.length}`,
   );
+
+  // Belt-and-suspenders: if any contributor was short-changed AND the
+  // processing fee was already taken on-chain, the shortfall is caused
+  // by the fee debit. Surface it so admins can manually reimburse from
+  // the treasury wallet.
+  if ((partial > 0 || unrecoverable > 0) && launch.processing_fee_tx_signature) {
+    const owed = BigInt(launch.processing_fee_lamports ?? 0);
+    if (owed > 0n) {
+      console.warn(
+        `refundFailedLaunch ${launchId}: shortfall caused by already-charged processing fee ${owed} lamports — manual treasury reimbursement required.`,
+      );
+      const { error: owedErr } = await supabase
+        .from("launches")
+        .update({ processing_fee_refund_owed_lamports: Number(owed) } as any)
+        .eq("id", launchId);
+      if (owedErr) {
+        console.error(
+          `refundFailedLaunch ${launchId}: failed to persist processing_fee_refund_owed_lamports: ${owedErr.message}`,
+        );
+      }
+    }
+  }
 }
 
 async function sendRefundWithRetry(

@@ -1,0 +1,1 @@
+ALTER TABLE public.launches ADD COLUMN IF NOT EXISTS processing_fee_refund_owed_lamports bigint;
