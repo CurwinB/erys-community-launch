@@ -244,37 +244,37 @@ export async function launchWithLocalSigning(
   LOG(`Locally signed transaction: ${signedBytes.length} bytes`);
 
   if (dryRun) {
-    LOG(
-      "[DRY-RUN] Skipping RPC submission. Keypair load + tx construction + local sign all succeeded."
-    );
+    LOG(`Signed transaction size: ${signedBytes.length} bytes`);
+    LOG(`Escrow public key: ${escrowKeypair.publicKey.toBase58()}`);
+    LOG(`Mint public key:   ${mintKeypair.publicKey.toBase58()}`);
+    if (mintKeypair.publicKey.toBase58() === launch.token_mint_address) {
+      LOG(
+        `Mint match confirmed: derived mint === launch.token_mint_address (${launch.token_mint_address})`
+      );
+    } else {
+      ERR(
+        `Mint MISMATCH: derived ${mintKeypair.publicKey.toBase58()} !== launch.token_mint_address ${launch.token_mint_address}`
+      );
+    }
+    console.log("[DRY RUN] Transaction ready \u2014 not submitted");
     return;
   }
 
-  // ---- Submit via RPC ----
-  const txBase64 = Buffer.from(signedBytes).toString("base64");
-  const rpcRes = await fetch(SOLANA_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "sendTransaction",
-      params: [
-        txBase64,
-        { encoding: "base64", preflightCommitment: "confirmed" },
-      ],
-    }),
-  });
-
-  const rpcData = (await rpcRes.json()) as any;
-  if (rpcData.error) {
-    const msg = `RPC sendTransaction failed: ${JSON.stringify(rpcData.error)}`;
+  // ---- Submit via Connection.sendRawTransaction ----
+  let txSignature: string;
+  try {
+    txSignature = await connection.sendRawTransaction(signedBytes, {
+      skipPreflight: false,
+      preflightCommitment: "confirmed",
+      maxRetries: 3,
+    });
+  } catch (sendErr: any) {
+    const msg = `sendRawTransaction failed: ${sendErr?.message ?? sendErr}`;
     ERR(msg);
     await setFailed(launch.id, msg);
     return;
   }
 
-  const txSignature: string = rpcData.result;
   LOG(`Submitted: ${txSignature}`);
   LOG(`Solscan: https://solscan.io/tx/${txSignature}`);
 

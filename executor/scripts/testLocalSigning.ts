@@ -7,7 +7,7 @@
  *
  * USAGE:
  *   cd executor
- *   ADMIN_TEST_TOKEN=<token> npx ts-node scripts/testLocalSigning.ts <launch-id> [--dry-run]
+ *   ADMIN_TEST_TOKEN=<token> npx ts-node scripts/testLocalSigning.ts [--dry-run] --launch-id <id>
  *
  * --dry-run: load keypairs, fetch /trade-local, sign locally, but do NOT
  *            submit to RPC and do NOT mutate any DB rows.
@@ -53,15 +53,21 @@ function gate(): void {
 gate();
 
 // ---- STEP 3: parse args ----
+//   Usage: --dry-run --launch-id <id>
+//   --dry-run is optional; --launch-id <id> is required.
 function parseArgs(): { launchId: string; dryRun: boolean } {
   const args = process.argv.slice(2);
-  const positional = args.filter((a) => !a.startsWith("--"));
   const dryRun = args.includes("--dry-run");
-  if (positional.length < 1) {
-    err("Usage: testLocalSigning.ts <launch-id> [--dry-run]");
+  let launchId = "";
+  const idx = args.indexOf("--launch-id");
+  if (idx !== -1 && args[idx + 1]) {
+    launchId = args[idx + 1];
+  }
+  if (!launchId) {
+    err("Usage: testLocalSigning.ts [--dry-run] --launch-id <id>");
     process.exit(1);
   }
-  return { launchId: positional[0], dryRun };
+  return { launchId, dryRun };
 }
 
 const { launchId, dryRun } = parseArgs();
