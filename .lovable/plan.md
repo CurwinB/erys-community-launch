@@ -1,70 +1,66 @@
-## Problem recap
+## What went wrong with launch `682524ef` (Rupper)
 
-`handleContribute` signs and sends SOL to escrow **before** the `contribute` edge function validates anything. Any server-side rejection (under 0.1 SOL, window closed, status not `scheduled`, signer/amount mismatch, RPC slow to confirm, duplicate tx) leaves SOL stranded on-chain with no DB row. The UI's "Total Escrow" reads from the `contributions` table sum, so stranded SOL is invisible.
+Order of operations in `executor/src/launchWithLocalSigning.ts` was:
 
-## Fix — three changes, one PR
+1. Decrypt keypairs
+2. **Charge 0.06 SOL processing fee** → escrow now down to 0.24 SOL
+3. Call PumpPortal `/trade-local`
+4. PumpPortal returned `400 — Cannot read properties of undefined (reading 'toBuffer')` (a known transient PumpPortal-side bug)
+5. `setFailed` → auto-refund kicks in
+6. Refund tries to return 0.30 SOL to contributors but escrow only has 0.24 SOL → `partial=1` (one contributor short-changed by ~0.06 SOL)
 
-### 1. Pre-flight validation edge function (prevents stranding)
+Two bugs combined:
 
-New edge function: `supabase/functions/validate-contribution/index.ts`.
+- The Lightning path (`executePumpfun.ts`) has a **pre-flight PumpPortal health probe** that catches the `toBuffer` 5xx/garbage responses before any funds are committed. The local-signing path (`launchWithLocalSigning.ts`) never got that probe.
+- Even if the probe were there, the processing fee is charged **before** the PumpPortal call, so any later failure leaves contributors unable to be made whole.
 
-Runs every check `contribute` does, except the on-chain tx verification:
-- `launch_id` exists
-- `status === 'scheduled'`
-- `launch_datetime > now() + 5min`
-- `amount_lamports >= 100_000_000` (0.1 SOL platform floor)
-- `token_delivery_wallet` format if provided
-- `wallet_address` format
+## Fix
 
-Returns `{ ok: true }` on 200 or `{ error: "<human message>" }` on 400/404.
+### 1. Port the pre-flight PumpPortal health probe into `launchWithLocalSigning.ts`
 
-**Client change** in `src/pages/LaunchPage.tsx` `handleContribute`:
-1. Keep the existing client-side `< 0.1 SOL` early toast (cheap UX win).
-2. **Before** building the tx, call `supabase.functions.invoke("validate-contribution", …)`. On error, show the same status-aware toast we already added and return — no wallet popup.
-3. Only on `{ ok: true }` proceed to sign/send and then call `contribute`.
+Insert the same probe used in `executePumpfun.ts` (POST `/trade-local` with `{action: "create"}`, abort on `>=500` or `toBuffer|undefined` in statusText). Run it **before** any state-changing step (before the processing fee, before BPS persistence). On probe failure call `setFailed` with the diagnostic and return — no funds touched, launch can be retried.
 
-This closes ~all stranding paths because the only failures left at the `contribute` step are:
-- RPC hasn't confirmed yet (handled with retry — already in `contribute`)
-- Signer/amount mismatch (impossible if client built the tx correctly)
-- Race: launch flipped to `executing` between validate and confirm (rare; covered by #3)
+### 2. Reorder: charge the processing fee LAST, only after `/trade-local` + local signing succeed
 
-### 2. Show on-chain escrow balance, not DB sum
+In `launchWithLocalSigning.ts`, move the `chargeProcessingFee` block from its current position (right after the minimum-pool check) to **immediately before** `connection.sendRawTransaction(signedBytes, …)`. New order:
 
-In `LaunchPage.tsx`:
-- Add a React Query (`["escrowBalance", launch.escrow_wallet_public_key]`, `refetchInterval: 30s`) that calls `connection.getBalance(escrow_wallet_public_key)` via the existing `VITE_SOLANA_RPC_URL`.
-- Pass the on-chain lamports to `LaunchStats` as the source of truth for "Total Escrow". Keep the contributor count from the DB (still accurate for "N apes").
-- If on-chain > DB sum, show a small muted note: `"X.XX SOL pending confirmation"` (the diff). Disappears once `contribute` catches up.
+1. Decrypt keypairs
+2. Min-pool check (cancel + refund if < 0.3 SOL)
+3. **PumpPortal health probe** (new)
+4. Reserve math + `initialBuyLamports` sanity check
+5. Persist basis points
+6. Call `/trade-local`
+7. Deserialize + locally sign
+8. **Charge processing fee** (moved here) — also recompute `initialBuyLamports` is NOT needed because the fee is taken out of the post-buy residual; we simply need to ensure escrow has fee + tx fee headroom. Re-check `escrow.getBalance()` ≥ fee + buffer; if not, abort cleanly with full refund still possible
+9. `sendRawTransaction`
+10. `setLaunched`
 
-No backend changes required for this part.
+This guarantees: if anything from steps 3-7 fails, the processing fee was never taken, and `refundFailedLaunch` can return 100% of contributor SOL.
 
-### 3. Auto-recovery for stranded SOL (safety net)
+### 3. Belt-and-suspenders: backstop refund in `refundFailedLaunch.ts` for fee-induced shortfalls
 
-Modify `supabase/functions/contribute/index.ts`: when the on-chain tx **is verified successfully** but a downstream validation rule fails (e.g. status flipped to `executing`, window closed by the time we got here), instead of just returning 400 and leaving SOL stranded:
+When `refundFailedLaunch` detects `escrowAvailable < sum(contributions)` AND `launch.processing_fee_tx_signature is not null`, log a clear `WARN` line: `"Shortfall caused by already-charged processing fee X lamports — manual treasury reimbursement required for launch <id>"`. Persist a new column `processing_fee_refund_owed_lamports` (bigint, nullable) on the failed launch row so admin tooling can surface it. No on-chain action — treasury wallet refund is a manual op for now (sole admin signer), but the data is recorded.
 
-1. Insert the contribution row anyway with `refund_shortfall_lamports = 0` and a new flag `pending_orphan_refund = true` (new column on `contributions`, default `false`).
-2. Return `{ error, queued_for_refund: true }` so the UI can say "Your SOL was returned to a refund queue."
-
-A new lightweight worker pass in the existing executor (`refundFailedLaunch`-style) picks up rows where `pending_orphan_refund = true` and refunds them using the same path as `cancelAndRefund`.
-
-DB migration:
+Migration:
 ```sql
-ALTER TABLE public.contributions
-  ADD COLUMN pending_orphan_refund boolean NOT NULL DEFAULT false;
+ALTER TABLE public.launches
+  ADD COLUMN processing_fee_refund_owed_lamports bigint;
 ```
 
-The existing `< 0.1 SOL` case never gets here because validate-contribution catches it client-side before signing — so this only fires for true races.
+### 4. Surface owed-refund in admin UI
 
-## Files touched
+In `src/components/admin/RefundsTab.tsx` (or `AccountingTab.tsx`, whichever lists failed launches), add a column "Fee Refund Owed" showing `processing_fee_refund_owed_lamports / 1e9` SOL when non-null, with a copy-to-clipboard button for the contributor wallet that was short-changed.
 
-- `supabase/functions/validate-contribution/index.ts` (new)
-- `supabase/functions/contribute/index.ts` (orphan-refund branch)
-- `supabase/migrations/<ts>_add_pending_orphan_refund.sql` (new column)
-- `src/pages/LaunchPage.tsx` (pre-flight call + escrow balance query)
-- `src/components/launch/LaunchStats.tsx` (accept `onChainLamports` prop, optional pending diff)
-- `executor/src/index.ts` + new `executor/src/refundOrphanContributions.ts` (sweep loop)
+## Files
 
-## Out of scope (per your call)
+- `executor/src/launchWithLocalSigning.ts` — add probe, reorder fee charge
+- `executor/src/refundFailedLaunch.ts` — detect + persist owed-refund
+- `supabase/migrations/<ts>_add_processing_fee_refund_owed.sql` — new column
+- `src/integrations/supabase/types.ts` — auto-regen
+- `src/components/admin/RefundsTab.tsx` (or AccountingTab) — display owed-refund
 
-- Refunding the specific stuck SOL from your earlier test.
-- Rate limiting on validate-contribution.
-- Per-launch creator min/max (not currently in schema).
+## Out of scope
+
+- Automatic on-chain treasury → contributor refund of stranded processing fees (deferred; needs treasury private key in executor — separate security review)
+- Manual reimbursement for the Rupper launch's short-changed contributor (you said no refund needed now; the new column will be backfilled by the next failure, not retroactively)
+- Changing the processing-fee thresholds (already done in prior turn)
