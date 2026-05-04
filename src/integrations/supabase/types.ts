@@ -164,6 +164,7 @@ export type Database = {
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
+          processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
@@ -224,6 +225,7 @@ export type Database = {
           min_contribution_lamports: number
           platform?: string
           processing_fee_lamports?: number
+          processing_fee_refund_owed_lamports?: number | null
           processing_fee_tx_signature?: string | null
           pumpfun_consecutive_empty_claims?: number
           pumpfun_creator_fees_distributed?: number | null
@@ -284,6 +286,7 @@ export type Database = {
           min_contribution_lamports?: number
           platform?: string
           processing_fee_lamports?: number
+          processing_fee_refund_owed_lamports?: number | null
           processing_fee_tx_signature?: string | null
           pumpfun_consecutive_empty_claims?: number
           pumpfun_creator_fees_distributed?: number | null
@@ -559,6 +562,7 @@ export type Database = {
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
+          processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
@@ -628,6 +632,7 @@ export type Database = {
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
+          processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
@@ -697,6 +702,7 @@ export type Database = {
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
+          processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
@@ -770,6 +776,7 @@ export type Database = {
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
+          processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
@@ -843,6 +850,7 @@ export type Database = {
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
+          processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
@@ -912,6 +920,7 @@ export type Database = {
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
+          processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
@@ -986,6 +995,7 @@ export type Database = {
               min_contribution_lamports: number
               platform: string
               processing_fee_lamports: number
+              processing_fee_refund_owed_lamports: number | null
               processing_fee_tx_signature: string | null
               pumpfun_consecutive_empty_claims: number
               pumpfun_creator_fees_distributed: number | null
@@ -1060,6 +1070,7 @@ export type Database = {
               min_contribution_lamports: number
               platform: string
               processing_fee_lamports: number
+              processing_fee_refund_owed_lamports: number | null
               processing_fee_tx_signature: string | null
               pumpfun_consecutive_empty_claims: number
               pumpfun_creator_fees_distributed: number | null
@@ -1129,6 +1140,7 @@ export type Database = {
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
+          processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
@@ -1198,6 +1210,7 @@ export type Database = {
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
+          processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
@@ -1267,6 +1280,7 @@ export type Database = {
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
+          processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
