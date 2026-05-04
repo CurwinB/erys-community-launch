@@ -159,6 +159,23 @@ export async function executePumpfunLaunch(
     return;
   }
 
+  // Pre-flight: confirm the metadata URI + its image are both 200 before
+  // calling /trade-local. PumpPortal fetches these synchronously and
+  // crashes with `Cannot read properties of undefined (reading 'toBuffer')`
+  // (HTTP 400) if either is unreachable. This runs before any on-chain
+  // mutation so contributors can be refunded cleanly on failure.
+  {
+    const metaCheck = await verifyMetadataReachable(launch.ipfs_metadata_url ?? "");
+    if (!metaCheck.ok) {
+      await setFailed(
+        launch.id,
+        `Metadata not reachable before /trade-local: ${metaCheck.reason}`
+      );
+      return;
+    }
+    console.log("Metadata + image pre-flight check passed");
+  }
+
   // Call PumpPortal
   console.log("Calling PumpPortal create");
   const pumpController = new AbortController();
