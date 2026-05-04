@@ -470,3 +470,63 @@ async function waitForIpfsPropagation(cid: string, timeoutMs: number): Promise<b
   }
   return false;
 }
+
+// Verify the metadata URL we're about to hand to PumpPortal is fully
+// resolvable: the URL itself returns 200 with valid JSON, and the `image`
+// field inside that JSON is also reachable (200). If either piece is not
+// ready, PumpPortal's create handler will crash with `toBuffer` 400.
+async function verifyMetadataReachable(
+  url: string,
+  timeoutMs: number
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const deadline = Date.now() + timeoutMs;
+  let lastReason = "no attempts made";
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    attempt++;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5_000);
+      const res = await fetch(url, { method: "GET", signal: ctrl.signal });
+      clearTimeout(t);
+      if (!res.ok) {
+        lastReason = `metadata GET ${res.status}`;
+      } else {
+        const text = await res.text();
+        let json: any;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          lastReason = "metadata not valid JSON yet";
+          await new Promise((r) => setTimeout(r, 1_500));
+          continue;
+        }
+        const imageUrl: string | undefined = json?.image;
+        if (!imageUrl || !/^https?:\/\//.test(imageUrl)) {
+          // No HTTP image to verify — JSON is enough.
+          console.log(`Metadata reachable on attempt ${attempt} (no image to verify)`);
+          return { ok: true };
+        }
+        try {
+          const imgCtrl = new AbortController();
+          const it = setTimeout(() => imgCtrl.abort(), 5_000);
+          const imgRes = await fetch(imageUrl, { method: "GET", signal: imgCtrl.signal });
+          clearTimeout(it);
+          // Drain to free socket
+          await imgRes.arrayBuffer().catch(() => undefined);
+          if (imgRes.ok) {
+            console.log(`Metadata + image reachable on attempt ${attempt}`);
+            return { ok: true };
+          }
+          lastReason = `image GET ${imgRes.status}`;
+        } catch (e: any) {
+          lastReason = `image fetch threw: ${e?.message ?? e}`;
+        }
+      }
+    } catch (e: any) {
+      lastReason = `metadata fetch threw: ${e?.message ?? e}`;
+    }
+    await new Promise((r) => setTimeout(r, 1_500));
+  }
+  return { ok: false, reason: `${lastReason} (after ${attempt} attempts in ${timeoutMs}ms)` };
+}
