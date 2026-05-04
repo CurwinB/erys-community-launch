@@ -198,34 +198,77 @@ Deno.serve(async (req) => {
       if (website_url) pumpForm.append("website", website_url);
       pumpForm.append("showName", "true");
 
-      const pumpCtrl = new AbortController();
-      const pumpTimeout = setTimeout(() => pumpCtrl.abort(), 8_000);
-      const pumpRes = await fetch("https://pump.fun/api/ipfs", {
-        method: "POST",
-        body: pumpForm,
-        signal: pumpCtrl.signal,
-      });
-      clearTimeout(pumpTimeout);
-      if (pumpRes.ok) {
-        const pumpJson = await pumpRes.json().catch(() => null);
-        const pumpUri: string | undefined = pumpJson?.metadataUri;
-        if (pumpUri && /^https?:\/\//.test(pumpUri)) {
-          console.log(`Using pump.fun canonical metadataUri: ${pumpUri}`);
-          ipfsMetadataUrl = pumpUri;
+      // pump.fun's Cloudflare front blocks default Deno fetch headers with
+      // a 403. Send a realistic browser UA + Origin/Referer so the upload
+      // actually succeeds. Retry up to 3x with backoff on 403/5xx.
+      const browserHeaders: Record<string, string> = {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        Origin: "https://pump.fun",
+        Referer: "https://pump.fun/create",
+        Accept: "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+      };
+      let pumpUri: string | undefined;
+      for (let attempt = 1; attempt <= 3 && !pumpUri; attempt++) {
+        try {
+          const pumpCtrl = new AbortController();
+          const pumpTimeout = setTimeout(() => pumpCtrl.abort(), 10_000);
+          const pumpRes = await fetch("https://pump.fun/api/ipfs", {
+            method: "POST",
+            headers: browserHeaders,
+            body: pumpForm,
+            signal: pumpCtrl.signal,
+          });
+          clearTimeout(pumpTimeout);
+          if (pumpRes.ok) {
+            const pumpJson = await pumpRes.json().catch(() => null);
+            const uri: string | undefined = pumpJson?.metadataUri;
+            if (uri && /^https?:\/\//.test(uri)) {
+              console.log(
+                `Using pump.fun canonical metadataUri (attempt ${attempt}): ${uri}`
+              );
+              pumpUri = uri;
+              ipfsMetadataUrl = uri;
+              break;
+            }
+            console.warn(
+              `pump.fun /api/ipfs returned 200 but no metadataUri (attempt ${attempt})`
+            );
+          } else {
+            console.warn(
+              `pump.fun /api/ipfs returned ${pumpRes.status} (attempt ${attempt})`
+            );
+          }
+        } catch (e: any) {
+          console.warn(
+            `pump.fun /api/ipfs threw (attempt ${attempt}): ${e?.message ?? e}`
+          );
         }
-      } else {
-        console.warn(`pump.fun /api/ipfs returned ${pumpRes.status}; keeping Pinata URL`);
+        if (!pumpUri && attempt < 3) {
+          await new Promise((r) => setTimeout(r, 1_500 * attempt));
+        }
+      }
+      if (!pumpUri) {
+        console.warn("pump.fun /api/ipfs failed after 3 attempts; keeping Pinata URL");
       }
     } catch (pumpErr: any) {
       console.warn(`pump.fun /api/ipfs upload skipped: ${pumpErr?.message ?? pumpErr}`);
     }
 
-    // Step 2b: Wait for IPFS gateway propagation. PumpPortal validates the URI
-    // immediately and rejects launches whose metadata isn't yet retrievable.
-    // Poll a few gateways for up to ~15s before giving up.
-    const propagated = await waitForIpfsPropagation(metadataCid, 15_000);
-    if (!propagated) {
-      console.warn(`Metadata CID ${metadataCid} not propagated within timeout — proceeding anyway`);
+    // Step 2b: Verify the EXACT URL we're about to store is fully fetchable
+    // (JSON parses + image field returns 200). PumpPortal fetches this URL
+    // synchronously inside /trade-local; if it 404s or the `image` it
+    // references is unreachable, PumpPortal crashes with the cryptic
+    // `Cannot read properties of undefined (reading 'toBuffer')` 400. Fail
+    // the create here so the user sees a clear error before contributions
+    // open and funds get pooled.
+    const reachable = await verifyMetadataReachable(ipfsMetadataUrl, 30_000);
+    if (!reachable.ok) {
+      return errorResponse(
+        `Metadata URL not reachable in time: ${reachable.reason}. Please retry in a moment.`,
+        503
+      );
     }
 
     // Step 2: Generate two Ed25519 keypairs (escrow + mint)
@@ -426,4 +469,64 @@ async function waitForIpfsPropagation(cid: string, timeoutMs: number): Promise<b
     await new Promise((r) => setTimeout(r, 1_500));
   }
   return false;
+}
+
+// Verify the metadata URL we're about to hand to PumpPortal is fully
+// resolvable: the URL itself returns 200 with valid JSON, and the `image`
+// field inside that JSON is also reachable (200). If either piece is not
+// ready, PumpPortal's create handler will crash with `toBuffer` 400.
+async function verifyMetadataReachable(
+  url: string,
+  timeoutMs: number
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const deadline = Date.now() + timeoutMs;
+  let lastReason = "no attempts made";
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    attempt++;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5_000);
+      const res = await fetch(url, { method: "GET", signal: ctrl.signal });
+      clearTimeout(t);
+      if (!res.ok) {
+        lastReason = `metadata GET ${res.status}`;
+      } else {
+        const text = await res.text();
+        let json: any;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          lastReason = "metadata not valid JSON yet";
+          await new Promise((r) => setTimeout(r, 1_500));
+          continue;
+        }
+        const imageUrl: string | undefined = json?.image;
+        if (!imageUrl || !/^https?:\/\//.test(imageUrl)) {
+          // No HTTP image to verify — JSON is enough.
+          console.log(`Metadata reachable on attempt ${attempt} (no image to verify)`);
+          return { ok: true };
+        }
+        try {
+          const imgCtrl = new AbortController();
+          const it = setTimeout(() => imgCtrl.abort(), 5_000);
+          const imgRes = await fetch(imageUrl, { method: "GET", signal: imgCtrl.signal });
+          clearTimeout(it);
+          // Drain to free socket
+          await imgRes.arrayBuffer().catch(() => undefined);
+          if (imgRes.ok) {
+            console.log(`Metadata + image reachable on attempt ${attempt}`);
+            return { ok: true };
+          }
+          lastReason = `image GET ${imgRes.status}`;
+        } catch (e: any) {
+          lastReason = `image fetch threw: ${e?.message ?? e}`;
+        }
+      }
+    } catch (e: any) {
+      lastReason = `metadata fetch threw: ${e?.message ?? e}`;
+    }
+    await new Promise((r) => setTimeout(r, 1_500));
+  }
+  return { ok: false, reason: `${lastReason} (after ${attempt} attempts in ${timeoutMs}ms)` };
 }

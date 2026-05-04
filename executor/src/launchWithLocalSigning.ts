@@ -170,6 +170,24 @@ export async function launchWithLocalSigning(
   }
   LOG(`Initial buy lamports: ${initialBuyLamports} (${Number(initialBuyLamports) / 1e9} SOL)`);
 
+  // ---- Pre-flight metadata reachability check ----
+  // PumpPortal's /trade-local fetches our metadata URI synchronously and
+  // crashes with `Cannot read properties of undefined (reading 'toBuffer')`
+  // (HTTP 400) if the URL or its `image` field can't be loaded. Verify
+  // both are 200 BEFORE we touch /trade-local so we abort cleanly with a
+  // diagnosable error rather than a cryptic toBuffer crash. Refunds will
+  // run normally because we haven't charged the processing fee yet.
+  if (!dryRun) {
+    const metaCheck = await verifyMetadataReachable(launch.ipfs_metadata_url ?? "");
+    if (!metaCheck.ok) {
+      const msg = `Metadata not reachable before /trade-local: ${metaCheck.reason}`;
+      ERR(msg);
+      await setFailed(launch.id, msg);
+      return;
+    }
+    LOG("Metadata + image pre-flight check passed");
+  }
+
   // ---- Persist BPS (skipped on dry-run) ----
   if (!dryRun) {
     const totalNum = Number(totalLamports);
@@ -345,4 +363,53 @@ export async function launchWithLocalSigning(
 
   await setLaunched(launch.id, txSignature);
   LOG(`Launch ${launch.id} complete`);
+}
+
+// Verify metadata URL + nested image URL are both 200 before handing off
+// to PumpPortal. Returns quickly on success; retries up to ~12s before
+// giving up.
+async function verifyMetadataReachable(
+  url: string
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!url || !/^https?:\/\//.test(url)) {
+    return { ok: false, reason: `invalid metadata url: ${url}` };
+  }
+  const deadline = Date.now() + 12_000;
+  let lastReason = "no attempts";
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    attempt++;
+    try {
+      const res = await fetch(url, { method: "GET" });
+      if (!res.ok) {
+        lastReason = `metadata GET ${res.status}`;
+      } else {
+        const text = await res.text();
+        let json: any;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          lastReason = "metadata not valid JSON";
+          await new Promise((r) => setTimeout(r, 1_000));
+          continue;
+        }
+        const imageUrl: string | undefined = json?.image;
+        if (!imageUrl || !/^https?:\/\//.test(imageUrl)) {
+          return { ok: true };
+        }
+        try {
+          const imgRes = await fetch(imageUrl, { method: "GET" });
+          await imgRes.arrayBuffer().catch(() => undefined);
+          if (imgRes.ok) return { ok: true };
+          lastReason = `image GET ${imgRes.status}`;
+        } catch (e: any) {
+          lastReason = `image fetch threw: ${e?.message ?? e}`;
+        }
+      }
+    } catch (e: any) {
+      lastReason = `metadata fetch threw: ${e?.message ?? e}`;
+    }
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  return { ok: false, reason: `${lastReason} (after ${attempt} attempts)` };
 }

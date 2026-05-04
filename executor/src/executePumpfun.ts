@@ -159,6 +159,23 @@ export async function executePumpfunLaunch(
     return;
   }
 
+  // Pre-flight: confirm the metadata URI + its image are both 200 before
+  // calling /trade-local. PumpPortal fetches these synchronously and
+  // crashes with `Cannot read properties of undefined (reading 'toBuffer')`
+  // (HTTP 400) if either is unreachable. This runs before any on-chain
+  // mutation so contributors can be refunded cleanly on failure.
+  {
+    const metaCheck = await verifyMetadataReachable(launch.ipfs_metadata_url ?? "");
+    if (!metaCheck.ok) {
+      await setFailed(
+        launch.id,
+        `Metadata not reachable before /trade-local: ${metaCheck.reason}`
+      );
+      return;
+    }
+    console.log("Metadata + image pre-flight check passed");
+  }
+
   // Call PumpPortal
   console.log("Calling PumpPortal create");
   const pumpController = new AbortController();
@@ -265,4 +282,50 @@ export async function executePumpfunLaunch(
 
   await setLaunched(launch.id, txSignature);
   console.log(`Pump.fun launch ${launch.id} complete`);
+}
+
+async function verifyMetadataReachable(
+  url: string
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!url || !/^https?:\/\//.test(url)) {
+    return { ok: false, reason: `invalid metadata url: ${url}` };
+  }
+  const deadline = Date.now() + 12_000;
+  let lastReason = "no attempts";
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    attempt++;
+    try {
+      const res = await fetch(url, { method: "GET" });
+      if (!res.ok) {
+        lastReason = `metadata GET ${res.status}`;
+      } else {
+        const text = await res.text();
+        let json: any;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          lastReason = "metadata not valid JSON";
+          await new Promise((r) => setTimeout(r, 1_000));
+          continue;
+        }
+        const imageUrl: string | undefined = json?.image;
+        if (!imageUrl || !/^https?:\/\//.test(imageUrl)) {
+          return { ok: true };
+        }
+        try {
+          const imgRes = await fetch(imageUrl, { method: "GET" });
+          await imgRes.arrayBuffer().catch(() => undefined);
+          if (imgRes.ok) return { ok: true };
+          lastReason = `image GET ${imgRes.status}`;
+        } catch (e: any) {
+          lastReason = `image fetch threw: ${e?.message ?? e}`;
+        }
+      }
+    } catch (e: any) {
+      lastReason = `metadata fetch threw: ${e?.message ?? e}`;
+    }
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  return { ok: false, reason: `${lastReason} (after ${attempt} attempts)` };
 }
