@@ -6,6 +6,7 @@ import {
 } from "./db";
 import { executeBagsLaunch } from "./executeBags";
 import { executePumpfunLightningLaunch } from "./executePumpfunLightning";
+import { launchWithLocalSigning } from "./launchWithLocalSigning";
 import { recoverPumpfunSweep } from "./recoverPumpfunSweep";
 
 export async function executeAllPendingLaunches(workerId: string): Promise<void> {
@@ -51,7 +52,11 @@ export async function executeAllPendingLaunches(workerId: string): Promise<void>
           }
 
           if (launch.platform === "pumpfun") {
-            await executePumpfunLightningLaunch(launch, contributions);
+            if (process.env.USE_LOCAL_SIGNING === "true") {
+              await launchWithLocalSigning(launch, contributions);
+            } else {
+              await executePumpfunLightningLaunch(launch, contributions);
+            }
           } else {
             await executeBagsLaunch(launch, contributions);
           }
