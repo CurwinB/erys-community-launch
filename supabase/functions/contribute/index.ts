@@ -71,14 +71,16 @@ Deno.serve(async (req) => {
       );
     }
 
-    // 3. Validate amount within bounds
+    // 3. Validate amount against platform-enforced minimum (0.1 SOL).
+    // Per-launch min/max overrides have been removed in favour of a
+    // single platform floor for consistency across all launches.
+    const PLATFORM_MIN_CONTRIBUTION = 100_000_000; // 0.1 SOL
     const amount = Number(amount_lamports);
-    if (amount < Number(launch.min_contribution_lamports)) {
-      return errorResponse(`Amount ${amount} below minimum ${launch.min_contribution_lamports}`, 400);
-    }
-
-    if (launch.max_contribution_lamports && amount > Number(launch.max_contribution_lamports)) {
-      return errorResponse(`Amount ${amount} above maximum ${launch.max_contribution_lamports}`, 400);
+    if (amount < PLATFORM_MIN_CONTRIBUTION) {
+      return errorResponse(
+        `Minimum contribution is 0.1 SOL. You sent ${amount / 1e9} SOL.`,
+        400,
+      );
     }
 
     // 4. On-chain verification with retry (3 attempts, 2s gaps)
