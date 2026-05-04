@@ -178,6 +178,9 @@ export async function executePumpfunLaunch(
 
   // Call PumpPortal
   console.log("Calling PumpPortal create");
+  console.log(`mint type=${typeof launch.token_mint_address} value=${launch.token_mint_address}`);
+  console.log(`uri type=${typeof launch.ipfs_metadata_url} value=${launch.ipfs_metadata_url}`);
+  console.log(`publicKey type=${typeof launch.escrow_wallet_public_key} value=${launch.escrow_wallet_public_key}`);
   const pumpController = new AbortController();
   const pumpTimeout = setTimeout(() => pumpController.abort(), 30_000);
   let pumpRes: any;
@@ -186,14 +189,14 @@ export async function executePumpfunLaunch(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        publicKey: launch.escrow_wallet_public_key,
+        publicKey: String(launch.escrow_wallet_public_key ?? "").trim(),
         action: "create",
         tokenMetadata: {
           name: (launch.token_name ?? "").trim(),
           symbol: (launch.token_symbol ?? "").trim().toUpperCase(),
-          uri: launch.ipfs_metadata_url,
+          uri: String(launch.ipfs_metadata_url ?? "").trim(),
         },
-        mint: launch.token_mint_address,
+        mint: String(launch.token_mint_address ?? "").trim(),
         denominatedInSol: "true",
         amount: Number(initialBuyLamports) / 1e9,
         slippage: 15,
