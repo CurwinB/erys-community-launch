@@ -45,7 +45,7 @@ Deno.serve(async (req) => {
     }
 
     const {
-      token_name,
+      token_name: rawTokenName,
       token_symbol,
       description,
       image_url,
@@ -56,12 +56,13 @@ Deno.serve(async (req) => {
       created_by_wallet,
     } = body;
 
+    const token_name = (rawTokenName ?? "").trim();
     if (!token_name || !token_symbol || !launch_datetime || !created_by_wallet) {
       return errorResponse("Missing required fields", 400);
     }
 
     // Pump.fun validation: symbol must be alphanumeric, max 10 chars; name max 32 chars
-    const symbolUpper = token_symbol.toUpperCase();
+    const symbolUpper = token_symbol.trim().toUpperCase();
     if (!/^[A-Z0-9]{1,10}$/.test(symbolUpper)) {
       return errorResponse(
         "Token symbol must be 1-10 alphanumeric characters (A-Z, 0-9 only)",
