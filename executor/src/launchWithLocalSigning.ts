@@ -112,34 +112,34 @@ export async function launchWithLocalSigning(
 
   const connection = new Connection(SOLANA_RPC_URL, "confirmed");
 
-  // ---- Pre-flight PumpPortal health probe ----
-  // Mirrors the probe in executePumpfun.ts. Catches transient
-  // "Cannot read properties of undefined (reading 'toBuffer')" style
-  // failures BEFORE we touch contributor funds. The processing fee is
-  // charged only AFTER /trade-local + local signing succeed (see below),
-  // so a probe failure here leaves contributor SOL fully refundable.
+  // ---- Passive PumpPortal reachability check ----
+  // We previously POSTed `{action:"create"}` here as a "probe", but that's
+  // exactly the malformed payload that triggers PumpPortal's `toBuffer`
+  // crash — and doing it ~1s before the real call appears to poison the
+  // next request from the same IP. Use a passive GET instead: any HTTP
+  // response (including 4xx/405) means the host is reachable. Only a
+  // 5xx or network error counts as "down". The processing fee is still
+  // charged AFTER /trade-local succeeds, so this check is defense-in-depth
+  // only — failure here aborts cleanly with no funds touched.
   if (!dryRun) {
     try {
       const probeCtrl = new AbortController();
-      const probeTimeout = setTimeout(() => probeCtrl.abort(), 10_000);
+      const probeTimeout = setTimeout(() => probeCtrl.abort(), 5_000);
       const probeRes = await fetch("https://pumpportal.fun/api/trade-local", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "create" }),
+        method: "GET",
         signal: probeCtrl.signal,
       });
       clearTimeout(probeTimeout);
-      const probeStatusText = probeRes.statusText || "";
-      if (probeRes.status >= 500 || /toBuffer|undefined/i.test(probeStatusText)) {
+      if (probeRes.status >= 500) {
         const probeBody = await probeRes.text().catch(() => "");
-        const msg = `PumpPortal health probe failed (${probeRes.status} ${probeStatusText}). Endpoint appears broken; aborting before committing funds. Body: ${probeBody.slice(0, 300)}`;
+        const msg = `PumpPortal reachability check returned ${probeRes.status}; aborting before committing funds. Body: ${probeBody.slice(0, 300)}`;
         ERR(msg);
         await setFailed(launch.id, msg);
         return;
       }
-      LOG(`PumpPortal health probe OK (${probeRes.status} ${probeStatusText})`);
+      LOG(`PumpPortal reachable (${probeRes.status})`);
     } catch (probeErr: any) {
-      const msg = `PumpPortal health probe threw: ${probeErr?.message ?? probeErr}`;
+      const msg = `PumpPortal reachability check threw: ${probeErr?.message ?? probeErr}`;
       ERR(msg);
       await setFailed(launch.id, msg);
       return;
@@ -183,57 +183,82 @@ export async function launchWithLocalSigning(
     LOG("[DRY-RUN] Would persist basis points — skipping");
   }
 
-  // ---- Call /trade-local for unsigned tx bytes ----
-  LOG("Calling PumpPortal /trade-local");
-  const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 30_000);
-  let pumpRes: any;
-  try {
-    pumpRes = await fetch("https://pumpportal.fun/api/trade-local", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        publicKey: launch.escrow_wallet_public_key,
-        action: "create",
-        tokenMetadata: {
-          name: launch.token_name,
-          symbol: launch.token_symbol.toUpperCase(),
-          uri: launch.ipfs_metadata_url,
-        },
-        mint: launch.token_mint_address,
-        denominatedInSol: "true",
-        amount: Number(initialBuyLamports) / 1e9,
-        slippage: 15,
-        priorityFee: 0.00005,
-        pool: "pump",
-      }),
-      signal: ctrl.signal,
-    });
-  } catch (err: any) {
+  // ---- Call /trade-local with one automatic retry on transient errors ----
+  // PumpPortal intermittently returns 5xx or a 400 with `toBuffer` /
+  // undefined-property errors. A short backoff + single retry recovers
+  // from these without manual intervention. Safe to retry: the processing
+  // fee has not been charged yet, and the mint pubkey is deterministic
+  // (re-using the same mint on retry is the correct behavior).
+  const tradeLocalBody = JSON.stringify({
+    publicKey: launch.escrow_wallet_public_key,
+    action: "create",
+    tokenMetadata: {
+      name: launch.token_name,
+      symbol: launch.token_symbol.toUpperCase(),
+      uri: launch.ipfs_metadata_url,
+    },
+    mint: launch.token_mint_address,
+    denominatedInSol: "true",
+    amount: Number(initialBuyLamports) / 1e9,
+    slippage: 15,
+    priorityFee: 0.00005,
+    pool: "pump",
+  });
+
+  const callTradeLocal = async (attempt: number): Promise<{
+    ok: true;
+    bytes: Uint8Array;
+  } | { ok: false; transient: boolean; reason: string }> => {
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 30_000);
+    let res: any;
+    try {
+      res = await fetch("https://pumpportal.fun/api/trade-local", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: tradeLocalBody,
+        signal: ctrl.signal,
+      });
+    } catch (err: any) {
+      clearTimeout(timeout);
+      const reason =
+        err.name === "AbortError"
+          ? "request timed out after 30 seconds"
+          : `request failed: ${err.message}`;
+      return { ok: false, transient: true, reason };
+    }
     clearTimeout(timeout);
-    const msg =
-      err.name === "AbortError"
-        ? "PumpPortal /trade-local request timed out after 30 seconds"
-        : `PumpPortal /trade-local request failed: ${err.message}`;
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      const statusText = res.statusText || "";
+      const combined = [statusText, errBody].filter(Boolean).join(" | ");
+      const transient =
+        res.status >= 500 || /toBuffer|undefined/i.test(combined);
+      return {
+        ok: false,
+        transient,
+        reason: `${res.status} ${combined.slice(0, 800) || "no error body"}`,
+      };
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return { ok: true, bytes };
+  };
+
+  LOG("Calling PumpPortal /trade-local [attempt 1/2]");
+  let result = await callTradeLocal(1);
+  if (!result.ok && result.transient) {
+    WARN(`/trade-local attempt 1/2 failed transiently: ${result.reason}. Retrying in 2.5s`);
+    await new Promise((r) => setTimeout(r, 2_500));
+    LOG("Calling PumpPortal /trade-local [attempt 2/2]");
+    result = await callTradeLocal(2);
+  }
+  if (!result.ok) {
+    const msg = `PumpPortal /trade-local failed: ${result.reason}`;
     ERR(msg);
     if (!dryRun) await setFailed(launch.id, msg);
     return;
   }
-  clearTimeout(timeout);
-
-  if (!pumpRes.ok) {
-    const errBody = await pumpRes.text().catch(() => "");
-    const statusText = pumpRes.statusText || "";
-    const reason =
-      [statusText, errBody].filter(Boolean).join(" | ").slice(0, 800) ||
-      "no error body";
-    const msg = `PumpPortal /trade-local failed (${pumpRes.status}): ${reason}`;
-    ERR(msg);
-    if (!dryRun) await setFailed(launch.id, msg);
-    return;
-  }
-
-  const txBytes = new Uint8Array(await pumpRes.arrayBuffer());
+  const txBytes = result.bytes;
   LOG(`Received ${txBytes.length}-byte unsigned transaction`);
 
   // ---- Local signing: mint then escrow (REUSED keypairs only) ----
