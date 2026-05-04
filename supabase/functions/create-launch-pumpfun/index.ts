@@ -107,17 +107,21 @@ Deno.serve(async (req) => {
         if (!imgCid) {
           return errorResponse(`Pinata image upload returned no CID: ${JSON.stringify(imgPinData)}`, 500);
         }
-        // Use ipfs:// URI scheme — required by Pump.fun metadata validation
-        finalImageUrl = `ipfs://${imgCid}`;
+        // Use Pinata HTTPS gateway (matches PumpPortal's official docs
+        // example exactly). The `ipfs://` scheme is technically valid per
+        // Metaplex but PumpPortal's create handler eagerly fetches the
+        // `image` field server-side and an `ipfs://` URL there can land
+        // in their `undefined.toBuffer()` crash path.
+        finalImageUrl = `https://gateway.pinata.cloud/ipfs/${imgCid}`;
       } catch (err: any) {
         return errorResponse(`Image IPFS upload failed: ${err.message}`, 500);
       }
     }
 
     // Step 2: Build metadata JSON and pin to Pinata IPFS
-    // Schema must match Pump.fun's expected format:
-    //   - image must be ipfs:// URI
-    //   - showName: true and createdOn are required for validation to pass
+    // Schema matches PumpPortal's official docs example:
+    //   { name, symbol, image (HTTPS), description, twitter, telegram, website }
+    // showName + createdOn are pump.fun frontend extras (harmless).
     const metadataObj: Record<string, unknown> = {
       name: token_name,
       symbol: symbolUpper,
