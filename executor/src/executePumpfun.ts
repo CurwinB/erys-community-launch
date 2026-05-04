@@ -142,15 +142,15 @@ export async function executePumpfunLaunch(
       signal: probeController.signal,
     });
     clearTimeout(probeTimeout);
+    const probeText = await probeRes.text().catch(() => "");
     if (probeRes.status >= 500) {
-      const probeBody = await probeRes.text().catch(() => "");
       await setFailed(
         launch.id,
-        `PumpPortal reachability check returned ${probeRes.status}; aborting before committing funds. Body: ${probeBody.slice(0, 300)}`
+        `PumpPortal reachability check returned ${probeRes.status}; aborting before committing funds. Body: ${probeText.slice(0, 300)}`
       );
       return;
     }
-    console.log(`PumpPortal reachable (${probeRes.status})`);
+    console.log(`PumpPortal reachable (${probeRes.status}): ${probeText.slice(0, 500)}`);
   } catch (probeErr: any) {
     await setFailed(
       launch.id,
@@ -185,24 +185,27 @@ export async function executePumpfunLaunch(
   const pumpTimeout = setTimeout(() => pumpController.abort(), 30_000);
   let pumpRes: any;
   try {
+    const requestBody = {
+      publicKey: String(launch.escrow_wallet_public_key ?? "").trim(),
+      action: "create",
+      tokenMetadata: {
+        name: (launch.token_name ?? "").trim(),
+        symbol: (launch.token_symbol ?? "").trim().toUpperCase(),
+        uri: String(launch.ipfs_metadata_url ?? "").trim(),
+      },
+      mint: String(launch.token_mint_address ?? "").trim(),
+      denominatedInSol: "true",
+      amount: Number(initialBuyLamports) / 1e9,
+      slippage: 15,
+      priorityFee: 0.00005,
+      pool: "pump",
+    };
+    const tradeLocalBody = JSON.stringify(requestBody);
+    console.log(`/trade-local request body: ${tradeLocalBody}`);
     pumpRes = await fetch("https://pumpportal.fun/api/trade-local", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        publicKey: String(launch.escrow_wallet_public_key ?? "").trim(),
-        action: "create",
-        tokenMetadata: {
-          name: (launch.token_name ?? "").trim(),
-          symbol: (launch.token_symbol ?? "").trim().toUpperCase(),
-          uri: String(launch.ipfs_metadata_url ?? "").trim(),
-        },
-        mint: String(launch.token_mint_address ?? "").trim(),
-        denominatedInSol: "true",
-        amount: Number(initialBuyLamports) / 1e9,
-        slippage: 15,
-        priorityFee: 0.00005,
-        pool: "pump",
-      }),
+      body: tradeLocalBody,
       signal: pumpController.signal,
     });
   } catch (err: any) {
