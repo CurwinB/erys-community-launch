@@ -170,6 +170,24 @@ export async function launchWithLocalSigning(
   }
   LOG(`Initial buy lamports: ${initialBuyLamports} (${Number(initialBuyLamports) / 1e9} SOL)`);
 
+  // ---- Pre-flight metadata reachability check ----
+  // PumpPortal's /trade-local fetches our metadata URI synchronously and
+  // crashes with `Cannot read properties of undefined (reading 'toBuffer')`
+  // (HTTP 400) if the URL or its `image` field can't be loaded. Verify
+  // both are 200 BEFORE we touch /trade-local so we abort cleanly with a
+  // diagnosable error rather than a cryptic toBuffer crash. Refunds will
+  // run normally because we haven't charged the processing fee yet.
+  if (!dryRun) {
+    const metaCheck = await verifyMetadataReachable(launch.ipfs_metadata_url ?? "");
+    if (!metaCheck.ok) {
+      const msg = `Metadata not reachable before /trade-local: ${metaCheck.reason}`;
+      ERR(msg);
+      await setFailed(launch.id, msg);
+      return;
+    }
+    LOG("Metadata + image pre-flight check passed");
+  }
+
   // ---- Persist BPS (skipped on dry-run) ----
   if (!dryRun) {
     const totalNum = Number(totalLamports);
