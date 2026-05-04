@@ -155,8 +155,13 @@ Deno.serve(async (req) => {
       if (!metadataCid) {
         return errorResponse(`Pinata metadata upload returned no CID: ${JSON.stringify(metaPinData)}`, 500);
       }
-      // Pump.fun expects the canonical ipfs.io gateway for metadata URI
-      ipfsMetadataUrl = `https://ipfs.io/ipfs/${metadataCid}`;
+      // Use Pinata's dedicated gateway instead of public ipfs.io. Public
+      // ipfs.io is frequently rate-limited / slow / unreachable from
+      // PumpPortal's servers, which causes their /trade-local handler to
+      // crash with `Cannot read properties of undefined (reading 'toBuffer')`
+      // when the metadata fetch fails. Pinata's gateway serves CIDs we
+      // pinned ourselves with sub-second latency and high availability.
+      ipfsMetadataUrl = `https://gateway.pinata.cloud/ipfs/${metadataCid}`;
     } catch (err: any) {
       return errorResponse(`Metadata IPFS upload failed: ${err.message}`, 500);
     }
