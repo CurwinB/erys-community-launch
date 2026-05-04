@@ -11,6 +11,3 @@ verify_jwt = false
 
 [functions.retry-failed-launch]
 verify_jwt = false
-
-[functions.test-local-signing]
-verify_jwt = false
