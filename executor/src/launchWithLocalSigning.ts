@@ -130,14 +130,14 @@ export async function launchWithLocalSigning(
         signal: probeCtrl.signal,
       });
       clearTimeout(probeTimeout);
+      const probeText = await probeRes.text().catch(() => "");
       if (probeRes.status >= 500) {
-        const probeBody = await probeRes.text().catch(() => "");
-        const msg = `PumpPortal reachability check returned ${probeRes.status}; aborting before committing funds. Body: ${probeBody.slice(0, 300)}`;
+        const msg = `PumpPortal reachability check returned ${probeRes.status}; aborting before committing funds. Body: ${probeText.slice(0, 300)}`;
         ERR(msg);
         await setFailed(launch.id, msg);
         return;
       }
-      LOG(`PumpPortal reachable (${probeRes.status})`);
+      LOG(`PumpPortal reachable (${probeRes.status}): ${probeText.slice(0, 500)}`);
     } catch (probeErr: any) {
       const msg = `PumpPortal reachability check threw: ${probeErr?.message ?? probeErr}`;
       ERR(msg);
@@ -225,7 +225,7 @@ export async function launchWithLocalSigning(
     if (!dryRun) await setFailed(launch.id, msg);
     return;
   }
-  const tradeLocalBody = JSON.stringify({
+  const requestBody = {
     publicKey: pubkeyField,
     action: "create",
     tokenMetadata: {
@@ -239,7 +239,9 @@ export async function launchWithLocalSigning(
     slippage: 15,
     priorityFee: 0.00005,
     pool: "pump",
-  });
+  };
+  const tradeLocalBody = JSON.stringify(requestBody);
+  LOG(`/trade-local request body: ${tradeLocalBody}`);
 
   const callTradeLocal = async (attempt: number): Promise<{
     ok: true;
