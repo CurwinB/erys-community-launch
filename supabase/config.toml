@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.retry-failed-launch]
 verify_jwt = false
+
+[functions.validate-contribution]
+verify_jwt = false
