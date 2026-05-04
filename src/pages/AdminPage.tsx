@@ -184,10 +184,7 @@ const AdminPage = () => {
             <SponsoredTab launches={launches as any} />
           </TabsContent>
           <TabsContent value="local-signing" className="mt-4">
-            <LocalSigningTestTab
-              launches={launches as any}
-              adminWallet={publicKey!}
-            />
+            <LocalSigningTestTab />
           </TabsContent>
         </Tabs>
       </div>

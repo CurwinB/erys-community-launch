@@ -1,117 +1,58 @@
-## Goal
+## Files I read first
 
-Give admins a UI in the existing admin panel to trigger the local-signing Pump.fun launch path (`executor/src/launchWithLocalSigning.ts`) without SSHing into Railway or running CLI scripts. Support dry-run (safe, no on-chain submission, no DB mutation) and live runs.
+- `src/pages/SchedulePage.tsx` — the live user launch form (fields, validation, submit flow, edge function call, contribution step).
+- `supabase/functions/create-launch-pumpfun/index.ts` — the edge function the form invokes (Pinata upload, escrow + mint keypair generation, row insert with `status='scheduled'`, `platform='pumpfun'`, `pumpfun_mint_keypair_encrypted`).
+- `executor/src/executeLaunch.ts` — the Railway worker. `claimNextExecutingLaunch` claims rows where `status='executing'`; for `platform='pumpfun'` it branches on `process.env.USE_LOCAL_SIGNING === "true"` and calls `launchWithLocalSigning(launch, contributions)`.
+- `executor/src/launchWithLocalSigning.ts` — the local-signing path that will run on Railway.
+- `src/components/admin/LocalSigningTestTab.tsx` — the current synthetic test tab (to be replaced).
 
-## Architecture
+## What changes
 
-The executor lives on Railway and is not HTTP-callable from the browser. The cleanest bridge is a new Supabase edge function that:
+Confirmed end-to-end: the existing user form already creates a row that the executor picks up; with `USE_LOCAL_SIGNING=true` on Railway, Pump.fun launches automatically run through `launchWithLocalSigning`. No new edge function, no manual trigger, no Lightning API.
 
-1. Verifies the caller is an admin wallet (via `is_admin_wallet` RPC).
-2. Loads the target launch + contributions server-side using the service role.
-3. Runs the same local-signing logic (decrypt keypairs → call PumpPortal `/trade-local` → sign locally → optionally submit via RPC).
-4. Returns structured logs + the resulting tx signature (or dry-run summary) to the UI.
+So the LOCAL SIGNING TEST tab becomes a 1:1 admin-side replica of `SchedulePage`, hardcoded to `pumpfun`.
 
-This keeps the browser zero-trust (no keypairs, no admin token), reuses existing RLS/admin gating, and matches the pattern already used by `execute-launch`, `retry-failed-launch`, etc.
+### 1. Replace `src/components/admin/LocalSigningTestTab.tsx`
 
-## What gets built
+Rewrite as a full clone of `SchedulePage.tsx`'s pumpfun branch. Specifically:
 
-### 1. New edge function: `supabase/functions/test-local-signing`
+- Identical form fields: `tokenName`, `tokenSymbol`, `description`, image upload (Supabase storage `token-images`), `twitterUrl`, `telegramUrl`, `websiteUrl`, `launchDate`, `launchTime`, `creatorContribution`, `creatorDeliveryWallet`.
+- Identical client-side validation: pumpfun symbol regex `[A-Z0-9]{1,10}`, name ≤ 32 chars, ≥ 10 min and ≤ 72 h from now, min creator SOL `0.1`, wallet balance ≥ contribution + `FEE_RESERVE_SOL`, platform-paused check via `get_launch_platform_status`.
+- Same submit flow:
+  1. Upload image to `token-images` bucket (if provided).
+  2. `supabase.functions.invoke("create-launch-pumpfun", { body: { token_name, token_symbol, description, image_url, twitter_url, telegram_url, website_url, launch_datetime, created_by_wallet } })`.
+  3. Run the same contribution flow (`performContribution`) — connect via `useWallet`, build SOL transfer to `escrow_wallet`, sign with the connected wallet, confirm, then record via the existing `contribute` edge function.
+- Same step state machine (`idle → creating → awaiting_signature → confirming → recording → success / error`), same retry handler, same slot-adjustment notice.
+- Same success card with launch URL + copy button.
+- Hardcode `platform = "pumpfun"`; remove the bags toggle.
+- Keep the existing admin styling (sharp edges, mono labels) and add a single banner at the top: "This form creates a real launch using the same flow as the public form. With `USE_LOCAL_SIGNING=true` on Railway, the executor will run `launchWithLocalSigning` when launch_datetime is reached. No manual execution trigger."
 
-- Inputs (POST JSON): `{ launchId: string, dryRun: boolean, adminWallet: string }`
-- Auth: requires `Authorization: Bearer <anon>` (standard) AND verifies `adminWallet` via `is_admin_wallet` RPC. Reject 403 if not admin.
-- Safety guards:
-  - Reject if `launch.platform !== 'pumpfun'`.
-  - Reject if `launch.status !== 'executing'` AND `dryRun === false` (matches the CLI rule).
-  - Require `pumpfun_mint_keypair_encrypted` and `escrow_wallet_encrypted_private_key` to be present.
-- Logic (port of `launchWithLocalSigning.ts` to Deno):
-  - Decrypt both keypairs using `ESCROW_ENCRYPTION_KEY` (reuse — never generate).
-  - Verify `mintKeypair.publicKey === launch.token_mint_address`.
-  - Compute pool total, reserves, `initialBuyLamports`.
-  - POST to `https://pumpportal.fun/api/trade-local` with `mint = launch.token_mint_address` (public key string), 30s timeout.
-  - Deserialize response as `Uint8Array` → `VersionedTransaction`.
-  - Sign with `[mintKeypair, escrowKeypair]`.
-  - **Dry-run path:** return `{ ok: true, dryRun: true, txSizeBytes, escrowPubkey, mintPubkey, mintMatch: true, logs: [...] }`. NO RPC submission. NO DB writes.
-  - **Live path:** `connection.sendRawTransaction(signed, { skipPreflight:false, preflightCommitment:"confirmed", maxRetries:3 })` → call `setLaunched` (update launches row to `launched` + tx sig) → return `{ ok: true, dryRun: false, txSignature, solscanUrl, logs }`.
-- Logging: every step pushed into a `logs: string[]` array (prefixed `[LOCAL_SIGNING]`) so the UI can render them, in addition to `console.log` for Supabase function logs.
-- Error returns: `{ ok: false, error, logs }` with HTTP 200 so the UI can always render the captured logs.
+Implementation note: extract the form into a shared component or just duplicate the JSX/handlers from `SchedulePage.tsx` verbatim — duplication is acceptable here since the goal is an isolated test surface that mirrors production exactly.
 
-### 2. New admin tab component: `src/components/admin/LocalSigningTestTab.tsx`
+### 2. Remove the synthetic test plumbing
 
-UI layout (matches existing admin styling — sharp edges, mono uppercase headers, dark cards):
+- Delete `supabase/functions/test-local-signing/index.ts`.
+- Remove its entry from `supabase/config.toml`.
+- Remove the `launches` and `adminWallet` props that the old tab consumed; the new tab uses `useWallet()` like the public form.
 
-```text
-┌─ LOCAL SIGNING TEST ─────────────────────────────────────┐
-│  WARNING: This invokes the alternative /trade-local      │
-│  signing path. Use dry-run first.                        │
-│                                                          │
-│  Launch:   [ Select pumpfun launch ▾ ]                   │
-│           (filtered to platform=pumpfun, shows           │
-│            symbol · status · short id)                   │
-│                                                          │
-│  Mode:    ( ) Dry run  ( ) Live submit                   │
-│                                                          │
-│  [ RUN TEST ]                                            │
-├──────────────────────────────────────────────────────────┤
-│  RESULT                                                  │
-│  Status:    OK / FAILED                                  │
-│  Tx size:   1232 bytes                                   │
-│  Escrow:    7xKX...abcd                                  │
-│  Mint:      9pM2...ef01    ✓ matches launch              │
-│  Tx sig:    (live only) → solscan link                   │
-│                                                          │
-│  LOGS                                                    │
-│  ┌───────────────────────────────────────────────────┐  │
-│  │ [LOCAL_SIGNING] Loaded escrow keypair: ...        │  │
-│  │ [LOCAL_SIGNING] Loaded mint keypair: ...          │  │
-│  │ [LOCAL_SIGNING] Pool total: 0.85 SOL ...          │  │
-│  │ [LOCAL_SIGNING] Received 1232-byte unsigned tx    │  │
-│  │ [LOCAL_SIGNING] [DRY RUN] Transaction ready ...   │  │
-│  └───────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
-```
+### 3. Tab wiring in `src/pages/AdminPage.tsx`
 
-Behavior:
-- Launch dropdown: filter `launches` (already loaded by AdminPage) to `platform === 'pumpfun'` with `pumpfun_mint_keypair_encrypted != null`. Show all statuses but visually mark which are valid for live mode.
-- Mode: radio group, default `Dry run`. Selecting `Live submit` shows an `AlertDialog` confirmation on click ("This will submit a real transaction on-chain and mark the launch as launched. Proceed?").
-- Run button: disabled until launch + mode chosen. Shows spinner during call.
-- Result card: renders the structured fields from the response.
-- Logs: monospace `<pre>` block, scrollable, copy-to-clipboard button.
-- All errors surfaced via `toast` + inline error state.
+- Keep the `LOCAL SIGNING TEST` tab. Update the props it passes (drop `launches`, drop `adminWallet`), since the new component is self-contained.
+- Keep the `data-[state=active]:text-destructive` styling on the trigger.
 
-### 3. AdminPage wiring
+## What does NOT change
 
-In `src/pages/AdminPage.tsx`:
-- Add new `<TabsTrigger value="local-signing">LOCAL SIGNING TEST</TabsTrigger>` (use `data-[state=active]:text-destructive` like the Recovery tab to signal it's a sensitive tool).
-- Add `<TabsContent value="local-signing">` rendering `<LocalSigningTestTab launches={launches} adminWallet={publicKey!} />`.
+- `executor/src/launchWithLocalSigning.ts` — untouched.
+- `executor/src/executeLaunch.ts` — untouched.
+- `executor/scripts/testLocalSigning.ts` — kept as a Railway-side fallback CLI.
+- `supabase/functions/create-launch-pumpfun/index.ts` — untouched. The admin tab calls it as-is.
+- `supabase/functions/contribute/index.ts` — untouched.
+- The `USE_LOCAL_SIGNING` env flag — already true on Railway, no app-side toggle.
 
-## Security model
+## Behavior the user gets
 
-- Edge function requires admin wallet check via existing `is_admin_wallet` RPC (same pattern as `admin_list_launches`).
-- `ESCROW_ENCRYPTION_KEY`, `SOLANA_RPC_URL`, `SUPABASE_SERVICE_ROLE_KEY` already exist as Supabase secrets — no new secrets needed.
-- Browser never sees keypairs, secret keys, or the admin test token. The CLI's `ADMIN_TEST_TOKEN` gate is replaced by the wallet-based admin check, which is the standard pattern in this codebase.
-- Edge function uses service role only for the launch read + `setLaunched` update on success — same access pattern as `execute-launch`.
-- Live mode requires `status='executing'` (same guardrail as the CLI).
-
-## Out of scope / unchanged
-
-- `executor/src/launchWithLocalSigning.ts` is NOT modified.
-- `executor/scripts/testLocalSigning.ts` CLI remains as the Railway-side fallback.
-- `USE_LOCAL_SIGNING` env flag is NOT touched — this UI bypasses the worker entirely (same as the CLI).
-- Existing Lightning launch flow is unaffected.
-
-## Files
-
-**New**
-- `supabase/functions/test-local-signing/index.ts` — Deno port of `launchWithLocalSigning` with admin gating.
-- `src/components/admin/LocalSigningTestTab.tsx` — UI panel.
-
-**Modified**
-- `src/pages/AdminPage.tsx` — add tab trigger + content.
-- `supabase/config.toml` — register the new function (verify_jwt = true).
-
-## Acceptance
-
-1. Admin opens `/admin`, sees a new "LOCAL SIGNING TEST" tab.
-2. Selecting a pumpfun launch + Dry run + Run shows tx size, both pubkeys, mint-match confirmation, and `[DRY RUN] Transaction ready — not submitted` in the log panel — with zero on-chain or DB side effects.
-3. Selecting Live submit on an `executing` launch (after confirmation dialog) submits the tx, returns a Solscan link, and the launch row flips to `launched`.
-4. Non-admin wallets cannot access the tab and the edge function returns 403 if called directly.
+1. Admin fills the form on the LOCAL SIGNING TEST tab and submits.
+2. `create-launch-pumpfun` runs (Pinata pin, keypair generation, row insert with `status='scheduled'`).
+3. Connected wallet signs the seed contribution; recorded via `contribute`. The launch appears on the homepage immediately and accepts contributions from any wallet under all existing rules (min/max, presale window, etc.).
+4. At `launch_datetime`, the scheduler flips it to `status='executing'`. Railway's executor claims it and, because `USE_LOCAL_SIGNING=true`, runs `launchWithLocalSigning` — no Lightning API call.
+5. On success, status moves to `launched` with the on-chain signature; distribution and fee-claim flows continue as normal.
