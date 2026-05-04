@@ -43,7 +43,9 @@ Deno.serve(async (req) => {
       token_delivery_wallet = null;
     }
 
-    // 2. Verify launch exists, is scheduled, and contribution window is open
+    // 2. Verify launch exists. State checks (status, window) happen AFTER
+    //    on-chain verification so that if SOL has already moved we can
+    //    queue an orphan-refund row instead of stranding it.
     const { data: launch, error: launchErr } = await supabase
       .from("launches")
       .select("*")
@@ -52,23 +54,6 @@ Deno.serve(async (req) => {
 
     if (launchErr || !launch) {
       return errorResponse("Launch not found", 404);
-    }
-
-    if (launch.status !== "scheduled") {
-      return errorResponse(`Launch status is '${launch.status}', contributions only accepted when 'scheduled'`, 400);
-    }
-
-    if (new Date(launch.launch_datetime) <= new Date()) {
-      return errorResponse("Contribution window has closed (launch datetime has passed)", 400);
-    }
-
-    // Close contributions 5 minutes before launch
-    const launchTime = new Date(launch.launch_datetime).getTime();
-    if (launchTime - Date.now() < 5 * 60 * 1000) {
-      return errorResponse(
-        "Contribution window is closed. This launch executes in less than 5 minutes.",
-        400
-      );
     }
 
     // 3. Validate amount against platform-enforced minimum (0.1 SOL).
@@ -194,6 +179,21 @@ Deno.serve(async (req) => {
       );
     }
 
+    // 6.5 Race-condition state check (post on-chain verification).
+    // SOL has already landed in escrow. If launch state has changed since
+    // the user signed (status flipped, window closed), we must STILL record
+    // the contribution — flagged for orphan refund — so the executor can
+    // return the SOL automatically.
+    const launchTime = new Date(launch.launch_datetime).getTime();
+    const stateInvalidReason =
+      launch.status !== "scheduled"
+        ? `This launch is no longer accepting apes (status: ${launch.status}).`
+        : new Date(launch.launch_datetime) <= new Date()
+        ? "Contribution window has closed (launch datetime has passed)."
+        : launchTime - Date.now() < 5 * 60 * 1000
+        ? "Contribution window is closed. This launch executes in less than 5 minutes."
+        : null;
+
     // 7. Insert contribution (unique constraint on tx_signature prevents duplicates)
     const { data: contribution, error: insertErr } = await supabase
       .from("contributions")
@@ -203,6 +203,7 @@ Deno.serve(async (req) => {
         amount_lamports: amount,
         tx_signature,
         token_delivery_wallet,
+        pending_orphan_refund: stateInvalidReason !== null,
       })
       .select("id")
       .single();
@@ -214,6 +215,20 @@ Deno.serve(async (req) => {
       }
       console.error("Insert contribution error:", insertErr);
       return errorResponse(`Failed to record contribution: ${insertErr.message}`, 500);
+    }
+
+    if (stateInvalidReason) {
+      return new Response(
+        JSON.stringify({
+          error: `${stateInvalidReason} Your SOL has been queued for an automatic refund.`,
+          queued_for_refund: true,
+          contribution_id: contribution.id,
+        }),
+        {
+          status: 202,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
     }
 
     return new Response(
