@@ -171,6 +171,55 @@ Deno.serve(async (req) => {
       return errorResponse(`Metadata IPFS upload failed: ${err.message}`, 500);
     }
 
+    // Step 2a (defense-in-depth): also publish to pump.fun's canonical
+    // /api/ipfs endpoint and prefer the metadataUri it returns. PumpPortal
+    // /trade-local fetches and parses the URI synchronously inside the
+    // create handler, and pump.fun's own gateway has zero-second propagation
+    // and never trips their `undefined.toBuffer()` crash path. Self-hosted
+    // Pinata URIs work most of the time but are a documented intermittent
+    // failure mode. Falls back to the Pinata URL if pump.fun is unreachable.
+    try {
+      const pumpForm = new FormData();
+      // Re-fetch the image bytes once for the multipart upload.
+      if (finalImageUrl) {
+        const imgRes = await fetch(finalImageUrl);
+        if (imgRes.ok) {
+          const imgBlob = await imgRes.blob();
+          const ct = imgRes.headers.get("content-type") || "image/png";
+          const ext = ct.split("/")[1]?.split(";")[0] || "png";
+          pumpForm.append("file", imgBlob, `image.${ext}`);
+        }
+      }
+      pumpForm.append("name", token_name);
+      pumpForm.append("symbol", symbolUpper);
+      pumpForm.append("description", description || "");
+      if (twitter_url) pumpForm.append("twitter", twitter_url);
+      if (telegram_url) pumpForm.append("telegram", telegram_url);
+      if (website_url) pumpForm.append("website", website_url);
+      pumpForm.append("showName", "true");
+
+      const pumpCtrl = new AbortController();
+      const pumpTimeout = setTimeout(() => pumpCtrl.abort(), 8_000);
+      const pumpRes = await fetch("https://pump.fun/api/ipfs", {
+        method: "POST",
+        body: pumpForm,
+        signal: pumpCtrl.signal,
+      });
+      clearTimeout(pumpTimeout);
+      if (pumpRes.ok) {
+        const pumpJson = await pumpRes.json().catch(() => null);
+        const pumpUri: string | undefined = pumpJson?.metadataUri;
+        if (pumpUri && /^https?:\/\//.test(pumpUri)) {
+          console.log(`Using pump.fun canonical metadataUri: ${pumpUri}`);
+          ipfsMetadataUrl = pumpUri;
+        }
+      } else {
+        console.warn(`pump.fun /api/ipfs returned ${pumpRes.status}; keeping Pinata URL`);
+      }
+    } catch (pumpErr: any) {
+      console.warn(`pump.fun /api/ipfs upload skipped: ${pumpErr?.message ?? pumpErr}`);
+    }
+
     // Step 2b: Wait for IPFS gateway propagation. PumpPortal validates the URI
     // immediately and rejects launches whose metadata isn't yet retrievable.
     // Poll a few gateways for up to ~15s before giving up.
