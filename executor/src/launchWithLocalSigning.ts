@@ -244,6 +244,12 @@ export async function launchWithLocalSigning(
   LOG(`mint secret bs58 len=${mintField.length} (pubkey=${mintPubkey})`);
   LOG(`uri=${uriField}`);
   LOG(`publicKey type=${typeof launch.escrow_wallet_public_key} len=${pubkeyField.length} value=${pubkeyField}`);
+  LOG(
+    `escrow pubkey check: derived=${escrowKeypair.publicKey.toBase58()} stored=${pubkeyField} match=${
+      escrowKeypair.publicKey.toBase58() === pubkeyField
+    }`
+  );
+  LOG(`mint field bs58 length=${mintField.length} (expected 87 or 88)`);
 
   // Inline diagnostic + fail-fast: confirm the URI we're about to hand to
   // PumpPortal returns valid JSON with non-empty name/symbol/image. If
