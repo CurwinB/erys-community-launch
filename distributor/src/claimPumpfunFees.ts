@@ -214,7 +214,8 @@ async function runFeeClaimCriticalSection(
   launch: Launch,
   connection: Connection,
   escrowKeypair: Keypair,
-  custodialKeypair: Keypair
+  custodialKeypair: Keypair,
+  wallet: PumpPortalWallet,
 ): Promise<{
   claimedLamports: number;
   sweptToEscrowLamports: number;
