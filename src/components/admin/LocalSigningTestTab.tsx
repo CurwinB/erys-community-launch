@@ -359,7 +359,7 @@ export default function LocalSigningTestTab() {
         },
       });
 
-      if (error) throw error;
+      if (error) throw new Error(await extractEdgeError(error));
       if (data?.error) throw new Error(data.error);
 
       const launchId = data.launch_id;
