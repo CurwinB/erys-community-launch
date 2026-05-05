@@ -109,7 +109,8 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
         launch,
         connection,
         escrowKeypair,
-        custodialKeypair
+        custodialKeypair,
+        wallet,
       );
       if (result) {
         claimedLamports = result.claimedLamports;
