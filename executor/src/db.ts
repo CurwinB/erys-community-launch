@@ -39,6 +39,10 @@ export interface Launch {
   processing_fee_tx_signature: string | null;
   is_sponsored: boolean | null;
   sponsored_amount_lamports: number | null;
+  pumpportal_wallet_pubkey: string | null;
+  lightning_wallet_public_key: string | null;
+  lightning_wallet_encrypted_private_key: string | null;
+  lightning_wallet_encrypted_api_key: string | null;
 }
 
 export interface Contribution {
