@@ -9,9 +9,12 @@ import { LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { Coins, Clock, Shield, ArrowDown } from "lucide-react";
 
+type SortKey = "soonest" | "contributors" | "funded";
+
 const Index = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [completedPage, setCompletedPage] = useState(1);
+  const [sortKey, setSortKey] = useState<SortKey>("soonest");
   const LAUNCHES_PER_PAGE = 20;
   const isMobile = useIsMobile();
 
@@ -75,10 +78,40 @@ const Index = () => {
   }, [completedLaunches?.length]);
 
   const totalPages = Math.ceil((liveLaunches?.length || 0) / LAUNCHES_PER_PAGE);
-  const paginatedLaunches = liveLaunches?.slice(
+  const sortedLiveLaunches = (() => {
+    if (!liveLaunches) return [];
+    const arr = [...liveLaunches];
+    if (sortKey === "soonest") {
+      arr.sort(
+        (a, b) =>
+          new Date(a.launch_datetime).getTime() -
+          new Date(b.launch_datetime).getTime(),
+      );
+    } else if (sortKey === "contributors") {
+      arr.sort(
+        (a, b) =>
+          (contributionStats?.[b.id]?.count || 0) -
+          (contributionStats?.[a.id]?.count || 0),
+      );
+    } else if (sortKey === "funded") {
+      arr.sort(
+        (a, b) =>
+          (contributionStats?.[b.id]?.total || 0) -
+          (contributionStats?.[a.id]?.total || 0),
+      );
+    }
+    return arr;
+  })();
+  const paginatedLaunches = sortedLiveLaunches.slice(
     (currentPage - 1) * LAUNCHES_PER_PAGE,
     currentPage * LAUNCHES_PER_PAGE,
-  ) || [];
+  );
+
+  const sortOptions: { key: SortKey; label: string }[] = [
+    { key: "soonest", label: "Soonest" },
+    { key: "contributors", label: "Top Contributors" },
+    { key: "funded", label: "Most Funded" },
+  ];
 
   const totalCompletedPages = Math.ceil((completedLaunches?.length || 0) / LAUNCHES_PER_PAGE);
   const paginatedCompleted = completedLaunches?.slice(
@@ -157,6 +190,32 @@ const Index = () => {
       {/* Live Launches */}
       <section id="launches" className="border-b border-border">
         <div className="container mx-auto px-4 py-16">
+          {liveLaunches && liveLaunches.length > 0 && (
+            <div className="mb-6 flex flex-wrap items-center gap-2">
+              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Sort
+              </span>
+              {sortOptions.map((opt) => {
+                const active = sortKey === opt.key;
+                return (
+                  <button
+                    key={opt.key}
+                    onClick={() => {
+                      setSortKey(opt.key);
+                      setCurrentPage(1);
+                    }}
+                    className={`border px-2 py-1 text-xs transition-colors ${
+                      active
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-card text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {liveLaunchesLoading ? (
             isMobile ? (
               <div className="flex flex-col divide-y divide-border border border-border">
