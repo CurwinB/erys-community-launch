@@ -1,6 +1,7 @@
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 import fetch from "node-fetch";
+import * as crypto from "crypto";
 import { decryptEscrowKey } from "./decrypt";
 import {
   Launch,
@@ -82,18 +83,27 @@ export async function executePumpfunLightningLaunch(
   }
 
   // ---- Pick (or look up) the custodial wallet for this launch ----
-  // If the launch was already assigned a wallet (e.g. a previous attempt),
-  // we honor that exact wallet so retries always touch the same on-chain
-  // accounts. New launches get a deterministic pool selection.
+  // New per-launch model: the Lightning wallet is generated fresh at launch-
+  // creation time and IS the escrow wallet. PumpPortal API key is stored
+  // encrypted on the launch row. Legacy launches (pre-rollout) fall back to
+  // the shared pool via resolveLaunchWallet.
+  const isPerLaunchWallet = !!launch.lightning_wallet_public_key;
   let wallet: PumpPortalWallet;
   try {
-    wallet = resolveLaunchWallet(
-      launch.id,
-      (launch as any).pumpportal_wallet_pubkey ?? null
-    );
-    console.log(
-      `Using PumpPortal custodial wallet slot ${wallet.slot} (${wallet.pubkey})`
-    );
+    if (isPerLaunchWallet) {
+      wallet = buildPerLaunchWallet(launch, escrowKeypair);
+      console.log(
+        `Using per-launch Lightning wallet (${wallet.pubkey}) for launch ${launch.id}`
+      );
+    } else {
+      wallet = resolveLaunchWallet(
+        launch.id,
+        (launch as any).pumpportal_wallet_pubkey ?? null
+      );
+      console.log(
+        `Using pooled PumpPortal custodial wallet slot ${wallet.slot} (${wallet.pubkey})`
+      );
+    }
   } catch (err: any) {
     await setFailed(
       launch.id,
@@ -103,9 +113,9 @@ export async function executePumpfunLightningLaunch(
   }
   const custodialPubkey = wallet.publicKey;
 
-  // Persist the wallet assignment up front so fee-claim + recovery can find
-  // the exact wallet later, even across pool size changes.
-  if (!(launch as any).pumpportal_wallet_pubkey) {
+  // Legacy pool path: persist the wallet assignment up front so fee-claim
+  // + recovery can find the exact wallet later, even across pool changes.
+  if (!isPerLaunchWallet && !(launch as any).pumpportal_wallet_pubkey) {
     const { error: assignErr } = await db
       .from("launches")
       .update({ pumpportal_wallet_pubkey: wallet.pubkey })
@@ -189,9 +199,11 @@ export async function executePumpfunLightningLaunch(
   const contributorCount = BigInt(contributions.length);
   const ataReserve =
     contributorCount * (ATA_COST + TX_FEE + PRIORITY_FEE_PER_CONTRIBUTOR);
-  const fundingTxFee = 5_000n; // escrow → custodial transfer tx
+  // Per-launch model: no escrow→custodial funding tx, no buffer needed.
+  const fundingTxFee = isPerLaunchWallet ? 0n : 5_000n;
+  const fundingBuffer = isPerLaunchWallet ? 0n : CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
   const initialBuyLamports =
-    availableLamports - ataReserve - fundingTxFee - CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
+    availableLamports - ataReserve - fundingTxFee - fundingBuffer;
 
   if (initialBuyLamports < 10_000_000n) {
     await setFailed(
@@ -226,7 +238,8 @@ export async function executePumpfunLightningLaunch(
         escrowKeypair,
         mintKeypair,
         wallet,
-        initialBuyLamports
+        initialBuyLamports,
+        isPerLaunchWallet
       );
     });
   } catch (lockErr: any) {
@@ -249,31 +262,36 @@ async function runCustodialCriticalSection(
   escrowKeypair: Keypair,
   mintKeypair: Keypair,
   wallet: PumpPortalWallet,
-  initialBuyLamports: bigint
+  initialBuyLamports: bigint,
+  isPerLaunchWallet: boolean
 ): Promise<void> {
   const custodialPubkey = wallet.publicKey;
-  // ---- Step 1: Fund the custodial wallet from escrow ----
-  const fundingAmount = initialBuyLamports + CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
-  console.log(
-    `Funding custodial wallet with ${lamportsToSol(fundingAmount)} SOL ` +
-      `(buy: ${lamportsToSol(initialBuyLamports)}, buffer: ${lamportsToSol(
-        CUSTODIAL_FUNDING_BUFFER_LAMPORTS
-      )})`
-  );
-  try {
-    const fundingSig = await fundCustodialWallet(
-      connection,
-      escrowKeypair,
-      fundingAmount,
-      wallet
+  // ---- Step 1: Fund the custodial wallet from escrow (legacy pool only) ----
+  // Per-launch model: contributor SOL already lives in the Lightning wallet
+  // (which IS the escrow), so there's nothing to transfer.
+  if (!isPerLaunchWallet) {
+    const fundingAmount = initialBuyLamports + CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
+    console.log(
+      `Funding custodial wallet with ${lamportsToSol(fundingAmount)} SOL ` +
+        `(buy: ${lamportsToSol(initialBuyLamports)}, buffer: ${lamportsToSol(
+          CUSTODIAL_FUNDING_BUFFER_LAMPORTS
+        )})`
     );
-    console.log(`Custodial funding tx confirmed: ${fundingSig}`);
-  } catch (err: any) {
-    await setFailed(
-      launch.id,
-      `Failed to fund custodial wallet: ${err?.message ?? err}`
-    );
-    return;
+    try {
+      const fundingSig = await fundCustodialWallet(
+        connection,
+        escrowKeypair,
+        fundingAmount,
+        wallet
+      );
+      console.log(`Custodial funding tx confirmed: ${fundingSig}`);
+    } catch (err: any) {
+      await setFailed(
+        launch.id,
+        `Failed to fund custodial wallet: ${err?.message ?? err}`
+      );
+      return;
+    }
   }
 
   // ---- Step 2: Call Lightning create ----
@@ -427,70 +445,71 @@ async function runCustodialCriticalSection(
 
   // landed.status === "succeeded" — mint exists, proceed to token sweep
 
-  // ---- Step 4: Sweep tokens custodial → escrow ATA ----
-  // Retry a few times because the create tx can be confirmed before
-  // the indexer view of the SPL ATA catches up.
-  let tokenSweepResult: { signature: string; amount: bigint } | null = null;
-  let lastSweepErr: any = null;
-  for (let attempt = 1; attempt <= 6; attempt++) {
+  // ---- Step 4 + 5: Sweep tokens + residual SOL custodial → escrow ----
+  // Per-launch model: the custodial wallet IS the escrow, so the dev-buy
+  // tokens and residual SOL are already in the right place. Skip the sweeps.
+  if (!isPerLaunchWallet) {
+    let tokenSweepResult: { signature: string; amount: bigint } | null = null;
+    let lastSweepErr: any = null;
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      try {
+        tokenSweepResult = await sweepTokensToWallet(
+          connection,
+          launch.token_mint_address!,
+          escrowKeypair.publicKey,
+          wallet
+        );
+        break;
+      } catch (sweepErr: any) {
+        lastSweepErr = sweepErr;
+        console.warn(
+          `Token sweep attempt ${attempt}/6 failed: ${
+            sweepErr?.message ?? sweepErr
+          }`
+        );
+        await new Promise((r) => setTimeout(r, 4_000));
+      }
+    }
+    if (!tokenSweepResult) {
+      await markForSweepRecovery(
+        launch.id,
+        `Lightning create succeeded (${launchSignature}) but token sweep failed after retries: ${
+          lastSweepErr?.message ?? lastSweepErr
+        }. Tokens remain in custodial wallet ${custodialPubkey.toBase58()} and will be auto-recovered on next poll.`,
+        launchSignature,
+      );
+      return;
+    }
+    console.log(
+      `Swept ${tokenSweepResult.amount} token base units to escrow: ${tokenSweepResult.signature}`
+    );
+
     try {
-      tokenSweepResult = await sweepTokensToWallet(
+      const solSweep = await sweepSolToWallet(
         connection,
-        launch.token_mint_address!,
         escrowKeypair.publicKey,
         wallet
       );
-      break;
-    } catch (sweepErr: any) {
-      lastSweepErr = sweepErr;
+      if (solSweep) {
+        console.log(
+          `Swept ${lamportsToSol(solSweep.amount)} SOL residual back to escrow: ${
+            solSweep.signature
+          }`
+        );
+      } else {
+        console.log("No residual SOL to sweep above the rent-exempt floor");
+      }
+    } catch (solSweepErr: any) {
       console.warn(
-        `Token sweep attempt ${attempt}/6 failed: ${
-          sweepErr?.message ?? sweepErr
+        `SOL residual sweep failed (non-fatal): ${
+          solSweepErr?.message ?? solSweepErr
         }`
       );
-      await new Promise((r) => setTimeout(r, 4_000));
     }
-  }
-  if (!tokenSweepResult) {
-    // Mint already exists on-chain — SOL is in the bonding curve, refunds
-    // would be partial. Route into sweep_recovery so the next executor
-    // poll re-attempts only the custodial->escrow sweep automatically.
-    await markForSweepRecovery(
-      launch.id,
-      `Lightning create succeeded (${launchSignature}) but token sweep failed after retries: ${
-        lastSweepErr?.message ?? lastSweepErr
-      }. Tokens remain in custodial wallet ${custodialPubkey.toBase58()} and will be auto-recovered on next poll.`,
-      launchSignature,
-    );
-    return;
-  }
-  console.log(
-    `Swept ${tokenSweepResult.amount} token base units to escrow: ${tokenSweepResult.signature}`
-  );
-
-  // ---- Step 5: Sweep residual SOL custodial → escrow (best-effort) ----
-  try {
-    const solSweep = await sweepSolToWallet(
-      connection,
-      escrowKeypair.publicKey,
-      wallet
-    );
-    if (solSweep) {
-      console.log(
-        `Swept ${lamportsToSol(solSweep.amount)} SOL residual back to escrow: ${
-          solSweep.signature
-        }`
-      );
-    } else {
-      console.log("No residual SOL to sweep above the rent-exempt floor");
-    }
-  } catch (solSweepErr: any) {
-    // Non-fatal; the SOL is still in the custodial wallet for the next launch
-    // to consume or for admin sweep.
-    console.warn(
-      `SOL residual sweep failed (non-fatal): ${
-        solSweepErr?.message ?? solSweepErr
-      }`
+  } else {
+    console.log(
+      `Per-launch wallet: skipping custodial→escrow sweeps (already unified). ` +
+        `Tokens + residual SOL remain in ${custodialPubkey.toBase58()}.`
     );
   }
 
@@ -546,6 +565,8 @@ async function trySweepSolBack(
   escrowPubkey: PublicKey,
   wallet: PumpPortalWallet
 ): Promise<void> {
+  // Same wallet on both sides — nothing to sweep.
+  if (wallet.publicKey.equals(escrowPubkey)) return;
   try {
     const sweep = await sweepSolToWallet(connection, escrowPubkey, wallet);
     if (sweep) {
@@ -558,4 +579,53 @@ async function trySweepSolBack(
       `Could not refund custodial SOL after failed create: ${err?.message ?? err}`
     );
   }
+}
+
+// Decrypt the per-launch Lightning wallet credentials and synthesize a
+// PumpPortalWallet that the rest of this file can use uniformly. The
+// keypair is the SAME as the escrow keypair (Lightning wallet IS escrow).
+function buildPerLaunchWallet(
+  launch: Launch,
+  escrowKeypair: Keypair
+): PumpPortalWallet {
+  if (
+    !launch.lightning_wallet_public_key ||
+    !launch.lightning_wallet_encrypted_private_key ||
+    !launch.lightning_wallet_encrypted_api_key
+  ) {
+    throw new Error("launch missing lightning_wallet_* fields");
+  }
+  if (
+    escrowKeypair.publicKey.toBase58() !== launch.lightning_wallet_public_key
+  ) {
+    throw new Error(
+      `escrow keypair ${escrowKeypair.publicKey.toBase58()} does not match lightning_wallet_public_key ${launch.lightning_wallet_public_key}`
+    );
+  }
+  const apiKey = decryptUtf8(launch.lightning_wallet_encrypted_api_key);
+  const pubkey = launch.lightning_wallet_public_key;
+  const publicKey = escrowKeypair.publicKey;
+  return {
+    slot: -1,
+    pubkey,
+    publicKey,
+    keypair: escrowKeypair,
+    apiKey,
+  };
+}
+
+function decryptUtf8(encrypted: string): string {
+  const keyHex = process.env.ESCROW_ENCRYPTION_KEY;
+  if (!keyHex) throw new Error("ESCROW_ENCRYPTION_KEY not set");
+  const parts = encrypted.split(":");
+  if (parts.length !== 3) throw new Error("invalid encrypted format");
+  const [ivHex, tagHex, ctHex] = parts;
+  const iv = Buffer.from(ivHex, "hex");
+  const tag = Buffer.from(tagHex, "hex");
+  const ct = Buffer.from(ctHex, "hex");
+  const key = Buffer.from(keyHex, "hex");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(tag);
+  const plain = Buffer.concat([decipher.update(ct), decipher.final()]);
+  return plain.toString("utf8");
 }
