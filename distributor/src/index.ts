@@ -9,7 +9,7 @@ import {
 import { distributeTokensForLaunch } from "./distribute";
 import { claimPumpfunFeesBatch } from "./claimPumpfunFeesBatch";
 import { claimLocalSigningFeesBatch } from "./claimLocalSigningFees";
-import { getAllWallets } from "./pumpportalWalletPool";
+import { getAllWallets, warmWalletPool } from "./pumpportalWalletPool";
 import { supabase } from "./db";
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "30000");
@@ -99,6 +99,9 @@ async function main(): Promise<void> {
   console.log(`Polling every ${POLL_INTERVAL_MS}ms for pending distributions`);
   console.log(`Connected to Supabase: ${process.env.SUPABASE_URL}`);
   console.log(`Using RPC: ${process.env.SOLANA_RPC_URL?.split("/v2/")[0]}/v2/***`);
+
+  // Warm the hybrid (DB + env) wallet pool before publishing capacity.
+  await warmWalletPool();
 
   try {
     const pool = getAllWallets();
