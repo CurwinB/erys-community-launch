@@ -36,16 +36,49 @@ export async function refundFailedLaunch(launchId: string): Promise<void> {
 
   // Hard guardrail: never auto-refund a Pump.fun launch whose mint exists
   // on-chain. SOL is in the bonding curve; the correct payout is tokens.
+  // Status alone is authoritative for launched/sweep_recovery. A non-null
+  // pumpfun_launch_signature does NOT prove the mint exists — we persist
+  // the signature on `reverted` and `not_landed` failures too. So when
+  // status is execution_failed (or anything else), verify on-chain.
   if (
     launch.platform === "pumpfun" &&
-    (launch.status === "launched" ||
-      launch.status === "sweep_recovery" ||
-      launch.pumpfun_launch_signature)
+    (launch.status === "launched" || launch.status === "sweep_recovery")
   ) {
     console.warn(
-      `refundFailedLaunch: skipping ${launchId} — Pump.fun mint exists on-chain (status=${launch.status}, sig=${launch.pumpfun_launch_signature ?? "<none>"}). Tokens will be distributed instead.`,
+      `refundFailedLaunch: skipping ${launchId} — Pump.fun status=${launch.status}. Tokens will be distributed instead.`,
     );
     return;
+  }
+  if (launch.platform === "pumpfun" && launch.pumpfun_launch_signature) {
+    try {
+      const probe = new Connection(SOLANA_RPC_URL, {
+        commitment: "confirmed",
+        wsEndpoint: SOLANA_WSS_URL,
+      });
+      const status = await probe.getSignatureStatus(
+        launch.pumpfun_launch_signature,
+        { searchTransactionHistory: true },
+      );
+      const v = status?.value;
+      const succeeded =
+        !!v &&
+        !v.err &&
+        (v.confirmationStatus === "confirmed" ||
+          v.confirmationStatus === "finalized");
+      if (succeeded) {
+        console.warn(
+          `refundFailedLaunch: skipping ${launchId} — pumpfun_launch_signature ${launch.pumpfun_launch_signature} confirmed on-chain without error; mint likely exists.`,
+        );
+        return;
+      }
+      console.log(
+        `refundFailedLaunch: pumpfun_launch_signature ${launch.pumpfun_launch_signature} did not confirm successfully (err=${JSON.stringify(v?.err ?? null)}, conf=${v?.confirmationStatus ?? "missing"}); proceeding with refunds.`,
+      );
+    } catch (probeErr: any) {
+      console.warn(
+        `refundFailedLaunch: on-chain probe of ${launch.pumpfun_launch_signature} failed (${probeErr?.message ?? probeErr}); proceeding with refunds for ${launchId}.`,
+      );
+    }
   }
 
   const { data: contributions, error: contribErr } = await supabase
