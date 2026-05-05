@@ -169,17 +169,23 @@ Deno.serve(async (req) => {
       return errorResponse(`Metadata IPFS upload failed: ${err.message}`, 500);
     }
 
-    // Step 2a: Verify the EXACT URL we're about to store is fully fetchable
-    // (JSON parses + image field returns 200). PumpPortal fetches this URL
-    // synchronously inside /trade-local; if it 404s or the `image` it
-    // references is unreachable, PumpPortal crashes with the cryptic
-    // `Cannot read properties of undefined (reading 'toBuffer')` 400. Fail
-    // the create here so the user sees a clear error before contributions
-    // open and funds get pooled.
-    const reachable = await verifyMetadataReachable(ipfsMetadataUrl, 30_000);
+    // Step 2a: Verify metadata via Pinata's AUTHENTICATED gateway. We
+    // intentionally do NOT probe public gateways (ipfs.io / cloudflare)
+    // from the Edge Function — Supabase's shared egress IPs get rate-
+    // limited / 401'd by those gateways, which used to cause spurious
+    // "Metadata URL not reachable" 503s on launches whose metadata was
+    // actually fine. The executor (Railway) does the public-gateway
+    // probe right before /trade-local, which is the network path that
+    // actually matters (it mirrors PumpPortal's own fetch).
+    //
+    // Here we just sanity-check the JSON we uploaded by fetching it back
+    // through Pinata's authenticated gateway with our JWT. If that
+    // returns 200 + parses + has name/symbol/image, we know PumpPortal
+    // will be able to read it from any working IPFS gateway.
+    const reachable = await verifyMetadataViaPinata(metadataCid, PINATA_JWT);
     if (!reachable.ok) {
       return errorResponse(
-        `Metadata URL not reachable in time: ${reachable.reason}. Please retry in a moment.`,
+        `Metadata verification failed: ${reachable.reason}. Please retry in a moment.`,
         503
       );
     }
