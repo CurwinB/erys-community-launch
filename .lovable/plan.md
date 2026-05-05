@@ -1,55 +1,36 @@
-## Root cause
+## Problem
 
-PumpPortal's `/trade-local` with `action: "create"` requires the `mint` field to be the **base58-encoded mint keypair SECRET KEY** (their docs: `mint: bs58.encode(mintKeypair.secretKey)`). We've been sending the mint **public key** (`launch.token_mint_address`). PumpPortal tries to reconstruct the keypair server-side, fails, and crashes with `Cannot read properties of undefined (reading 'toBuffer')` — returned as a generic 400.
+The homepage cards show 0 contributors / 0 SOL, and the launch page's "Recent Apes" feed is empty. Both screens query the `contributions_public` view, which returns nothing.
 
-Every Pump.fun launch since the local-signing path went live has failed for this reason. Metadata, IPFS gateway, and `amount` were red herrings (verified: metadata is 200/valid, amount is a positive Number).
+Root cause is in the security migration shipped earlier today (`20260505112409_...sql`):
 
-## Changes
+- `contributions_public` was switched to `security_invoker = on`, so Postgres now checks the **caller's** privileges on the underlying `public.contributions` table.
+- `public.contributions` has RLS policy `"No direct browser access to contributions"` with `USING (false)` for `public`, AND `anon`/`authenticated` have no column-level `SELECT` grants.
+- Net effect: anon users can read the view's definition but get zero rows.
 
-### 1. `executor/src/launchWithLocalSigning.ts` — fix the request body
+This was never the intent — the view exists precisely to expose the safe public columns (`id, launch_id, wallet_address, amount_lamports, contributed_at`). The sensitive columns (tx signatures, encrypted keys, distribution errors, basis points, refund details, delivery wallets, etc.) are excluded by the view and stay protected.
 
-- We already decrypt `mintKeypair` at the top of the function. Encode its **secret key** (64 bytes) to base58 and send that as `mint`:
-  ```ts
-  import bs58 from "bs58";
-  ...
-  const mintField = bs58.encode(mintKeypair.secretKey); // 87–88 chars
-  ```
-- Remove the existing public-key-based `mintField` derivation and the `mint type/len/value` log line that printed the public key (do NOT log the secret-key bs58 — log only its length).
-- Keep the existing `derivedMint === launch.token_mint_address` sanity check (already there, lines 84–89) — that still validates the keypair matches the stored mint address.
-- Add explicit logging of `amount` type/value right before building the body, per user request:
-  ```ts
-  LOG(`amount type=${typeof requestBody.amount} value=${requestBody.amount} initialBuyLamports=${initialBuyLamports}`);
-  ```
-- Redact `mint` in the `/trade-local request body` log line (it's a private key) — log a placeholder like `"mint":"<redacted 88-char secret>"` instead of the raw body.
+Wallet address is a public Solana pubkey already visible on-chain for every contribution tx — exposing it is consistent with how every Solana explorer works and is required for the "Recent Apes" UX.
 
-### 2. `executor/scripts/testTradeLocalRaw.ts` — new standalone probe
+## Fix
 
-Minimal Node script with **zero** dependencies on our DB / launch row:
+Mirror the same pattern that was just applied to `launches`:
 
-- Generates a fresh `Keypair` for the mint (so no real funds at risk).
-- Uses a hardcoded test wallet pubkey from env (`TEST_WALLET_PUBKEY`) or a throwaway generated one.
-- Hardcoded metadata URI from PumpPortal's own docs example.
-- Sends both variants back-to-back and prints status + body:
-  - **Variant A** (current/broken): `mint: mintKeypair.publicKey.toBase58()`
-  - **Variant B** (per PumpPortal docs): `mint: bs58.encode(mintKeypair.secretKey)`
-- Logs the exact request body (with mint redacted) and full response.
+1. Replace the deny-all SELECT policy on `contributions` with a permissive policy for `anon` + `authenticated`, gated by column-level grants.
+2. Revoke blanket `SELECT` on `public.contributions` from `anon` and `authenticated`.
+3. Grant `SELECT` only on the five safe columns the view exposes:
+   - `id, launch_id, wallet_address, amount_lamports, contributed_at`
+   - Plus `refund_tx_signature` because the view's `WHERE refund_tx_signature IS NULL` filter must be evaluable by the caller under `security_invoker`.
+4. Keep `contributions_public` as `security_invoker = on` (no linter regression).
+5. Service role policies for INSERT/UPDATE stay untouched; no DELETE remains possible.
 
-Run with: `cd executor && npx ts-node scripts/testTradeLocalRaw.ts`
+## Files
 
-This isolates whether the endpoint itself is healthy and proves which `mint` encoding it accepts.
+- New migration: `supabase/migrations/<timestamp>_restore_contributions_public_read.sql`
+- No frontend changes needed — `Index.tsx`, `LaunchPage.tsx`, and `ContributionFeed.tsx` already query `contributions_public` correctly.
 
-### 3. Dependency
+## Out of scope / not changed
 
-`bs58` is already used elsewhere in the executor (decrypt, pumpportal wallet pool). No new install.
-
-## Verification
-
-1. Run `testTradeLocalRaw.ts` — Variant B should return 200 + transaction bytes; Variant A should reproduce the `toBuffer` 400.
-2. Manually re-trigger one of the failed launches via the admin "retry" path and watch Railway logs for `Received N-byte unsigned transaction`.
-3. Confirm the on-chain mint pubkey of the resulting token matches `launch.token_mint_address` (the keypair is reused, so it must).
-
-## Out of scope
-
-- No changes to `create-launch-pumpfun` edge function (mint generation/encryption stays the same).
-- No changes to the Lightning path (`executePumpfunLightning.ts`) — Lightning uses PumpPortal's hosted signing and was never affected.
-- No retroactive refund changes; existing auto-refund flow already handled the failed launches.
+- Sensitive columns on `contributions` (signatures, basis points, token amounts, distribution/refund metadata, delivery wallets, fee-claimer flag) remain inaccessible to anon — only the view's 5 safe columns become readable.
+- Admin queries continue to use service role and are unaffected.
+- Security memory will be updated to record that wallet_address + amount on `contributions_public` is intentionally public, so future scans don't re-flag it.
