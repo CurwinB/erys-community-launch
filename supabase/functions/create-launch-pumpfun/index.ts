@@ -199,17 +199,32 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Step 2: Generate two Ed25519 keypairs (escrow + mint)
-    const escrow = await generateSolanaKeypair();
+    // Step 2: Generate the mint keypair locally (we sign create with it).
     const mint = await generateSolanaKeypair();
-
-    // Step 3: Encrypt both private keys with AES-256-GCM
-    const encryptedEscrowPk = await encryptKey(
-      uint8ArrayToHex(escrow.secretKey),
-      ESCROW_ENCRYPTION_KEY
-    );
     const encryptedMintPk = await encryptKey(
       uint8ArrayToHex(mint.secretKey),
+      ESCROW_ENCRYPTION_KEY
+    );
+
+    // Step 2b: Provision a fresh per-launch PumpPortal Lightning wallet.
+    // This wallet IS the escrow for this launch — contributors send SOL
+    // directly to it, PumpPortal uses it to launch the token, and creator
+    // fees accrue to it. Replaces the previous shared-pool model.
+    let lightning: { pubkey: string; secretKeyHex: string; apiKey: string };
+    try {
+      lightning = await createLightningWallet();
+    } catch (err: any) {
+      return errorResponse(
+        `PumpPortal wallet provisioning unavailable: ${err?.message ?? err}. Please try again.`,
+        503
+      );
+    }
+    const encryptedLightningPk = await encryptKey(
+      lightning.secretKeyHex,
+      ESCROW_ENCRYPTION_KEY
+    );
+    const encryptedLightningApi = await encryptKey(
+      utf8ToHex(lightning.apiKey),
       ESCROW_ENCRYPTION_KEY
     );
 
@@ -227,8 +242,13 @@ Deno.serve(async (req) => {
         launch_datetime: slot.adjustedTime,
         min_contribution_lamports: 100_000_000, // platform-enforced 0.1 SOL
         max_contribution_lamports: null,
-        escrow_wallet_public_key: escrow.publicKey,
-        escrow_wallet_encrypted_private_key: encryptedEscrowPk,
+        // Lightning wallet doubles as escrow — contributors send SOL here
+        // and the executor signs Lightning create with the same key.
+        escrow_wallet_public_key: lightning.pubkey,
+        escrow_wallet_encrypted_private_key: encryptedLightningPk,
+        lightning_wallet_public_key: lightning.pubkey,
+        lightning_wallet_encrypted_private_key: encryptedLightningPk,
+        lightning_wallet_encrypted_api_key: encryptedLightningApi,
         created_by_wallet,
         token_mint_address: mint.publicKey,
         ipfs_metadata_url: ipfsMetadataUrl,
@@ -247,7 +267,7 @@ Deno.serve(async (req) => {
         success: true,
         launch_id: data.id,
         url: `/launch/${data.id}`,
-        escrow_wallet: escrow.publicKey,
+        escrow_wallet: lightning.pubkey,
         mint_address: mint.publicKey,
         adjusted_launch_datetime: slot.adjustedTime,
         original_launch_datetime: slot.originalTime,
