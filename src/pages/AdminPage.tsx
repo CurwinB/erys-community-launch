@@ -15,6 +15,7 @@ import AccountingTab from "@/components/admin/AccountingTab";
 import SponsoredTab from "@/components/admin/SponsoredTab";
 import LocalSigningTestTab from "@/components/admin/LocalSigningTestTab";
 import LightningWalletsTab from "@/components/admin/LightningWalletsTab";
+import FeeHarvestTab from "@/components/admin/FeeHarvestTab";
 import { lamportsToSol } from "@/lib/adminFormat";
 import { useIsAdmin } from "@/hooks/useIsAdmin";
 import { useWallet } from "@/hooks/useWallet";
@@ -160,6 +161,12 @@ const AdminPage = () => {
             >
               Lightning Wallets
             </TabsTrigger>
+            <TabsTrigger
+              value="fee-harvest"
+              className="rounded-none data-[state=active]:bg-background data-[state=active]:text-primary px-4 py-2 font-mono text-xs uppercase tracking-widest"
+            >
+              Fee Harvest
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="launches" className="mt-4">
@@ -195,6 +202,9 @@ const AdminPage = () => {
           </TabsContent>
           <TabsContent value="lightning-wallets" className="mt-4">
             <LightningWalletsTab />
+          </TabsContent>
+          <TabsContent value="fee-harvest" className="mt-4">
+            <FeeHarvestTab />
           </TabsContent>
         </Tabs>
       </div>

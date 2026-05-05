@@ -29,6 +29,8 @@ export interface Launch {
   lightning_wallet_public_key: string | null;
   lightning_wallet_encrypted_private_key: string | null;
   lightning_wallet_encrypted_api_key: string | null;
+  fee_harvest_state?: string | null;
+  fee_harvest_last_success_at?: string | null;
 }
 
 export interface Contribution {

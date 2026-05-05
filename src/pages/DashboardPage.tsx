@@ -12,6 +12,7 @@ import { formatDate, formatInt } from "@/lib/adminFormat";
 import { toast } from "@/hooks/use-toast";
 import { useWallet } from "@/hooks/useWallet";
 import { useDashboardNotifications } from "@/hooks/useDashboardNotifications";
+import ClaimableFeesPanel from "@/components/dashboard/ClaimableFeesPanel";
 import {
   Wallet,
   Coins,
@@ -214,6 +215,7 @@ const DashboardPage = () => {
         </div>
 
         <div className="mt-6">
+          <ClaimableFeesPanel />
           {isLoading ? (
             <div className="space-y-3">
               <Skeleton className="h-24 w-full" />
