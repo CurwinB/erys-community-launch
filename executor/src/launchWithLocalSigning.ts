@@ -173,21 +173,18 @@ export async function launchWithLocalSigning(
   LOG(`Initial buy lamports: ${initialBuyLamports} (${Number(initialBuyLamports) / 1e9} SOL)`);
 
   // ---- Pre-flight metadata reachability check ----
-  // PumpPortal's /trade-local fetches our metadata URI synchronously and
-  // crashes with `Cannot read properties of undefined (reading 'toBuffer')`
-  // (HTTP 400) if the URL or its `image` field can't be loaded. Verify
-  // both are 200 BEFORE we touch /trade-local so we abort cleanly with a
-  // diagnosable error rather than a cryptic toBuffer crash. Refunds will
-  // run normally because we haven't charged the processing fee yet.
+  // Advisory only: public IPFS gateways (ipfs.io / cloudflare / even
+  // dedicated Pinata subdomains) intermittently return 504/429/401 to
+  // Railway's egress IPs. PumpPortal's own fetch runs from a different
+  // network and very often succeeds when ours fails. Log the result but
+  // never abort here — let /trade-local be the source of truth.
   if (!dryRun) {
     const metaCheck = await verifyMetadataReachable(launch.ipfs_metadata_url ?? "");
     if (!metaCheck.ok) {
-      const msg = `Metadata not reachable before /trade-local: ${metaCheck.reason}`;
-      ERR(msg);
-      await setFailed(launch.id, msg);
-      return;
+      WARN(`Metadata pre-flight WARN (advisory only, proceeding to /trade-local): ${metaCheck.reason}`);
+    } else {
+      LOG("Metadata + image pre-flight check passed");
     }
-    LOG("Metadata + image pre-flight check passed");
   }
 
   // ---- Persist BPS (skipped on dry-run) ----
@@ -216,30 +213,26 @@ export async function launchWithLocalSigning(
   // and crashes. Force both to plain strings here and log types so any
   // future regression is immediately diagnosable in Railway logs.
   const mintField = String(launch.token_mint_address ?? "").trim();
-  const originalUri = String(launch.ipfs_metadata_url ?? "").trim();
-  // Pinata's public gateway often rate-limits / returns HTML to server-side
-  // fetchers like PumpPortal, which then crashes with `toBuffer`. Rewrite
-  // to ipfs.io which is more reliable for server-side fetches.
-  const uriField = rewriteToPublicIpfsGateway(originalUri);
+  const uriField = String(launch.ipfs_metadata_url ?? "").trim();
   const pubkeyField = String(launch.escrow_wallet_public_key ?? "").trim();
   LOG(`mint type=${typeof launch.token_mint_address} len=${mintField.length} value=${mintField}`);
-  LOG(`uri original=${originalUri} rewritten=${uriField}`);
+  LOG(`uri=${uriField}`);
   LOG(`publicKey type=${typeof launch.escrow_wallet_public_key} len=${pubkeyField.length} value=${pubkeyField}`);
 
   // Inline diagnostic + fail-fast: confirm the URI we're about to hand to
   // PumpPortal returns valid JSON with non-empty name/symbol/image. If
   // any are missing, abort BEFORE /trade-local so we surface a clean
   // diagnostic instead of PumpPortal's cryptic toBuffer 400.
+  // JSON-shape diagnostic. Only abort when the fetch SUCCEEDS but the
+  // JSON is malformed/missing required fields — that's a deterministic
+  // content bug. Network failures here are advisory; PumpPortal's egress
+  // is what matters and we let /trade-local be the gate.
   {
-    let diagOk = false;
-    let diagReason = "no attempt";
     try {
       const diagRes = await fetch(uriField, { method: "GET" });
       const diagText = await diagRes.text().catch(() => "");
       LOG(`metadata URI diagnostic: status=${diagRes.status} bytes=${diagText.length} body=${diagText.slice(0, 600)}`);
-      if (!diagRes.ok) {
-        diagReason = `metadata GET ${diagRes.status}`;
-      } else {
+      if (diagRes.ok) {
         try {
           const parsed = JSON.parse(diagText);
           const n = typeof parsed?.name === "string" ? parsed.name.trim() : "";
@@ -247,24 +240,21 @@ export async function launchWithLocalSigning(
           const i = typeof parsed?.image === "string" ? parsed.image.trim() : "";
           LOG(`metadata fields: name=${n} symbol=${s} image=${i}`);
           if (!n || !s || !i) {
-            diagReason = `metadata missing required fields (name=${!!n} symbol=${!!s} image=${!!i})`;
-          } else {
-            diagOk = true;
+            const msg = `Aborting before /trade-local: metadata missing required fields (name=${!!n} symbol=${!!s} image=${!!i})`;
+            ERR(msg);
+            if (!dryRun) {
+              await setFailed(launch.id, msg);
+              return;
+            }
           }
         } catch {
-          diagReason = "metadata URI did NOT return valid JSON";
-          LOG(diagReason);
+          WARN("metadata URI fetched OK but did NOT return valid JSON; proceeding (PumpPortal may still parse it)");
         }
+      } else {
+        WARN(`metadata URI diagnostic returned ${diagRes.status} (advisory only, proceeding to /trade-local)`);
       }
     } catch (e: any) {
-      diagReason = `metadata URI diagnostic fetch threw: ${e?.message ?? e}`;
-      LOG(diagReason);
-    }
-    if (!diagOk && !dryRun) {
-      const msg = `Aborting before /trade-local: ${diagReason}`;
-      ERR(msg);
-      await setFailed(launch.id, msg);
-      return;
+      WARN(`metadata URI diagnostic fetch threw: ${e?.message ?? e} (advisory only, proceeding to /trade-local)`);
     }
   }
   if (!mintField || !uriField || !pubkeyField) {
@@ -444,13 +434,16 @@ async function verifyMetadataReachable(
   if (!url || !/^https?:\/\//.test(url)) {
     return { ok: false, reason: `invalid metadata url: ${url}` };
   }
-  const deadline = Date.now() + 12_000;
+  const deadline = Date.now() + 32_000;
   let lastReason = "no attempts";
   let attempt = 0;
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && attempt < 4) {
     attempt++;
     try {
-      const res = await fetch(url, { method: "GET" });
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 8_000);
+      const res = await fetch(url, { method: "GET", signal: ctrl.signal });
+      clearTimeout(t);
       if (!res.ok) {
         lastReason = `metadata GET ${res.status}`;
       } else {
@@ -460,7 +453,7 @@ async function verifyMetadataReachable(
           json = JSON.parse(text);
         } catch {
           lastReason = "metadata not valid JSON";
-          await new Promise((r) => setTimeout(r, 1_000));
+          await new Promise((r) => setTimeout(r, 2_000));
           continue;
         }
         const imageUrl: string | undefined = json?.image;
@@ -468,7 +461,10 @@ async function verifyMetadataReachable(
           return { ok: true };
         }
         try {
-          const imgRes = await fetch(imageUrl, { method: "GET" });
+          const ictrl = new AbortController();
+          const it = setTimeout(() => ictrl.abort(), 8_000);
+          const imgRes = await fetch(imageUrl, { method: "GET", signal: ictrl.signal });
+          clearTimeout(it);
           await imgRes.arrayBuffer().catch(() => undefined);
           if (imgRes.ok) return { ok: true };
           lastReason = `image GET ${imgRes.status}`;
@@ -479,16 +475,7 @@ async function verifyMetadataReachable(
     } catch (e: any) {
       lastReason = `metadata fetch threw: ${e?.message ?? e}`;
     }
-    await new Promise((r) => setTimeout(r, 1_000));
+    await new Promise((r) => setTimeout(r, 2_000));
   }
   return { ok: false, reason: `${lastReason} (after ${attempt} attempts)` };
-}
-
-function rewriteToPublicIpfsGateway(url: string): string {
-  if (!url) return url;
-  const m = url.match(/^https?:\/\/[^/]*pinata[^/]*\/ipfs\/(.+)$/i);
-  if (m) return `https://ipfs.io/ipfs/${m[1]}`;
-  const ipfsProto = url.match(/^ipfs:\/\/(.+)$/i);
-  if (ipfsProto) return `https://ipfs.io/ipfs/${ipfsProto[1]}`;
-  return url;
 }
