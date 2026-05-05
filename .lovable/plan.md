@@ -1,10 +1,9 @@
 # Fix PumpPortal /trade-local create failures
 
 ## Changes
-- `supabase/functions/create-launch-pumpfun/index.ts`: use `https://ipfs.io/ipfs/<cid>` for both image and metadata URI; remove deprecated `pump.fun/api/ipfs` fallback; preflight requires non-empty name/symbol/image.
-- `executor/src/launchWithLocalSigning.ts`: fail-fast inline metadata diagnostic; treat 429 as transient; clarify probe log.
-- `executor/src/executePumpfun.ts`: clarify probe log.
+- `supabase/functions/create-launch-pumpfun/index.ts`: store metadata as `https://ipfs.io/ipfs/<cid>`. Replace public-gateway preflight with `verifyMetadataViaPinata()` — authenticated GET through `gateway.pinata.cloud` using `PINATA_JWT`. Public gateways (ipfs.io / cloudflare) return 401/429 to Supabase Edge egress IPs, which caused spurious "Metadata URL not reachable" 503s.
+- `executor/src/launchWithLocalSigning.ts`: inline metadata diagnostic on Railway egress before /trade-local — that's the network path that mirrors PumpPortal's own fetch.
 - `executor/scripts/rewriteLegacyMetadataUrls.ts`: admin-gated repair script for legacy Pinata URLs in `launches.ipfs_metadata_url`.
 
 ## Why
-PumpPortal's official example uses ipfs.io. gateway.pinata.cloud rate-limits server-side fetchers and triggers their `undefined.toBuffer()` 400 path.
+The Supabase Edge Function and the executor (Railway) have very different egress-IP reputations on public IPFS gateways. The Edge Function should verify via Pinata's authenticated API; only the executor should probe the public gateway.
