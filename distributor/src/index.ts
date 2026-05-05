@@ -9,6 +9,7 @@ import {
 import { distributeTokensForLaunch } from "./distribute";
 import { claimPumpfunFeesBatch } from "./claimPumpfunFeesBatch";
 import { claimLocalSigningFeesBatch } from "./claimLocalSigningFees";
+import { harvestPerLaunchFees } from "./harvestPerLaunchFees";
 import { getAllWallets, warmWalletPool } from "./pumpportalWalletPool";
 import { supabase } from "./db";
 
@@ -80,6 +81,10 @@ async function pollAndClaimFees(): Promise<void> {
       await claimLocalSigningFeesBatch();
       if (Date.now() - before < 1_000) break;
     }
+
+    // Per-launch Lightning wallet harvest path. Splits fees 40/60 and writes
+    // claimable allocation rows for contributors.
+    await harvestPerLaunchFees();
   } catch (err: any) {
     console.error("Error in pollAndClaimFees:", err.message);
   }
