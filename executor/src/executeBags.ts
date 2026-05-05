@@ -426,20 +426,25 @@ export async function executeBagsLaunch(
     (sum, c) => sum + BigInt(c.amount_lamports),
     0n,
   );
+  // Sponsor seed counts toward fee-tier basis (not toward distribution BPS).
+  const sponsorSeedLamports = launch.is_sponsored
+    ? BigInt((launch as any).sponsored_amount_lamports || 0)
+    : 0n;
+  const effectivePoolLamports = totalLamports + sponsorSeedLamports;
 
   // Charge hidden processing fee BEFORE reserve math when total raised
   // meets the threshold. Funds go from escrow → platform treasury.
   // Fee-claimer BPS (below) still uses original contribution amounts so
   // contributors are not penalized in their fee-share allocation.
   let processingFeeLamports = 0n;
-  if (shouldChargeProcessingFee(totalLamports)) {
+  if (shouldChargeProcessingFee(effectivePoolLamports)) {
     try {
       const feeResult = await chargeProcessingFee(
         connection,
         escrowKeypair,
         BAGS_PARTNER_WALLET,
         launch.id,
-        totalLamports,
+        effectivePoolLamports,
         (launch as any).processing_fee_tx_signature ?? null,
       );
       if (feeResult.charged) {

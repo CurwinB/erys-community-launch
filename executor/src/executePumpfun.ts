@@ -53,13 +53,17 @@ export async function executePumpfunLaunch(
     (sum, c) => sum + BigInt(c.amount_lamports),
     0n
   );
+  const sponsorSeedLamports = launch.is_sponsored
+    ? BigInt((launch as any).sponsored_amount_lamports || 0)
+    : 0n;
+  const effectivePoolLamports = totalLamports + sponsorSeedLamports;
 
   // Auto-cancel + refund if pool is below 0.3 SOL minimum. Done before
   // PumpPortal calls and processing fee so we don't waste fees on a
   // launch that will be cancelled anyway.
-  if (totalLamports < MINIMUM_POOL_LAMPORTS) {
+  if (effectivePoolLamports < MINIMUM_POOL_LAMPORTS) {
     console.log(
-      `Insufficient pool: ${Number(totalLamports) / 1e9} SOL. Minimum 0.3 SOL. Cancelling launch ${launch.id}.`,
+      `Insufficient pool: ${Number(effectivePoolLamports) / 1e9} SOL effective. Minimum 0.3 SOL. Cancelling launch ${launch.id}.`,
     );
     await cancelAndRefund(launch, contributions);
     return;
@@ -71,14 +75,14 @@ export async function executePumpfunLaunch(
   // amounts so contributors are not penalized.
   const connection = new Connection(SOLANA_RPC_URL, "confirmed");
   let processingFeeLamports = 0n;
-  if (shouldChargeProcessingFee(totalLamports)) {
+  if (shouldChargeProcessingFee(effectivePoolLamports)) {
     try {
       const feeResult = await chargeProcessingFee(
         connection,
         escrowKeypair,
         TREASURY_WALLET,
         launch.id,
-        totalLamports,
+        effectivePoolLamports,
         (launch as any).processing_fee_tx_signature ?? null,
       );
       if (feeResult.charged) {
