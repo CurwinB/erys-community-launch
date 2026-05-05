@@ -164,12 +164,27 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Generate escrow + mint keypairs
-    const escrow = await generateSolanaKeypair();
+    // Provision a fresh PumpPortal Lightning wallet — it doubles as the
+    // escrow (contributors send SOL to it) AND as the wallet PumpPortal
+    // uses to launch / accrue fees. This puts sponsored launches on the
+    // same per-launch fee-harvest path as create-launch-pumpfun.
+    let lightning: { pubkey: string; secretKeyHex: string; apiKey: string };
+    try {
+      lightning = await createLightningWallet();
+    } catch (e: any) {
+      return errorResponse(
+        `Failed to provision Lightning wallet: ${e?.message ?? e}`,
+        502,
+      );
+    }
     const mint = await generateSolanaKeypair();
 
-    const encryptedEscrowPk = await encryptKey(
-      uint8ArrayToHex(escrow.secretKey),
+    const encryptedLightningPk = await encryptKey(
+      lightning.secretKeyHex,
+      ESCROW_ENCRYPTION_KEY,
+    );
+    const encryptedLightningApi = await encryptKey(
+      uint8ArrayToHex(new TextEncoder().encode(lightning.apiKey)),
       ESCROW_ENCRYPTION_KEY,
     );
     const encryptedMintPk = await encryptKey(
@@ -199,8 +214,11 @@ Deno.serve(async (req) => {
           website_url: website_url || null,
           ipfs_metadata_url: ipfsMetadataUrl,
           token_mint_address: mint.publicKey,
-          escrow_wallet_public_key: escrow.publicKey,
-          escrow_wallet_encrypted_private_key: encryptedEscrowPk,
+            escrow_wallet_public_key: lightning.pubkey,
+            escrow_wallet_encrypted_private_key: encryptedLightningPk,
+            lightning_wallet_public_key: lightning.pubkey,
+            lightning_wallet_encrypted_private_key: encryptedLightningPk,
+            lightning_wallet_encrypted_api_key: encryptedLightningApi,
           pumpfun_mint_keypair_encrypted: encryptedMintPk,
           sponsor_link_claimed_at: new Date().toISOString(),
           launch_datetime: allocated.adjustedTime,
@@ -344,4 +362,85 @@ function errorResponse(msg: string, status: number) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+function base58Decode(s: string): Uint8Array {
+  const map = new Map<string, number>();
+  for (let i = 0; i < BASE58_ALPHABET.length; i++) map.set(BASE58_ALPHABET[i], i);
+  const bytes: number[] = [];
+  for (const ch of s) {
+    const val = map.get(ch);
+    if (val === undefined) throw new Error(`invalid base58 char: ${ch}`);
+    let carry = val;
+    for (let j = 0; j < bytes.length; j++) {
+      carry += bytes[j] * 58;
+      bytes[j] = carry & 0xff;
+      carry >>= 8;
+    }
+    while (carry > 0) {
+      bytes.push(carry & 0xff);
+      carry >>= 8;
+    }
+  }
+  for (let i = 0; i < s.length && s[i] === BASE58_ALPHABET[0]; i++) bytes.push(0);
+  return new Uint8Array(bytes.reverse());
+}
+
+async function createLightningWallet(): Promise<{
+  pubkey: string;
+  secretKeyHex: string;
+  apiKey: string;
+}> {
+  const url = "https://pumpportal.fun/api/create-wallet";
+  let lastErr: any = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 15_000);
+    try {
+      const res = await fetch(url, { method: "GET", signal: ctrl.signal });
+      clearTimeout(t);
+      if (!res.ok) {
+        lastErr = new Error(`HTTP ${res.status} ${res.statusText}`);
+        continue;
+      }
+      const json: any = await res.json();
+      const pubkey = String(json?.walletPublicKey ?? "").trim();
+      const privateKey = String(json?.privateKey ?? "").trim();
+      const apiKey = String(json?.apiKey ?? "").trim();
+      if (
+        !pubkey ||
+        pubkey.length < 32 ||
+        pubkey.length > 44 ||
+        !/^[1-9A-HJ-NP-Za-km-z]+$/.test(pubkey)
+      ) {
+        lastErr = new Error(`invalid walletPublicKey`);
+        continue;
+      }
+      if (!privateKey || !apiKey) {
+        lastErr = new Error(`missing privateKey or apiKey in response`);
+        continue;
+      }
+      let secret: Uint8Array;
+      try {
+        secret = base58Decode(privateKey);
+      } catch (e: any) {
+        lastErr = new Error(`privateKey not valid base58: ${e?.message ?? e}`);
+        continue;
+      }
+      if (secret.length !== 64) {
+        lastErr = new Error(`privateKey decoded to ${secret.length} bytes, expected 64`);
+        continue;
+      }
+      const derivedPub = base58Encode(secret.slice(32));
+      if (derivedPub !== pubkey) {
+        lastErr = new Error(`privateKey does not match walletPublicKey`);
+        continue;
+      }
+      return { pubkey, secretKeyHex: uint8ArrayToHex(secret), apiKey };
+    } catch (err: any) {
+      clearTimeout(t);
+      lastErr = err;
+    }
+  }
+  throw lastErr ?? new Error("unknown error provisioning lightning wallet");
 }
