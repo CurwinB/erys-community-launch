@@ -160,6 +160,9 @@ export type Database = {
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
           launch_datetime: string | null
+          lightning_wallet_encrypted_api_key: string | null
+          lightning_wallet_encrypted_private_key: string | null
+          lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
@@ -221,6 +224,9 @@ export type Database = {
           ipfs_metadata_url?: string | null
           is_sponsored?: boolean | null
           launch_datetime?: string | null
+          lightning_wallet_encrypted_api_key?: string | null
+          lightning_wallet_encrypted_private_key?: string | null
+          lightning_wallet_public_key?: string | null
           max_contribution_lamports?: number | null
           min_contribution_lamports: number
           platform?: string
@@ -282,6 +288,9 @@ export type Database = {
           ipfs_metadata_url?: string | null
           is_sponsored?: boolean | null
           launch_datetime?: string | null
+          lightning_wallet_encrypted_api_key?: string | null
+          lightning_wallet_encrypted_private_key?: string | null
+          lightning_wallet_public_key?: string | null
           max_contribution_lamports?: number | null
           min_contribution_lamports?: number
           platform?: string
@@ -600,6 +609,9 @@ export type Database = {
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
           launch_datetime: string | null
+          lightning_wallet_encrypted_api_key: string | null
+          lightning_wallet_encrypted_private_key: string | null
+          lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
@@ -684,6 +696,9 @@ export type Database = {
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
           launch_datetime: string | null
+          lightning_wallet_encrypted_api_key: string | null
+          lightning_wallet_encrypted_private_key: string | null
+          lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
@@ -754,6 +769,9 @@ export type Database = {
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
           launch_datetime: string | null
+          lightning_wallet_encrypted_api_key: string | null
+          lightning_wallet_encrypted_private_key: string | null
+          lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
@@ -828,6 +846,9 @@ export type Database = {
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
           launch_datetime: string | null
+          lightning_wallet_encrypted_api_key: string | null
+          lightning_wallet_encrypted_private_key: string | null
+          lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
@@ -902,6 +923,9 @@ export type Database = {
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
           launch_datetime: string | null
+          lightning_wallet_encrypted_api_key: string | null
+          lightning_wallet_encrypted_private_key: string | null
+          lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
@@ -972,6 +996,9 @@ export type Database = {
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
           launch_datetime: string | null
+          lightning_wallet_encrypted_api_key: string | null
+          lightning_wallet_encrypted_private_key: string | null
+          lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
@@ -1047,6 +1074,9 @@ export type Database = {
               ipfs_metadata_url: string | null
               is_sponsored: boolean | null
               launch_datetime: string | null
+              lightning_wallet_encrypted_api_key: string | null
+              lightning_wallet_encrypted_private_key: string | null
+              lightning_wallet_public_key: string | null
               max_contribution_lamports: number | null
               min_contribution_lamports: number
               platform: string
@@ -1122,6 +1152,9 @@ export type Database = {
               ipfs_metadata_url: string | null
               is_sponsored: boolean | null
               launch_datetime: string | null
+              lightning_wallet_encrypted_api_key: string | null
+              lightning_wallet_encrypted_private_key: string | null
+              lightning_wallet_public_key: string | null
               max_contribution_lamports: number | null
               min_contribution_lamports: number
               platform: string
@@ -1192,6 +1225,9 @@ export type Database = {
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
           launch_datetime: string | null
+          lightning_wallet_encrypted_api_key: string | null
+          lightning_wallet_encrypted_private_key: string | null
+          lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
@@ -1262,6 +1298,9 @@ export type Database = {
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
           launch_datetime: string | null
+          lightning_wallet_encrypted_api_key: string | null
+          lightning_wallet_encrypted_private_key: string | null
+          lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
@@ -1332,6 +1371,9 @@ export type Database = {
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
           launch_datetime: string | null
+          lightning_wallet_encrypted_api_key: string | null
+          lightning_wallet_encrypted_private_key: string | null
+          lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
           min_contribution_lamports: number
           platform: string
