@@ -1,142 +1,67 @@
+## Problem
 
-# Per-Launch Fee Harvesting & Claimable Distribution
+The launch `31b4b633…` reverted on-chain with `InstructionError [5, Custom: 1]` from the Pump.fun program. The Custom:1 inside the buy CPI = "insufficient SOL on the payer". The Lightning wallet didn't have enough headroom to cover the create+buy transaction's incidental costs.
 
-Adds a scheduled harvester that pulls Pump.fun creator fees from each launch's per-launch Lightning wallet, splits them 40% treasury / 60% contributors (proportional to contribution amount), and exposes a claim flow. No funds are auto-sent to users.
+### Why this regressed for per-launch wallets
 
-## Scope
+In `executor/src/executePumpfunLightning.ts` (lines 196-206), the per-launch path explicitly zeroes out the funding buffer:
 
-This plan covers ONLY launches that use the per-launch Lightning wallet model (`launches.lightning_wallet_public_key IS NOT NULL`). The existing pooled (`claimPumpfunFeesBatch.ts`) and local-signing (`claimLocalSigningFees.ts`) paths are left untouched — they already sweep 100% to treasury and predate the per-launch model.
-
-## State Model
-
-Add a `fee_harvest_state` enum on the launch row plus a small per-launch state machine:
-
-```text
-idle  ──harvest tick──▶  harvesting  ──claim+sweep ok──▶  splitting
-                                │                              │
-                                │                              ▼
-                                │                          allocating
-                                │                              │
-                                ▼                              ▼
-                            harvest_failed               idle (with
-                            (auto-resets after TTL)      new allocations)
+```ts
+const fundingTxFee = isPerLaunchWallet ? 0n : 5_000n;
+const fundingBuffer = isPerLaunchWallet ? 0n : CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
+const initialBuyLamports = availableLamports - ataReserve - fundingTxFee - fundingBuffer;
 ```
 
-- `idle` — eligible for next harvest tick
-- `harvesting` — actively claiming + sweeping; locked to one worker
-- `splitting` — claim landed, computing 40/60 + writing allocation rows
-- `allocating` — writing per-contributor allocation rows (transactional)
-- `harvest_failed` — last cycle errored; auto-reset after TTL
+Then we tell PumpPortal to buy `initialBuyLamports` SOL. With the legacy pooled wallet we *added* a 0.025 SOL buffer on top when funding the custodial wallet (line 273). With the per-launch wallet we don't fund anything — the wallet's full balance is `availableLamports`, and we ask it to spend almost all of that on the buy, leaving only the contributor-distribution ATA reserve untouched.
 
-User claims operate on a **separate** column (`claim_state` on each allocation row) so they never block harvesting. Treasury transfer is part of the harvest tx — not a separate worker — to guarantee atomicity of the 40/60 split.
+The create+buy tx the Lightning API submits has to pay, *out of the same wallet*, all of:
+- mint metadata account rent (~0.00204 SOL)
+- custodial token-account ATA rent (~0.00204 SOL)
+- Pump.fun 1% protocol fee on the buy (~0.0025 on a 0.25 SOL buy)
+- Pump.fun 0.30% creator fee
+- compute + priority fees (~0.001 SOL)
+- network signature fee
 
-## Database changes
+That's roughly 0.01–0.015 SOL of headroom needed *in addition to* the buy amount. With buffer = 0 the wallet runs short mid-CPI and Pump.fun reverts.
 
-New columns on `launches`:
-- `fee_harvest_state text default 'idle'` (`idle|harvesting|splitting|harvest_failed`)
-- `fee_harvest_locked_at timestamptz`
-- `fee_harvest_worker_id text`
-- `fee_harvest_last_attempt_at timestamptz`
-- `fee_harvest_last_error text`
-- `fee_harvest_total_lamports bigint default 0` (lifetime gross harvested)
-- `fee_treasury_total_lamports bigint default 0` (lifetime 40% portion)
-- `fee_contributor_total_lamports bigint default 0` (lifetime 60% portion)
+The reverted run also produced a misleading log line: `refundFailedLaunch: skipping … Pump.fun mint exists on-chain`. The mint does NOT exist (the create instruction reverted), but `setFailedWithSignature` persists `pumpfun_launch_signature`, and `refundFailedLaunch.ts` (lines 39-49) treats *any* non-null signature as proof the mint exists and refuses to refund. So contributors are stuck and not auto-refunded.
 
-New table `fee_harvest_cycles` — one row per successful harvest:
-- `id, launch_id, gross_lamports, treasury_lamports, contributor_lamports`
-- `claim_tx_signature, treasury_tx_signature`
-- `vault_balance_before, escrow_balance_before, escrow_balance_after`
-- `created_at`
+## Fix
 
-New table `fee_allocations` — per-contributor share per cycle:
-- `id, launch_id, cycle_id, contribution_id, wallet_address`
-- `basis_points` (snapshot from contribution at allocation time)
-- `lamports` (this cycle's share)
-- `claim_state text default 'unclaimed'` (`unclaimed|claiming|claimed|failed`)
-- `claim_tx_signature, claim_error, claimed_at`
-- `claim_locked_at, claim_worker_id` (independent lock from harvest)
-- Unique `(cycle_id, contribution_id)`
+### 1. Reserve a launch-tx buffer for per-launch wallets
 
-Materialized rollup view `fee_unclaimed_by_wallet` for the dashboard (sum of `unclaimed` allocations grouped by wallet).
+In `executor/src/executePumpfunLightning.ts`, stop zeroing the buffer for the per-launch path. The buffer doesn't need to cover an escrow→custodial transfer (there is none), but it MUST stay *retained* in the Lightning wallet so the create+buy tx can pay rents + protocol fees.
 
-New SQL functions (SECURITY DEFINER):
-- `claim_launch_for_harvest(worker_id, lock_ttl_seconds)` — `FOR UPDATE SKIP LOCKED` over launches with `lightning_wallet_public_key IS NOT NULL`, `status='launched'`, `fee_harvest_state IN ('idle','harvest_failed')`, and harvest cooldown elapsed. Sets state→`harvesting`.
-- `record_harvest_cycle(launch_id, ..., allocations jsonb)` — inserts cycle row, allocation rows, bumps lifetime totals, sets state→`idle`. All in one transaction.
-- `record_harvest_failure(launch_id, error)` — sets state→`harvest_failed`, stamps error.
-- `claim_allocation_for_user(allocation_id, wallet)` — flips `unclaimed→claiming` only if requester wallet matches. Returns row.
-- `complete_allocation_claim(allocation_id, tx_sig)` / `fail_allocation_claim(allocation_id, error)`.
+Change lines 203-206 to subtract the same `CUSTODIAL_FUNDING_BUFFER_LAMPORTS` from `initialBuyLamports` in both paths. The per-launch path doesn't need `fundingTxFee` (no separate funding tx), but it does need the buffer.
 
-## Harvester worker (new file `distributor/src/harvestPerLaunchFees.ts`)
+Also rename the constant to something accurate (e.g. `LAUNCH_TX_RESERVE_LAMPORTS`) since "funding buffer" no longer matches its meaning in the per-launch model. 0.025 SOL is fine; it stays in the Lightning wallet and any leftover becomes part of the long-term fee-harvest balance.
 
-Runs in the existing distributor process on its own interval (e.g. every 10 min, same as the pooled fee claimer).
+Update the `< 10_000_000n` minimum-buy guard error message to reference both the processing fee and the launch-tx reserve.
 
-Per tick:
+### 2. Fix the auto-refund false-positive on reverted launches
 
-1. **Eligibility & lock** — call `claim_launch_for_harvest`. Skip launches whose vault PDA balance < `10 × estimated gas`. Estimated gas = priority fee + tx base fee + safety margin. Configurable via env `PER_LAUNCH_MIN_HARVEST_MULTIPLIER` (default 10) and `PER_LAUNCH_HARVEST_GAS_ESTIMATE_LAMPORTS` (default ~110k = collect tx + treasury transfer + buffer).
-2. **Peek vault** — read creator vault PDA balance. If below threshold, mark cycle as empty (`record_pumpfun_empty_claim`-style), release lock, continue.
-3. **Claim** — sign Pump.fun `collect_creator_fee` instruction with the launch's decrypted Lightning wallet keypair (same approach as `claimLocalSigningFees.ts`, but per-launch and using the lightning keypair).
-4. **Compute split** — `gross = post_balance - pre_balance` (or `vault_lamports` if we choose to read claim delta from the tx). `treasury = floor(gross * 0.4)`, `contributors = gross - treasury`.
-5. **Treasury transfer** — single `SystemProgram.transfer(lightning_wallet → BAGS_PARTNER_WALLET, treasury_lamports)` signed by the Lightning keypair, in the same critical section.
-6. **Allocate** — read all `contributions` for the launch. Compute each share as `floor(contributors * contribution_lamports / total_contributed_lamports)`. Round-robin the rounding remainder into the largest contributors. Build `allocations[]` JSON.
-7. **Persist** — single RPC `record_harvest_cycle(...)` writes cycle + allocation rows + lifetime totals + sets state→`idle`. The 60% portion stays in the Lightning wallet awaiting claims.
-8. **Failure** — any error → `record_harvest_failure`. State auto-resets via TTL on next tick.
+In `executor/src/refundFailedLaunch.ts` (lines 39-49), the gate currently bails on any non-null `pumpfun_launch_signature`. That's wrong — we explicitly persist the signature on `reverted` and `not_landed` failures (executePumpfunLightning.ts lines 426-443) precisely so they remain traceable, not because tokens exist.
 
-The critical section is wrapped in a per-launch advisory lock (key = lightning wallet pubkey) using the existing `withCustodialLock` helper, so harvest never overlaps with itself or with any user-driven action on that wallet.
+Tighten the gate to only skip when we have positive evidence the mint exists:
+- `status === 'launched'` or `status === 'sweep_recovery'` → skip (current behavior, correct)
+- otherwise (e.g. `status === 'execution_failed'`) → do an on-chain `getSignatureStatus` for `pumpfun_launch_signature`. If `value.err` is set OR the signature isn't found, the mint does NOT exist → proceed with refunds. Only skip if the tx confirmed without error.
 
-## Claim flow (new edge function `claim-fee-allocation`)
+This way reverted launches auto-refund and successful-but-mid-sweep launches still don't.
 
-User-facing endpoint, called from the dashboard:
+### 3. Manually recover the stuck launch
 
-- Input: `{ allocation_ids: uuid[], delivery_wallet?: string }`
-- Validates the caller wallet owns each allocation (via signed message or session-bound wallet — match existing contribution auth pattern).
-- For each allocation:
-  - `claim_allocation_for_user` → flips to `claiming` (independent lock; harvester ignores `claiming` rows).
-  - Queue an on-chain transfer from the launch's Lightning wallet to the user's wallet for `lamports`.
-  - On success → `complete_allocation_claim`. On failure → `fail_allocation_claim` (which flips back to `unclaimed`).
-- Batches multiple allocations across different launches into separate txs (one signer per launch).
+After deploying:
+- Trigger refunds for `31b4b633-ba6a-4af8-8b0b-01ab8ed38a15` via the existing `refund-launch` edge function / admin Refunds tab. (The fix in #2 won't retroactively unstick this one since it's already in `execution_failed` with no auto-retry path; admin action is the intended recovery surface.)
 
-This runs **out-of-band** from the harvester. Even if the user claims while a harvest tick is running, the harvest holds the wallet's advisory lock, so the claim transfer blocks until harvest releases (or the claim queue retries on the next user click). Harvester will not touch allocation rows in `claiming` state.
+## Files to edit
 
-## Concurrency guarantees
+- `executor/src/executePumpfunLightning.ts` — apply buffer to per-launch path; rename constant; tighten min-buy error message
+- `executor/src/refundFailedLaunch.ts` — replace signature-presence check with on-chain status check
 
-| Process | Locks held | Ignores |
-|---|---|---|
-| Harvester | `fee_harvest_state='harvesting'` row lock + Lightning-wallet advisory lock | nothing — first-mover wins via `SKIP LOCKED` |
-| Treasury transfer | Inside harvester critical section | n/a |
-| User claim | `fee_allocations.claim_state='claiming'` row check + same Lightning-wallet advisory lock during the on-chain send | allocations not in `unclaimed` |
+No DB migration, no new env vars, no edge-function changes.
 
-Three guarantees:
-1. A launch cannot be harvested twice — `claim_launch_for_harvest` uses `FOR UPDATE SKIP LOCKED` and flips state atomically.
-2. Treasury transfer cannot run during a harvest cycle — it IS part of the harvest cycle.
-3. Claims cannot interfere with harvest/distribution — they grab the wallet advisory lock for the duration of the on-chain send only, after the allocation row has already been flipped to `claiming`.
+## Out of scope
 
-## Admin & dashboard surface
-
-- **Admin → new "Fee Harvest" tab**: per-launch table (status, last harvest, lifetime gross / treasury / contributor totals, last error, manual "force harvest" button calling a `force_harvest_retry` SQL fn that resets cooldown).
-- **Dashboard → "Claimable fees" section**: groups unclaimed allocations by launch, shows total lamports claimable, "Claim" button per launch (or "Claim all").
-
-## Files to create / edit
-
-Create:
-- `supabase/migrations/<ts>_fee_harvest.sql` — enum, columns, tables, SQL functions, view.
-- `distributor/src/harvestPerLaunchFees.ts` — the new harvester.
-- `supabase/functions/claim-fee-allocation/index.ts` — user claim endpoint.
-- `src/components/admin/FeeHarvestTab.tsx` — admin UI.
-- `src/components/dashboard/ClaimableFeesPanel.tsx` (or extend existing dashboard).
-
-Edit:
-- `distributor/src/index.ts` — wire the harvester into the poll loop alongside `pollAndClaimFees`.
-- `distributor/src/db.ts` — add `Launch` fields, harvester DB helpers.
-- `src/pages/AdminPage.tsx` — register the new tab.
-- `src/pages/DashboardPage.tsx` — add the claimable-fees panel.
-
-Untouched:
-- `claimPumpfunFeesBatch.ts`, `claimLocalSigningFees.ts` (legacy 100%-treasury paths).
-- `executePumpfunLightning.ts` (launch flow).
-- All existing migrations / RLS / contribution flow.
-
-## Open questions
-
-1. **Min harvest threshold** — default proposal is `10 × ~110k lamports ≈ 1.1M lamports (0.0011 SOL)`. OK to use this or want a different multiplier?
-2. **Claim auth** — reuse the existing contribution-flow wallet-signature pattern, or require a fresh signed message per claim batch?
-3. **Allocation snapshot** — compute shares from `contributions` at harvest time (current plan) vs. snapshot once on launch completion. Current plan handles late refunds gracefully but is slightly more compute per cycle.
+- Changing the buffer size (0.025 SOL is well-tested; the issue is that we're applying 0)
+- Pre-flight balance simulation (would catch this earlier but is a larger change)
+- Reworking how `pumpfun_launch_signature` is stored on failure (kept as-is for traceability)
