@@ -222,7 +222,31 @@ const LaunchPage = () => {
       queryClient.invalidateQueries({ queryKey: ["escrowBalance", launch.escrow_wallet_public_key] });
     } catch (err: any) {
       console.error("Contribution error:", err);
-      toast({ title: "Ape failed", description: err.message || "Something went wrong.", variant: "destructive" });
+      const raw = String(err?.message || err || "");
+      let title = "Ape failed";
+      let description = "Something went wrong. Please try again.";
+
+      if (
+        /denied|not allowed by the user agent|user rejected|rejected the request|user denied|NotAllowedError/i.test(raw)
+      ) {
+        title = "Signing cancelled";
+        description = "You declined the wallet signature. Approve the passkey prompt to ape in.";
+      } else if (/insufficient lamports|insufficient funds|0x1\b/i.test(raw)) {
+        const match = raw.match(/insufficient lamports (\d+),\s*need (\d+)/i);
+        if (match) {
+          const haveSol = (Number(match[1]) / 1e9).toFixed(4);
+          const needSol = (Number(match[2]) / 1e9).toFixed(4);
+          description = `Your wallet has ${haveSol} SOL but needs ${needSol} SOL (plus a small network fee). Top up and try again.`;
+        } else {
+          description = "Your wallet doesn't have enough SOL to cover this ape plus network fees.";
+        }
+        title = "Not enough SOL";
+      } else if (/blockhash|expired|timeout/i.test(raw)) {
+        title = "Network hiccup";
+        description = "The Solana network was slow to respond. Please try again.";
+      }
+
+      toast({ title, description, variant: "destructive" });
     } finally {
       setIsContributing(false);
     }
