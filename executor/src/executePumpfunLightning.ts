@@ -565,6 +565,8 @@ async function trySweepSolBack(
   escrowPubkey: PublicKey,
   wallet: PumpPortalWallet
 ): Promise<void> {
+  // Same wallet on both sides — nothing to sweep.
+  if (wallet.publicKey.equals(escrowPubkey)) return;
   try {
     const sweep = await sweepSolToWallet(connection, escrowPubkey, wallet);
     if (sweep) {
@@ -577,4 +579,53 @@ async function trySweepSolBack(
       `Could not refund custodial SOL after failed create: ${err?.message ?? err}`
     );
   }
+}
+
+// Decrypt the per-launch Lightning wallet credentials and synthesize a
+// PumpPortalWallet that the rest of this file can use uniformly. The
+// keypair is the SAME as the escrow keypair (Lightning wallet IS escrow).
+function buildPerLaunchWallet(
+  launch: Launch,
+  escrowKeypair: Keypair
+): PumpPortalWallet {
+  if (
+    !launch.lightning_wallet_public_key ||
+    !launch.lightning_wallet_encrypted_private_key ||
+    !launch.lightning_wallet_encrypted_api_key
+  ) {
+    throw new Error("launch missing lightning_wallet_* fields");
+  }
+  if (
+    escrowKeypair.publicKey.toBase58() !== launch.lightning_wallet_public_key
+  ) {
+    throw new Error(
+      `escrow keypair ${escrowKeypair.publicKey.toBase58()} does not match lightning_wallet_public_key ${launch.lightning_wallet_public_key}`
+    );
+  }
+  const apiKey = decryptUtf8(launch.lightning_wallet_encrypted_api_key);
+  const pubkey = launch.lightning_wallet_public_key;
+  const publicKey = escrowKeypair.publicKey;
+  return {
+    slot: -1,
+    pubkey,
+    publicKey,
+    keypair: escrowKeypair,
+    apiKey,
+  };
+}
+
+function decryptUtf8(encrypted: string): string {
+  const keyHex = process.env.ESCROW_ENCRYPTION_KEY;
+  if (!keyHex) throw new Error("ESCROW_ENCRYPTION_KEY not set");
+  const parts = encrypted.split(":");
+  if (parts.length !== 3) throw new Error("invalid encrypted format");
+  const [ivHex, tagHex, ctHex] = parts;
+  const iv = Buffer.from(ivHex, "hex");
+  const tag = Buffer.from(tagHex, "hex");
+  const ct = Buffer.from(ctHex, "hex");
+  const key = Buffer.from(keyHex, "hex");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(tag);
+  const plain = Buffer.concat([decipher.update(ct), decipher.final()]);
+  return plain.toString("utf8");
 }
