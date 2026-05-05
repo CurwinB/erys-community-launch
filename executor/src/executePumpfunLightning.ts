@@ -1,6 +1,7 @@
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 import fetch from "node-fetch";
+import * as crypto from "crypto";
 import { decryptEscrowKey } from "./decrypt";
 import {
   Launch,
@@ -82,18 +83,27 @@ export async function executePumpfunLightningLaunch(
   }
 
   // ---- Pick (or look up) the custodial wallet for this launch ----
-  // If the launch was already assigned a wallet (e.g. a previous attempt),
-  // we honor that exact wallet so retries always touch the same on-chain
-  // accounts. New launches get a deterministic pool selection.
+  // New per-launch model: the Lightning wallet is generated fresh at launch-
+  // creation time and IS the escrow wallet. PumpPortal API key is stored
+  // encrypted on the launch row. Legacy launches (pre-rollout) fall back to
+  // the shared pool via resolveLaunchWallet.
+  const isPerLaunchWallet = !!launch.lightning_wallet_public_key;
   let wallet: PumpPortalWallet;
   try {
-    wallet = resolveLaunchWallet(
-      launch.id,
-      (launch as any).pumpportal_wallet_pubkey ?? null
-    );
-    console.log(
-      `Using PumpPortal custodial wallet slot ${wallet.slot} (${wallet.pubkey})`
-    );
+    if (isPerLaunchWallet) {
+      wallet = buildPerLaunchWallet(launch, escrowKeypair);
+      console.log(
+        `Using per-launch Lightning wallet (${wallet.pubkey}) for launch ${launch.id}`
+      );
+    } else {
+      wallet = resolveLaunchWallet(
+        launch.id,
+        (launch as any).pumpportal_wallet_pubkey ?? null
+      );
+      console.log(
+        `Using pooled PumpPortal custodial wallet slot ${wallet.slot} (${wallet.pubkey})`
+      );
+    }
   } catch (err: any) {
     await setFailed(
       launch.id,
@@ -103,9 +113,9 @@ export async function executePumpfunLightningLaunch(
   }
   const custodialPubkey = wallet.publicKey;
 
-  // Persist the wallet assignment up front so fee-claim + recovery can find
-  // the exact wallet later, even across pool size changes.
-  if (!(launch as any).pumpportal_wallet_pubkey) {
+  // Legacy pool path: persist the wallet assignment up front so fee-claim
+  // + recovery can find the exact wallet later, even across pool changes.
+  if (!isPerLaunchWallet && !(launch as any).pumpportal_wallet_pubkey) {
     const { error: assignErr } = await db
       .from("launches")
       .update({ pumpportal_wallet_pubkey: wallet.pubkey })
@@ -189,9 +199,11 @@ export async function executePumpfunLightningLaunch(
   const contributorCount = BigInt(contributions.length);
   const ataReserve =
     contributorCount * (ATA_COST + TX_FEE + PRIORITY_FEE_PER_CONTRIBUTOR);
-  const fundingTxFee = 5_000n; // escrow → custodial transfer tx
+  // Per-launch model: no escrow→custodial funding tx, no buffer needed.
+  const fundingTxFee = isPerLaunchWallet ? 0n : 5_000n;
+  const fundingBuffer = isPerLaunchWallet ? 0n : CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
   const initialBuyLamports =
-    availableLamports - ataReserve - fundingTxFee - CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
+    availableLamports - ataReserve - fundingTxFee - fundingBuffer;
 
   if (initialBuyLamports < 10_000_000n) {
     await setFailed(
@@ -226,7 +238,8 @@ export async function executePumpfunLightningLaunch(
         escrowKeypair,
         mintKeypair,
         wallet,
-        initialBuyLamports
+        initialBuyLamports,
+        isPerLaunchWallet
       );
     });
   } catch (lockErr: any) {
