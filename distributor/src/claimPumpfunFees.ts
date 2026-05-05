@@ -16,12 +16,14 @@ import {
   recordPumpfunFeeClaimFailure,
 } from "./db";
 import { withCustodialLock } from "./custodialLock";
+import {
+  getWalletByPubkey,
+  getWalletForLaunch,
+  type PumpPortalWallet,
+} from "./pumpportalWalletPool";
 
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL!;
 const ERYS_PLATFORM_WALLET = process.env.BAGS_PARTNER_WALLET!;
-const PUMPPORTAL_API_KEY = process.env.PUMPPORTAL_API_KEY;
-const PUMPPORTAL_CUSTODIAL_PRIVATE_KEY = process.env.PUMPPORTAL_CUSTODIAL_PRIVATE_KEY;
-const PUMPPORTAL_CUSTODIAL_WALLET = process.env.PUMPPORTAL_CUSTODIAL_WALLET;
 const WORKER_ID =
   process.env.WORKER_ID || process.env.RAILWAY_REPLICA_ID || "distributor-default";
 
@@ -33,40 +35,39 @@ const TX_FEE_RESERVE = 5_000;
 // for the next launch / next fee-claim cycle. Mirrors executor constant.
 const CUSTODIAL_SOL_FLOOR_LAMPORTS = 2_000_000n; // 0.002 SOL
 
-let cachedCustodialKeypair: Keypair | null = null;
-function getCustodialKeypair(): Keypair {
-  if (cachedCustodialKeypair) return cachedCustodialKeypair;
-  if (!PUMPPORTAL_CUSTODIAL_PRIVATE_KEY) {
-    throw new Error("PUMPPORTAL_CUSTODIAL_PRIVATE_KEY env var is not set");
+/**
+ * Resolve which wallet handles fee claiming for this launch. Honors the
+ * `pumpportal_wallet_pubkey` binding stored on the launch row; falls back
+ * to the deterministic pool selection when missing.
+ */
+function resolveWalletForLaunch(launch: Launch): PumpPortalWallet {
+  const stored = (launch as any).pumpportal_wallet_pubkey as string | null;
+  if (stored) {
+    const w = getWalletByPubkey(stored);
+    if (!w) {
+      throw new Error(
+        `Launch ${launch.id} bound to wallet ${stored}, but it is not in the configured pool`,
+      );
+    }
+    return w;
   }
-  const secret = bs58.decode(PUMPPORTAL_CUSTODIAL_PRIVATE_KEY);
-  if (secret.length !== 64) {
-    throw new Error(
-      `PUMPPORTAL_CUSTODIAL_PRIVATE_KEY decoded to ${secret.length} bytes, expected 64`
-    );
-  }
-  cachedCustodialKeypair = Keypair.fromSecretKey(new Uint8Array(secret));
-  if (
-    PUMPPORTAL_CUSTODIAL_WALLET &&
-    cachedCustodialKeypair.publicKey.toBase58() !== PUMPPORTAL_CUSTODIAL_WALLET
-  ) {
-    throw new Error(
-      `PUMPPORTAL_CUSTODIAL_PRIVATE_KEY pubkey mismatch with PUMPPORTAL_CUSTODIAL_WALLET`
-    );
-  }
-  return cachedCustodialKeypair;
+  return getWalletForLaunch(launch.id);
 }
 
 export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
   console.log(`\nChecking Pump.fun fees for launch ${launch.id} (${launch.token_name})`);
 
-  if (!PUMPPORTAL_API_KEY) {
+  let wallet: PumpPortalWallet;
+  try {
+    wallet = resolveWalletForLaunch(launch);
+  } catch (err: any) {
     console.error(
-      `PUMPPORTAL_API_KEY not set; skipping fee claim for launch ${launch.id}`
+      `No wallet available for launch ${launch.id}:`,
+      err?.message ?? err,
     );
     await recordPumpfunFeeClaimFailure(
       launch.id,
-      "PUMPPORTAL_API_KEY env var not set on distributor"
+      `No PumpPortal wallet available: ${err?.message ?? err}`,
     );
     return;
   }
@@ -89,20 +90,7 @@ export async function claimPumpfunFeesForLaunch(launch: Launch): Promise<void> {
 
   // Custodial wallet = on-chain creator since launch was executed via Lightning.
   // Read its pre-claim balance so we can measure how much was actually claimed.
-  let custodialKeypair: Keypair;
-  try {
-    custodialKeypair = getCustodialKeypair();
-  } catch (err: any) {
-    console.error(
-      `Custodial wallet not configured for launch ${launch.id}:`,
-      err?.message ?? err
-    );
-    await recordPumpfunFeeClaimFailure(
-      launch.id,
-      `Custodial wallet not configured: ${err?.message ?? err}`
-    );
-    return;
-  }
+  const custodialKeypair: Keypair = wallet.keypair;
 
   // ============================================================
   // CRITICAL SECTION: serialize custodial-wallet operations.
@@ -263,7 +251,7 @@ async function runFeeClaimCriticalSection(
   try {
     const response = await fetch(
       `https://pumpportal.fun/api/trade?api-key=${encodeURIComponent(
-        PUMPPORTAL_API_KEY!
+        wallet.apiKey
       )}`,
       {
         method: "POST",
