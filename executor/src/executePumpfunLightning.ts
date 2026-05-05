@@ -51,7 +51,17 @@ const WORKER_ID =
 // 0.01 SOL was empirically too small (custodial wallet ran 0.0027 SOL short
 // during the Buy CPI). 0.025 SOL gives comfortable headroom; leftovers are
 // swept back to escrow on success.
-const CUSTODIAL_FUNDING_BUFFER_LAMPORTS = 25_000_000n; // 0.025 SOL
+// Lamports we keep RESERVED in the wallet that submits the Pump.fun
+// create+buy tx, on top of the dev-buy amount and contributor ATA reserve.
+// Must cover: 2x ATA rent (~0.00408), Pump.fun 1% protocol fee, 0.30%
+// creator fee, compute/priority fees, signature fee, and a safety margin.
+// Applies to BOTH the legacy pooled custodial path AND the per-launch
+// Lightning wallet path — in the per-launch model the wallet IS the
+// escrow, so this buffer is simply held back from the buy amount and
+// later becomes part of the harvestable fee balance.
+const LAUNCH_TX_RESERVE_LAMPORTS = 25_000_000n; // 0.025 SOL
+// Backwards-compat alias used by the legacy funding path below.
+const CUSTODIAL_FUNDING_BUFFER_LAMPORTS = LAUNCH_TX_RESERVE_LAMPORTS;
 
 export async function executePumpfunLightningLaunch(
   launch: Launch,
@@ -199,16 +209,17 @@ export async function executePumpfunLightningLaunch(
   const contributorCount = BigInt(contributions.length);
   const ataReserve =
     contributorCount * (ATA_COST + TX_FEE + PRIORITY_FEE_PER_CONTRIBUTOR);
-  // Per-launch model: no escrow→custodial funding tx, no buffer needed.
+  // Per-launch model: no escrow→custodial funding tx (wallet IS escrow),
+  // but we still MUST reserve the launch-tx buffer in the wallet so the
+  // create+buy CPI can pay rents + protocol fees without reverting.
   const fundingTxFee = isPerLaunchWallet ? 0n : 5_000n;
-  const fundingBuffer = isPerLaunchWallet ? 0n : CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
   const initialBuyLamports =
-    availableLamports - ataReserve - fundingTxFee - fundingBuffer;
+    availableLamports - ataReserve - fundingTxFee - LAUNCH_TX_RESERVE_LAMPORTS;
 
   if (initialBuyLamports < 10_000_000n) {
     await setFailed(
       launch.id,
-      `Insufficient SOL after processing fee + reserves. Total: ${totalLamports}, Fee: ${processingFeeLamports}, Available: ${availableLamports}, Net buy: ${initialBuyLamports}`
+      `Insufficient SOL after processing fee + ATA reserve + launch-tx reserve (${LAUNCH_TX_RESERVE_LAMPORTS} lamports). Total: ${totalLamports}, Fee: ${processingFeeLamports}, Available: ${availableLamports}, Net buy: ${initialBuyLamports}`
     );
     return;
   }
