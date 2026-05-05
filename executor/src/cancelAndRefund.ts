@@ -82,9 +82,23 @@ export async function cancelAndRefund(
     return;
   }
 
-  // Sponsored seed (if any) is left in the escrow for
-  // sweepCancelledSponsorEscrows.ts to recover to the treasury after
-  // contributor refunds drain the rest.
+  // Reserve the sponsored seed (if any) so refunds can ONLY draw from
+  // contributor SOL. Without this carve-out, a contributor whose
+  // requested refund exceeds their own deposit would silently be paid
+  // out of the platform-funded sponsor seed, and sweepCancelledSponsorEscrows
+  // would later find an empty escrow and record a 0-lamport recovery
+  // (the platform loses the seed, contributor walks away with extra SOL).
+  const sponsorSeed =
+    (launch as any).is_sponsored
+      ? BigInt((launch as any).sponsored_amount_lamports || 0)
+      : 0n;
+  if (sponsorSeed > 0n) {
+    escrowAvailable =
+      escrowAvailable > sponsorSeed ? escrowAvailable - sponsorSeed : 0n;
+    console.log(
+      `cancelAndRefund ${launch.id}: reserving ${Number(sponsorSeed) / LAMPORTS_PER_SOL} SOL sponsor seed for treasury sweep.`,
+    );
+  }
   let refunded = 0;
   let partial = 0;
   let failed = 0;

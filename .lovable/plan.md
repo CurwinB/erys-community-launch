@@ -1,67 +1,57 @@
-## Problem
+## What happened
 
-The launch `31b4b633…` reverted on-chain with `InstructionError [5, Custom: 1]` from the Pump.fun program. The Custom:1 inside the buy CPI = "insufficient SOL on the payer". The Lightning wallet didn't have enough headroom to cover the create+buy transaction's incidental costs.
+Sponsored launch `ac19ded6-343b-4c17-b768-1d0ee55e5a3d` was cancelled because contributions (0.099995 SOL) didn't meet the 0.3 SOL minimum pool. On-chain trail of escrow `A7totkC3tRv8ub6tVXDdcHQoz9C856CDw6iJz4f5nEyi`:
 
-### Why this regressed for per-launch wallets
-
-In `executor/src/executePumpfunLightning.ts` (lines 196-206), the per-launch path explicitly zeroes out the funding buffer:
-
-```ts
-const fundingTxFee = isPerLaunchWallet ? 0n : 5_000n;
-const fundingBuffer = isPerLaunchWallet ? 0n : CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
-const initialBuyLamports = availableLamports - ataReserve - fundingTxFee - fundingBuffer;
+```
++ 0.099995 SOL  from platform (sponsor seed AMfWsZZGV...)   ← should return to platform
++ 0.099995 SOL  from contributor F46Ai...                   ← should return to contributor
+- 0.099099 SOL  refunded to contributor F46Ai...            ← contributor got BOTH
+   0.000890 SOL rent dust left in escrow
 ```
 
-Then we tell PumpPortal to buy `initialBuyLamports` SOL. With the legacy pooled wallet we *added* a 0.025 SOL buffer on top when funding the custodial wallet (line 273). With the per-launch wallet we don't fund anything — the wallet's full balance is `availableLamports`, and we ask it to spend almost all of that on the buy, leaving only the contributor-distribution ATA reserve untouched.
+The contributor walked away with ~0.198 SOL (their own contribution + the entire 0.1 SOL platform sponsorship). Then `sweepCancelledSponsorEscrows` ran, saw the escrow at rent reserve, and marked recovery complete with `amount=0` — so the platform thinks everything is fine.
 
-The create+buy tx the Lightning API submits has to pay, *out of the same wallet*, all of:
-- mint metadata account rent (~0.00204 SOL)
-- custodial token-account ATA rent (~0.00204 SOL)
-- Pump.fun 1% protocol fee on the buy (~0.0025 on a 0.25 SOL buy)
-- Pump.fun 0.30% creator fee
-- compute + priority fees (~0.001 SOL)
-- network signature fee
+## Root cause
 
-That's roughly 0.01–0.015 SOL of headroom needed *in addition to* the buy amount. With buffer = 0 the wallet runs short mid-CPI and Pump.fun reverts.
+`executor/src/cancelAndRefund.ts` computes `escrowAvailable = balance - RENT_EXEMPT_RESERVE` and pays each contributor `min(requested, escrowAvailable - TX_FEE)`. The comment claims "Sponsored seed is left in the escrow for sweepCancelledSponsorEscrows.ts to recover... after contributor refunds drain the rest" — but the math doesn't reserve it. If the escrow holds (sponsor seed + contributions) and a contributor's `requested` exceeds their own deposit, the refund pulls from the sponsor seed too. Then the sweep worker finds an empty escrow and records nothing.
 
-The reverted run also produced a misleading log line: `refundFailedLaunch: skipping … Pump.fun mint exists on-chain`. The mint does NOT exist (the create instruction reverted), but `setFailedWithSignature` persists `pumpfun_launch_signature`, and `refundFailedLaunch.ts` (lines 39-49) treats *any* non-null signature as proof the mint exists and refuses to refund. So contributors are stuck and not auto-refunded.
+In this case the contributor's `requested` (0.099995 - 0.000005 fee = 0.09999 SOL) was less than `escrowAvailable` (~0.19909 SOL), so the refund paid the full requested amount — which is correct per-contributor — but `escrowAvailable` was double-counted because the sponsor seed was never carved out.
 
 ## Fix
 
-### 1. Reserve a launch-tx buffer for per-launch wallets
+### 1. `executor/src/cancelAndRefund.ts` — carve out sponsor seed before refunds
 
-In `executor/src/executePumpfunLightning.ts`, stop zeroing the buffer for the per-launch path. The buffer doesn't need to cover an escrow→custodial transfer (there is none), but it MUST stay *retained* in the Lightning wallet so the create+buy tx can pay rents + protocol fees.
+When `launch.is_sponsored && launch.sponsored_amount_lamports > 0`, subtract it from `escrowAvailable` up front so refunds can only draw from contributor SOL:
 
-Change lines 203-206 to subtract the same `CUSTODIAL_FUNDING_BUFFER_LAMPORTS` from `initialBuyLamports` in both paths. The per-launch path doesn't need `fundingTxFee` (no separate funding tx), but it does need the buffer.
+```ts
+let escrowAvailable = BigInt(balance) - RENT_EXEMPT_RESERVE;
+const sponsorSeed = launch.is_sponsored
+  ? BigInt(launch.sponsored_amount_lamports || 0)
+  : 0n;
+// Reserve sponsor seed for sweepCancelledSponsorEscrows recovery.
+escrowAvailable = escrowAvailable > sponsorSeed
+  ? escrowAvailable - sponsorSeed
+  : 0n;
+```
 
-Also rename the constant to something accurate (e.g. `LAUNCH_TX_RESERVE_LAMPORTS`) since "funding buffer" no longer matches its meaning in the per-launch model. 0.025 SOL is fine; it stays in the Lightning wallet and any leftover becomes part of the long-term fee-harvest balance.
+This guarantees the sweep worker has the full sponsor seed (minus fees consumed during refund txs, which is already the existing tradeoff) to recover to the treasury. Contributors with un-refundable shortfalls get tracked in `refund_shortfall_lamports` exactly like today.
 
-Update the `< 10_000_000n` minimum-buy guard error message to reference both the processing fee and the launch-tx reserve.
+### 2. Manual recovery for launch `ac19ded6…`
 
-### 2. Fix the auto-refund false-positive on reverted launches
+The 0.1 SOL is gone to the contributor wallet `F46AiunPJYzAZp1WysKNcPy7RphztugX6Zu9Lev69BEK`. Options to surface in chat after the code fix lands:
 
-In `executor/src/refundFailedLaunch.ts` (lines 39-49), the gate currently bails on any non-null `pumpfun_launch_signature`. That's wrong — we explicitly persist the signature on `reverted` and `not_landed` failures (executePumpfunLightning.ts lines 426-443) precisely so they remain traceable, not because tokens exist.
+- (a) Accept the loss as a one-off and document it.
+- (b) Reach out to that wallet's owner (the influencer/contributor) for a manual return.
 
-Tighten the gate to only skip when we have positive evidence the mint exists:
-- `status === 'launched'` or `status === 'sweep_recovery'` → skip (current behavior, correct)
-- otherwise (e.g. `status === 'execution_failed'`) → do an on-chain `getSignatureStatus` for `pumpfun_launch_signature`. If `value.err` is set OR the signature isn't found, the mint does NOT exist → proceed with refunds. Only skip if the tx confirmed without error.
+No on-chain clawback is possible. I'll ask which path you want when we apply the fix.
 
-This way reverted launches auto-refund and successful-but-mid-sweep launches still don't.
+### 3. Optional hardening (call out, don't necessarily implement now)
 
-### 3. Manually recover the stuck launch
-
-After deploying:
-- Trigger refunds for `31b4b633-ba6a-4af8-8b0b-01ab8ed38a15` via the existing `refund-launch` edge function / admin Refunds tab. (The fix in #2 won't retroactively unstick this one since it's already in `execution_failed` with no auto-retry path; admin action is the intended recovery surface.)
+- `sweepCancelledSponsorEscrows.ts` could log a warning when the cancelled-sponsor escrow balance is below `sponsored_amount_lamports - small_buffer` so future leaks are detected immediately rather than silently marked complete.
 
 ## Files to edit
 
-- `executor/src/executePumpfunLightning.ts` — apply buffer to per-launch path; rename constant; tighten min-buy error message
-- `executor/src/refundFailedLaunch.ts` — replace signature-presence check with on-chain status check
+- `executor/src/cancelAndRefund.ts` — add sponsor-seed reservation.
+- (optional) `executor/src/sweepCancelledSponsorEscrows.ts` — add leak warning.
 
-No DB migration, no new env vars, no edge-function changes.
-
-## Out of scope
-
-- Changing the buffer size (0.025 SOL is well-tested; the issue is that we're applying 0)
-- Pre-flight balance simulation (would catch this earlier but is a larger change)
-- Reworking how `pumpfun_launch_signature` is stored on failure (kept as-is for traceability)
+No DB migration, no edge-function changes.
