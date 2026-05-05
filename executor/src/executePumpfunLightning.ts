@@ -445,70 +445,71 @@ async function runCustodialCriticalSection(
 
   // landed.status === "succeeded" — mint exists, proceed to token sweep
 
-  // ---- Step 4: Sweep tokens custodial → escrow ATA ----
-  // Retry a few times because the create tx can be confirmed before
-  // the indexer view of the SPL ATA catches up.
-  let tokenSweepResult: { signature: string; amount: bigint } | null = null;
-  let lastSweepErr: any = null;
-  for (let attempt = 1; attempt <= 6; attempt++) {
+  // ---- Step 4 + 5: Sweep tokens + residual SOL custodial → escrow ----
+  // Per-launch model: the custodial wallet IS the escrow, so the dev-buy
+  // tokens and residual SOL are already in the right place. Skip the sweeps.
+  if (!isPerLaunchWallet) {
+    let tokenSweepResult: { signature: string; amount: bigint } | null = null;
+    let lastSweepErr: any = null;
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      try {
+        tokenSweepResult = await sweepTokensToWallet(
+          connection,
+          launch.token_mint_address!,
+          escrowKeypair.publicKey,
+          wallet
+        );
+        break;
+      } catch (sweepErr: any) {
+        lastSweepErr = sweepErr;
+        console.warn(
+          `Token sweep attempt ${attempt}/6 failed: ${
+            sweepErr?.message ?? sweepErr
+          }`
+        );
+        await new Promise((r) => setTimeout(r, 4_000));
+      }
+    }
+    if (!tokenSweepResult) {
+      await markForSweepRecovery(
+        launch.id,
+        `Lightning create succeeded (${launchSignature}) but token sweep failed after retries: ${
+          lastSweepErr?.message ?? lastSweepErr
+        }. Tokens remain in custodial wallet ${custodialPubkey.toBase58()} and will be auto-recovered on next poll.`,
+        launchSignature,
+      );
+      return;
+    }
+    console.log(
+      `Swept ${tokenSweepResult.amount} token base units to escrow: ${tokenSweepResult.signature}`
+    );
+
     try {
-      tokenSweepResult = await sweepTokensToWallet(
+      const solSweep = await sweepSolToWallet(
         connection,
-        launch.token_mint_address!,
         escrowKeypair.publicKey,
         wallet
       );
-      break;
-    } catch (sweepErr: any) {
-      lastSweepErr = sweepErr;
+      if (solSweep) {
+        console.log(
+          `Swept ${lamportsToSol(solSweep.amount)} SOL residual back to escrow: ${
+            solSweep.signature
+          }`
+        );
+      } else {
+        console.log("No residual SOL to sweep above the rent-exempt floor");
+      }
+    } catch (solSweepErr: any) {
       console.warn(
-        `Token sweep attempt ${attempt}/6 failed: ${
-          sweepErr?.message ?? sweepErr
+        `SOL residual sweep failed (non-fatal): ${
+          solSweepErr?.message ?? solSweepErr
         }`
       );
-      await new Promise((r) => setTimeout(r, 4_000));
     }
-  }
-  if (!tokenSweepResult) {
-    // Mint already exists on-chain — SOL is in the bonding curve, refunds
-    // would be partial. Route into sweep_recovery so the next executor
-    // poll re-attempts only the custodial->escrow sweep automatically.
-    await markForSweepRecovery(
-      launch.id,
-      `Lightning create succeeded (${launchSignature}) but token sweep failed after retries: ${
-        lastSweepErr?.message ?? lastSweepErr
-      }. Tokens remain in custodial wallet ${custodialPubkey.toBase58()} and will be auto-recovered on next poll.`,
-      launchSignature,
-    );
-    return;
-  }
-  console.log(
-    `Swept ${tokenSweepResult.amount} token base units to escrow: ${tokenSweepResult.signature}`
-  );
-
-  // ---- Step 5: Sweep residual SOL custodial → escrow (best-effort) ----
-  try {
-    const solSweep = await sweepSolToWallet(
-      connection,
-      escrowKeypair.publicKey,
-      wallet
-    );
-    if (solSweep) {
-      console.log(
-        `Swept ${lamportsToSol(solSweep.amount)} SOL residual back to escrow: ${
-          solSweep.signature
-        }`
-      );
-    } else {
-      console.log("No residual SOL to sweep above the rent-exempt floor");
-    }
-  } catch (solSweepErr: any) {
-    // Non-fatal; the SOL is still in the custodial wallet for the next launch
-    // to consume or for admin sweep.
-    console.warn(
-      `SOL residual sweep failed (non-fatal): ${
-        solSweepErr?.message ?? solSweepErr
-      }`
+  } else {
+    console.log(
+      `Per-launch wallet: skipping custodial→escrow sweeps (already unified). ` +
+        `Tokens + residual SOL remain in ${custodialPubkey.toBase58()}.`
     );
   }
 
