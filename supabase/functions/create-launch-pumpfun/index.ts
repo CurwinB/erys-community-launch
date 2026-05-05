@@ -169,17 +169,23 @@ Deno.serve(async (req) => {
       return errorResponse(`Metadata IPFS upload failed: ${err.message}`, 500);
     }
 
-    // Step 2a: Verify the EXACT URL we're about to store is fully fetchable
-    // (JSON parses + image field returns 200). PumpPortal fetches this URL
-    // synchronously inside /trade-local; if it 404s or the `image` it
-    // references is unreachable, PumpPortal crashes with the cryptic
-    // `Cannot read properties of undefined (reading 'toBuffer')` 400. Fail
-    // the create here so the user sees a clear error before contributions
-    // open and funds get pooled.
-    const reachable = await verifyMetadataReachable(ipfsMetadataUrl, 30_000);
+    // Step 2a: Verify metadata via Pinata's AUTHENTICATED gateway. We
+    // intentionally do NOT probe public gateways (ipfs.io / cloudflare)
+    // from the Edge Function — Supabase's shared egress IPs get rate-
+    // limited / 401'd by those gateways, which used to cause spurious
+    // "Metadata URL not reachable" 503s on launches whose metadata was
+    // actually fine. The executor (Railway) does the public-gateway
+    // probe right before /trade-local, which is the network path that
+    // actually matters (it mirrors PumpPortal's own fetch).
+    //
+    // Here we just sanity-check the JSON we uploaded by fetching it back
+    // through Pinata's authenticated gateway with our JWT. If that
+    // returns 200 + parses + has name/symbol/image, we know PumpPortal
+    // will be able to read it from any working IPFS gateway.
+    const reachable = await verifyMetadataViaPinata(metadataCid, PINATA_JWT);
     if (!reachable.ok) {
       return errorResponse(
-        `Metadata URL not reachable in time: ${reachable.reason}. Please retry in a moment.`,
+        `Metadata verification failed: ${reachable.reason}. Please retry in a moment.`,
         503
       );
     }
@@ -350,108 +356,56 @@ function errorResponse(msg: string, status: number) {
   );
 }
 
-// Poll public IPFS gateways until the CID is retrievable, or timeout.
-// Pump.fun validates the metadata URI inline and rejects launches whose
-// JSON hasn't propagated yet, so we want at least one gateway to serve it
-// before we hand the URL to PumpPortal.
-async function waitForIpfsPropagation(cid: string, timeoutMs: number): Promise<boolean> {
-  const gateways = [
-    `https://ipfs.io/ipfs/${cid}`,
-    `https://cloudflare-ipfs.com/ipfs/${cid}`,
-    `https://gateway.pinata.cloud/ipfs/${cid}`,
-  ];
-  const deadline = Date.now() + timeoutMs;
-  let attempt = 0;
-  while (Date.now() < deadline) {
-    for (const url of gateways) {
-      try {
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 3_000);
-        const res = await fetch(url, { method: "GET", signal: ctrl.signal });
-        clearTimeout(t);
-        if (res.ok) {
-          // Drain to avoid leaking the response body
-          await res.text().catch(() => undefined);
-          console.log(`IPFS propagation confirmed via ${url} (attempt ${attempt + 1})`);
-          return true;
-        }
-      } catch {
-        // try next gateway
-      }
-    }
-    attempt++;
-    await new Promise((r) => setTimeout(r, 1_500));
-  }
-  return false;
-}
-
-// Verify the metadata URL we're about to hand to PumpPortal is fully
-// resolvable: the URL itself returns 200 with valid JSON, and the `image`
-// field inside that JSON is also reachable (200). If either piece is not
-// ready, PumpPortal's create handler will crash with `toBuffer` 400.
-async function verifyMetadataReachable(
-  url: string,
-  timeoutMs: number
+// Verify the metadata JSON via Pinata's AUTHENTICATED gateway using the
+// JWT we already use for uploads. Authenticated requests are not subject
+// to the harsh anonymous rate-limits that cause `ipfs.io` / shared
+// gateways to return 401/429 to Supabase Edge Function egress IPs.
+//
+// We try a few attempts because Pinata occasionally needs a couple of
+// seconds for a freshly-pinned CID to be served by the gateway.
+async function verifyMetadataViaPinata(
+  cid: string,
+  pinataJwt: string
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const deadline = Date.now() + timeoutMs;
+  const url = `https://gateway.pinata.cloud/ipfs/${cid}`;
+  const maxAttempts = 5;
   let lastReason = "no attempts made";
-  let attempt = 0;
-  while (Date.now() < deadline) {
-    attempt++;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 5_000);
-      const res = await fetch(url, { method: "GET", signal: ctrl.signal });
+      const t = setTimeout(() => ctrl.abort(), 8_000);
+      const res = await fetch(url, {
+        method: "GET",
+        signal: ctrl.signal,
+        headers: { Authorization: `Bearer ${pinataJwt}` },
+      });
       clearTimeout(t);
       if (!res.ok) {
-        lastReason = `metadata GET ${res.status}`;
+        lastReason = `pinata GET ${res.status}`;
       } else {
         const text = await res.text();
         let json: any;
         try {
           json = JSON.parse(text);
         } catch {
-          lastReason = "metadata not valid JSON yet";
+          lastReason = "metadata not valid JSON";
           await new Promise((r) => setTimeout(r, 1_500));
           continue;
         }
-        // PumpPortal reads name/symbol/image synchronously to build the
-        // Metaplex record. Any missing/empty value here will crash their
-        // handler with `undefined.toBuffer()`. Reject early.
         const name = typeof json?.name === "string" ? json.name.trim() : "";
         const symbol = typeof json?.symbol === "string" ? json.symbol.trim() : "";
-        const imageStr = typeof json?.image === "string" ? json.image.trim() : "";
-        if (!name || !symbol || !imageStr) {
-          lastReason = `metadata missing required fields (name=${!!name} symbol=${!!symbol} image=${!!imageStr})`;
-          await new Promise((r) => setTimeout(r, 1_000));
-          continue;
-        }
-        const imageUrl: string | undefined = json?.image;
-        if (!imageUrl || !/^https?:\/\//.test(imageUrl)) {
-          // No HTTP image to verify — JSON is enough.
-          console.log(`Metadata reachable on attempt ${attempt} (no image to verify)`);
+        const image = typeof json?.image === "string" ? json.image.trim() : "";
+        if (!name || !symbol || !image) {
+          lastReason = `metadata missing fields (name=${!!name} symbol=${!!symbol} image=${!!image})`;
+        } else {
+          console.log(`[create-launch-pumpfun] Pinata verify OK on attempt ${attempt}`);
           return { ok: true };
-        }
-        try {
-          const imgCtrl = new AbortController();
-          const it = setTimeout(() => imgCtrl.abort(), 5_000);
-          const imgRes = await fetch(imageUrl, { method: "GET", signal: imgCtrl.signal });
-          clearTimeout(it);
-          // Drain to free socket
-          await imgRes.arrayBuffer().catch(() => undefined);
-          if (imgRes.ok) {
-            console.log(`Metadata + image reachable on attempt ${attempt}`);
-            return { ok: true };
-          }
-          lastReason = `image GET ${imgRes.status}`;
-        } catch (e: any) {
-          lastReason = `image fetch threw: ${e?.message ?? e}`;
         }
       }
     } catch (e: any) {
-      lastReason = `metadata fetch threw: ${e?.message ?? e}`;
+      lastReason = `pinata fetch threw: ${e?.message ?? e}`;
     }
     await new Promise((r) => setTimeout(r, 1_500));
   }
-  return { ok: false, reason: `${lastReason} (after ${attempt} attempts in ${timeoutMs}ms)` };
+  return { ok: false, reason: `${lastReason} (after ${maxAttempts} pinata attempts)` };
 }
