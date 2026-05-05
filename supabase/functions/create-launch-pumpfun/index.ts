@@ -347,6 +347,92 @@ function uint8ArrayToHex(bytes: Uint8Array): string {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+function utf8ToHex(s: string): string {
+  return uint8ArrayToHex(new TextEncoder().encode(s));
+}
+
+function base58Decode(s: string): Uint8Array {
+  if (!s) return new Uint8Array();
+  const bytes: number[] = [];
+  for (const ch of s) {
+    const idx = BASE58_ALPHABET.indexOf(ch);
+    if (idx < 0) throw new Error(`Invalid base58 character: ${ch}`);
+    let carry = idx;
+    for (let j = 0; j < bytes.length; j++) {
+      carry += bytes[j] * 58;
+      bytes[j] = carry & 0xff;
+      carry >>= 8;
+    }
+    while (carry > 0) {
+      bytes.push(carry & 0xff);
+      carry >>= 8;
+    }
+  }
+  // Leading '1's in base58 → leading zero bytes.
+  for (let i = 0; i < s.length && s[i] === BASE58_ALPHABET[0]; i++) bytes.push(0);
+  return new Uint8Array(bytes.reverse());
+}
+
+async function createLightningWallet(): Promise<{
+  pubkey: string;
+  secretKeyHex: string;
+  apiKey: string;
+}> {
+  const url = "https://pumpportal.fun/api/create-wallet";
+  let lastErr: any = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 15_000);
+    try {
+      const res = await fetch(url, { method: "GET", signal: ctrl.signal });
+      clearTimeout(t);
+      if (!res.ok) {
+        lastErr = new Error(`HTTP ${res.status} ${res.statusText}`);
+        continue;
+      }
+      const json: any = await res.json();
+      const pubkey = String(json?.walletPublicKey ?? "").trim();
+      const privateKey = String(json?.privateKey ?? "").trim();
+      const apiKey = String(json?.apiKey ?? "").trim();
+      if (
+        !pubkey ||
+        pubkey.length < 32 ||
+        pubkey.length > 44 ||
+        !/^[1-9A-HJ-NP-Za-km-z]+$/.test(pubkey)
+      ) {
+        lastErr = new Error(`invalid walletPublicKey: ${JSON.stringify(json).slice(0, 200)}`);
+        continue;
+      }
+      if (!privateKey || !apiKey) {
+        lastErr = new Error(`missing privateKey or apiKey in response`);
+        continue;
+      }
+      let secret: Uint8Array;
+      try {
+        secret = base58Decode(privateKey);
+      } catch (e: any) {
+        lastErr = new Error(`privateKey not valid base58: ${e?.message ?? e}`);
+        continue;
+      }
+      if (secret.length !== 64) {
+        lastErr = new Error(`privateKey decoded to ${secret.length} bytes, expected 64`);
+        continue;
+      }
+      // Sanity-check: last 32 bytes of the secret == public key bytes.
+      const derivedPub = base58Encode(secret.slice(32));
+      if (derivedPub !== pubkey) {
+        lastErr = new Error(`privateKey does not match walletPublicKey`);
+        continue;
+      }
+      return { pubkey, secretKeyHex: uint8ArrayToHex(secret), apiKey };
+    } catch (err: any) {
+      clearTimeout(t);
+      lastErr = err;
+    }
+  }
+  throw lastErr ?? new Error("unknown error");
+}
+
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 function base58Encode(bytes: Uint8Array): string {
