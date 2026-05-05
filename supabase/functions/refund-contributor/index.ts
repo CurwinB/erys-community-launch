@@ -83,16 +83,47 @@ Deno.serve(async (req) => {
     // Hard guardrail: never SOL-refund a contributor when the on-chain
     // mint succeeded. The contributor SOL is already in the bonding
     // curve; the only correct payout is tokens via the distributor.
+    // Status alone is authoritative for launched/sweep_recovery. A
+    // non-null pumpfun_launch_signature does NOT prove the mint exists
+    // — we persist the signature on `reverted` and `not_landed`
+    // failures too. So when status is execution_failed (or anything
+    // else), verify on-chain before refusing.
     if (
       launch.platform === "pumpfun" &&
-      (launch.status === "launched" ||
-        launch.status === "sweep_recovery" ||
-        launch.pumpfun_launch_signature)
+      (launch.status === "launched" || launch.status === "sweep_recovery")
     ) {
       return errorResponse(
         "Refund refused: Pump.fun mint already exists on-chain. Contributors must be paid in tokens via the distributor, not SOL.",
         400,
       );
+    }
+    if (launch.platform === "pumpfun" && launch.pumpfun_launch_signature) {
+      try {
+        const probe = new Connection(SOLANA_RPC_URL, "confirmed");
+        const status = await probe.getSignatureStatus(
+          launch.pumpfun_launch_signature,
+          { searchTransactionHistory: true },
+        );
+        const v = status?.value;
+        const succeeded =
+          !!v &&
+          !v.err &&
+          (v.confirmationStatus === "confirmed" ||
+            v.confirmationStatus === "finalized");
+        if (succeeded) {
+          return errorResponse(
+            "Refund refused: Pump.fun mint already exists on-chain. Contributors must be paid in tokens via the distributor, not SOL.",
+            400,
+          );
+        }
+        console.log(
+          `refund-contributor: pumpfun_launch_signature ${launch.pumpfun_launch_signature} did not confirm successfully (err=${JSON.stringify(v?.err ?? null)}, conf=${v?.confirmationStatus ?? "missing"}); proceeding with refund.`,
+        );
+      } catch (probeErr: any) {
+        console.warn(
+          `refund-contributor: on-chain probe of ${launch.pumpfun_launch_signature} failed (${probeErr?.message ?? probeErr}); proceeding with refund.`,
+        );
+      }
     }
 
     const escrowKeyBytes = await decryptEscrowKey(
