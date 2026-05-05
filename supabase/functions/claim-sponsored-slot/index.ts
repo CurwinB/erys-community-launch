@@ -164,12 +164,27 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Generate escrow + mint keypairs
-    const escrow = await generateSolanaKeypair();
+    // Provision a fresh PumpPortal Lightning wallet — it doubles as the
+    // escrow (contributors send SOL to it) AND as the wallet PumpPortal
+    // uses to launch / accrue fees. This puts sponsored launches on the
+    // same per-launch fee-harvest path as create-launch-pumpfun.
+    let lightning: { pubkey: string; secretKeyHex: string; apiKey: string };
+    try {
+      lightning = await createLightningWallet();
+    } catch (e: any) {
+      return errorResponse(
+        `Failed to provision Lightning wallet: ${e?.message ?? e}`,
+        502,
+      );
+    }
     const mint = await generateSolanaKeypair();
 
-    const encryptedEscrowPk = await encryptKey(
-      uint8ArrayToHex(escrow.secretKey),
+    const encryptedLightningPk = await encryptKey(
+      lightning.secretKeyHex,
+      ESCROW_ENCRYPTION_KEY,
+    );
+    const encryptedLightningApi = await encryptKey(
+      uint8ArrayToHex(new TextEncoder().encode(lightning.apiKey)),
       ESCROW_ENCRYPTION_KEY,
     );
     const encryptedMintPk = await encryptKey(
@@ -199,8 +214,11 @@ Deno.serve(async (req) => {
           website_url: website_url || null,
           ipfs_metadata_url: ipfsMetadataUrl,
           token_mint_address: mint.publicKey,
-          escrow_wallet_public_key: escrow.publicKey,
-          escrow_wallet_encrypted_private_key: encryptedEscrowPk,
+            escrow_wallet_public_key: lightning.pubkey,
+            escrow_wallet_encrypted_private_key: encryptedLightningPk,
+            lightning_wallet_public_key: lightning.pubkey,
+            lightning_wallet_encrypted_private_key: encryptedLightningPk,
+            lightning_wallet_encrypted_api_key: encryptedLightningApi,
           pumpfun_mint_keypair_encrypted: encryptedMintPk,
           sponsor_link_claimed_at: new Date().toISOString(),
           launch_datetime: allocated.adjustedTime,
