@@ -152,9 +152,19 @@ export async function executePumpfunLightningLaunch(
   // Runs before processing fee, custodial funding, and any PumpPortal API
   // call so nothing needs to be unwound on a sub-threshold raise.
   const MINIMUM_POOL_LAMPORTS = 300_000_000n; // 0.3 SOL
-  if (totalLamports < MINIMUM_POOL_LAMPORTS) {
+  // Sponsor seed is real, buyable SOL sitting in escrow — count it toward
+  // the minimum-pool gate. Do NOT fold it into totalLamports because that
+  // drives token-distribution basis points, which must reflect contributor
+  // deposits only.
+  const sponsorSeedLamports = launch.is_sponsored
+    ? BigInt((launch as any).sponsored_amount_lamports || 0)
+    : 0n;
+  const effectivePoolLamports = totalLamports + sponsorSeedLamports;
+  if (effectivePoolLamports < MINIMUM_POOL_LAMPORTS) {
     console.log(
-      `Launch ${launch.id} below minimum pool (${totalLamports} < ${MINIMUM_POOL_LAMPORTS}). Cancelling and refunding.`
+      `Launch ${launch.id} below minimum pool ` +
+        `(contrib: ${totalLamports}, sponsor: ${sponsorSeedLamports}, ` +
+        `effective: ${effectivePoolLamports} < ${MINIMUM_POOL_LAMPORTS}). Cancelling and refunding.`
     );
     await cancelAndRefund(launch, contributions);
     return;
