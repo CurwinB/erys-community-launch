@@ -174,14 +174,17 @@ export async function executePumpfunLightningLaunch(
   // when total raised meets threshold. Funds go escrow → platform treasury.
   // Token-distribution BPS (below) still uses original contribution amounts.
   let processingFeeLamports = 0n;
-  if (shouldChargeProcessingFee(totalLamports)) {
+  // Sponsored launches: include the sponsor seed in the fee-tier basis so a
+  // 0.299995 SOL contributor + 0.1 SOL seed launch crosses the 0.3 SOL
+  // threshold. Token-distribution BPS still uses contributor SOL only.
+  if (shouldChargeProcessingFee(effectivePoolLamports)) {
     try {
       const feeResult = await chargeProcessingFee(
         connection,
         escrowKeypair,
         TREASURY_WALLET,
         launch.id,
-        totalLamports,
+        effectivePoolLamports,
         (launch as any).processing_fee_tx_signature ?? null,
       );
       if (feeResult.charged) {
