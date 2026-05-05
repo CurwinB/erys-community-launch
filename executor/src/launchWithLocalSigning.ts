@@ -82,6 +82,24 @@ export async function launchWithLocalSigning(
   const mintSecret = decryptEscrowKey(launch.pumpfun_mint_keypair_encrypted);
   const mintKeypair = Keypair.fromSecretKey(new Uint8Array(mintSecret));
   const derivedMint = mintKeypair.publicKey.toBase58();
+  // ---- Mint keypair byte-level diagnostics ----
+  // Generation path (for reference): create-launch-pumpfun/index.ts builds
+  // a 64-byte Solana secret key as `seed(32) || pubkey(32)` from a PKCS8
+  // Ed25519 export, hex-encodes those 64 bytes, then AES-GCM-encrypts.
+  // decryptEscrowKey returns those raw 64 bytes. So secretKey.length must
+  // be 64 and the bs58 round-trip must also be 64.
+  LOG(`mintKeypair.secretKey length: ${mintKeypair.secretKey.length}`);
+  LOG(
+    `mintKeypair.secretKey bs58 roundtrip length: ${
+      bs58.decode(bs58.encode(mintKeypair.secretKey)).length
+    }`
+  );
+  LOG(`mintKeypair.publicKey: ${mintKeypair.publicKey.toBase58()}`);
+  LOG(
+    `mintKeypair.publicKey === launch.token_mint_address: ${
+      mintKeypair.publicKey.toBase58() === launch.token_mint_address
+    }`
+  );
   if (derivedMint !== launch.token_mint_address) {
     const msg = `Mint keypair mismatch. Stored: ${launch.token_mint_address}, Derived: ${derivedMint}`;
     ERR(msg);
