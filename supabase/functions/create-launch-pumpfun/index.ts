@@ -340,6 +340,7 @@ function base58Encode(bytes: Uint8Array): string {
 }
 
 function errorResponse(msg: string, status: number) {
+  console.error(`[create-launch-pumpfun] ${status}: ${msg}`);
   return new Response(
     JSON.stringify({ error: msg }),
     {

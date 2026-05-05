@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import Seo from "@/components/Seo";
 import { supabase } from "@/integrations/supabase/client";
+import { extractEdgeError } from "@/lib/edgeError";
 import { solToLamports, lamportsToSol } from "@/lib/constants";
 import { useToast } from "@/hooks/use-toast";
 import { useWallet } from "@/hooks/useWallet";
@@ -399,7 +400,10 @@ const SchedulePage = () => {
         },
       });
 
-      if (error) throw error;
+      if (error) {
+        const detail = await extractEdgeError(error);
+        throw new Error(detail);
+      }
       if (data?.error) throw new Error(data.error);
 
       const launchId = data.launch_id;

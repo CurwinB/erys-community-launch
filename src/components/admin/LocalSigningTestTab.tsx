@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import { solToLamports } from "@/lib/constants";
+import { extractEdgeError } from "@/lib/edgeError";
 import { useToast } from "@/hooks/use-toast";
 import { useWallet } from "@/hooks/useWallet";
 import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
@@ -359,7 +360,7 @@ export default function LocalSigningTestTab() {
         },
       });
 
-      if (error) throw error;
+      if (error) throw new Error(await extractEdgeError(error));
       if (data?.error) throw new Error(data.error);
 
       const launchId = data.launch_id;
