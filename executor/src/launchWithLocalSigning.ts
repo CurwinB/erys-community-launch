@@ -232,12 +232,15 @@ export async function launchWithLocalSigning(
   // and crashes. Force both to plain strings here and log types so any
   // future regression is immediately diagnosable in Railway logs.
   // PumpPortal /trade-local with action:"create" expects `mint` to be the
-  // bs58-encoded SECRET KEY of the mint keypair (per their docs: `mint:
-  // bs58.encode(mintKeypair.secretKey)`). Sending the public key here causes
-  // their handler to crash with `Cannot read properties of undefined
-  // (reading 'toBuffer')` returned as a generic 400. The Lightning path in
-  // executePumpfunLightning.ts already does this correctly.
-  const mintField = bs58.encode(mintKeypair.secretKey);
+  // bs58-encoded PUBLIC KEY of the mint keypair (per the official docs at
+  // https://pumpportal.fun/creation — `mint: mintKeypair.publicKey.toBase58()`).
+  // An earlier revision sent bs58(secretKey); that returned 400 "Invalid
+  // public key input". Restored to the documented contract. NOTE: as of
+  // 2026-05-05, /trade-local for action:"create" returns 400 toBuffer
+  // regardless of payload shape — appears to be a PumpPortal-side outage.
+  // Until they fix it, USE_LOCAL_SIGNING should be false; new launches
+  // will go through the Lightning path (executePumpfunLightning.ts).
+  const mintField = mintKeypair.publicKey.toBase58();
   const mintPubkey = mintKeypair.publicKey.toBase58();
   const uriField = String(launch.ipfs_metadata_url ?? "").trim();
   const pubkeyField = String(launch.escrow_wallet_public_key ?? "").trim();
