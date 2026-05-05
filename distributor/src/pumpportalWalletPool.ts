@@ -1,21 +1,25 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
+import * as crypto from "crypto";
+import { supabase } from "./db";
 
 /**
  * PumpPortal custodial wallet pool.
  *
- * Auto-discovers wallets from environment variables. Slot 1 uses the
- * legacy unsuffixed names so single-wallet deployments need no migration.
- * Subsequent slots use _2, _3, _N suffixes:
+ * HYBRID source of truth: Supabase `lightning_wallets` table FIRST, with
+ * legacy Railway env vars as a fallback so launches never go down if the
+ * DB is unreachable or empty.
  *
- *   PUMPPORTAL_CUSTODIAL_WALLET[_N]
- *   PUMPPORTAL_CUSTODIAL_PRIVATE_KEY[_N]
- *   PUMPPORTAL_API_KEY[_N]
- *
- * Adding a new wallet to the pool is purely a secrets + restart operation,
- * no code change required. The loader stops at the first numbered slot
- * whose secrets are missing; partial slots throw at boot with a clear
- * error so misconfiguration fails loudly.
+ * - DB rows: status='active' rows from `lightning_wallets`. Secrets stored
+ *   AES-256-GCM encrypted with ESCROW_ENCRYPTION_KEY (`iv:authTag:ciphertext`
+ *   hex), plaintext = bs58 secret string / api key string.
+ * - Env vars (legacy slot 1 + numbered _N): see envFor() below. Always
+ *   merged in; on dedup-by-pubkey collision the env entry wins so the
+ *   live Railway wallet behaves byte-identically during cutover.
+ * - 60s TTL cache, eagerly warmed on first call, refreshed in background.
+ * - If the DB query fails for any reason we silently keep the previous
+ *   pool (or fall back to env-only for the very first call). Launches
+ *   never block on DB availability.
  */
 
 export interface PumpPortalWallet {
@@ -32,13 +36,16 @@ export interface PumpPortalWallet {
 }
 
 let cachedPool: PumpPortalWallet[] | null = null;
+let cacheExpiresAt = 0;
+let inFlightRefresh: Promise<PumpPortalWallet[]> | null = null;
+const POOL_TTL_MS = 60_000;
 
 function envFor(slot: number, base: string): string | undefined {
   const key = slot === 1 ? base : `${base}_${slot}`;
   return process.env[key];
 }
 
-function buildWallet(slot: number): PumpPortalWallet | null {
+function buildWalletFromEnv(slot: number): PumpPortalWallet | null {
   const pubkeyEnv = envFor(slot, "PUMPPORTAL_CUSTODIAL_WALLET");
   const secretEnv = envFor(slot, "PUMPPORTAL_CUSTODIAL_PRIVATE_KEY");
   const apiKeyEnv = envFor(slot, "PUMPPORTAL_API_KEY");
@@ -77,24 +84,140 @@ function buildWallet(slot: number): PumpPortalWallet | null {
   };
 }
 
-/** Returns all configured wallets (slot 1 first, then 2, 3, ...). */
-export function getAllWallets(): PumpPortalWallet[] {
-  if (cachedPool) return cachedPool;
+function loadEnvWallets(): PumpPortalWallet[] {
   const wallets: PumpPortalWallet[] = [];
-  // Cap at 32 slots to bound work; we'd never realistically run more.
   for (let slot = 1; slot <= 32; slot++) {
-    const w = buildWallet(slot);
+    const w = buildWalletFromEnv(slot);
     if (!w) {
-      // First gap = end of pool. (Skipped slots are not supported on purpose.)
-      if (wallets.length === 0 && slot === 1) {
-        // No wallets at all — let the caller surface the error contextually.
-        return (cachedPool = []);
-      }
+      if (wallets.length === 0 && slot === 1) return [];
       break;
     }
     wallets.push(w);
   }
-  return (cachedPool = wallets);
+  return wallets;
+}
+
+function decryptToString(encrypted: string): string {
+  const encryptionKeyHex = process.env.ESCROW_ENCRYPTION_KEY!;
+  if (!encryptionKeyHex) throw new Error("ESCROW_ENCRYPTION_KEY not set");
+  const [ivHex, authTagHex, ciphertextHex] = encrypted.split(":");
+  if (!ivHex || !authTagHex || !ciphertextHex) {
+    throw new Error("Invalid encrypted format (expected iv:authTag:ciphertext)");
+  }
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    Buffer.from(encryptionKeyHex, "hex"),
+    Buffer.from(ivHex, "hex"),
+  );
+  decipher.setAuthTag(Buffer.from(authTagHex, "hex"));
+  const out = Buffer.concat([
+    decipher.update(Buffer.from(ciphertextHex, "hex")),
+    decipher.final(),
+  ]);
+  return out.toString("utf8");
+}
+
+async function loadDbWallets(): Promise<PumpPortalWallet[]> {
+  const { data, error } = await supabase
+    .from("lightning_wallets")
+    .select("slot, pubkey, encrypted_secret_key, encrypted_api_key, status")
+    .eq("status", "active")
+    .order("slot", { ascending: true });
+  if (error) throw error;
+  const wallets: PumpPortalWallet[] = [];
+  for (const row of data ?? []) {
+    try {
+      const secretBs58 = decryptToString(row.encrypted_secret_key);
+      const apiKey = decryptToString(row.encrypted_api_key);
+      const secretBytes = bs58.decode(secretBs58);
+      if (secretBytes.length !== 64) {
+        console.warn(
+          `[wallet pool] DB slot ${row.slot} (${row.pubkey}) bad secret length ${secretBytes.length}; skipping`,
+        );
+        continue;
+      }
+      const keypair = Keypair.fromSecretKey(new Uint8Array(secretBytes));
+      if (keypair.publicKey.toBase58() !== row.pubkey) {
+        console.warn(
+          `[wallet pool] DB slot ${row.slot} pubkey mismatch (stored ${row.pubkey}, derived ${keypair.publicKey.toBase58()}); skipping`,
+        );
+        continue;
+      }
+      wallets.push({
+        slot: row.slot,
+        pubkey: row.pubkey,
+        publicKey: keypair.publicKey,
+        keypair,
+        apiKey,
+      });
+    } catch (err: any) {
+      console.warn(
+        `[wallet pool] failed to load DB wallet slot ${row.slot}: ${err?.message ?? err}`,
+      );
+    }
+  }
+  return wallets;
+}
+
+async function refreshPool(): Promise<PumpPortalWallet[]> {
+  const envWallets = loadEnvWallets();
+  let dbWallets: PumpPortalWallet[] = [];
+  try {
+    dbWallets = await loadDbWallets();
+  } catch (err: any) {
+    console.warn(
+      `[wallet pool] DB load failed (${err?.message ?? err}); ` +
+        `using env-only fallback (${envWallets.length} wallets)`,
+    );
+    cachedPool = envWallets;
+    cacheExpiresAt = Date.now() + POOL_TTL_MS;
+    return envWallets;
+  }
+
+  // Merge: env wins on pubkey collision so live wallet behavior is identical.
+  const byPubkey = new Map<string, PumpPortalWallet>();
+  for (const w of dbWallets) byPubkey.set(w.pubkey, w);
+  for (const w of envWallets) byPubkey.set(w.pubkey, w);
+
+  const merged = Array.from(byPubkey.values()).sort((a, b) => a.slot - b.slot);
+  if (merged.length === 0 && envWallets.length > 0) {
+    cachedPool = envWallets;
+  } else {
+    cachedPool = merged;
+  }
+  cacheExpiresAt = Date.now() + POOL_TTL_MS;
+  return cachedPool;
+}
+
+function ensurePoolSync(): PumpPortalWallet[] {
+  // Fire-and-forget background refresh if expired and not already refreshing.
+  if (Date.now() >= cacheExpiresAt && !inFlightRefresh) {
+    inFlightRefresh = refreshPool().finally(() => {
+      inFlightRefresh = null;
+    });
+    // First-call cold path: synchronously fall back to env so callers don't
+    // have to await. The next call after refresh completes will see DB rows.
+    if (cachedPool === null) {
+      cachedPool = loadEnvWallets();
+      cacheExpiresAt = Date.now() + 5_000; // short TTL until first DB load lands
+    }
+  }
+  return cachedPool ?? [];
+}
+
+/** Eagerly warm the pool. Call once at boot. */
+export async function warmWalletPool(): Promise<void> {
+  try {
+    await refreshPool();
+    console.log(`[wallet pool] warmed: ${cachedPool?.length ?? 0} wallets`);
+  } catch (err: any) {
+    console.warn(`[wallet pool] warm failed: ${err?.message ?? err}`);
+  }
+}
+
+/** Returns all configured wallets (slot 1 first, then 2, 3, ...). */
+export function getAllWallets(): PumpPortalWallet[] {
+  return ensurePoolSync();
 }
 
 /** Throws if no wallets are configured. */
@@ -102,7 +225,8 @@ export function requireWallets(): PumpPortalWallet[] {
   const wallets = getAllWallets();
   if (wallets.length === 0) {
     throw new Error(
-      "No PumpPortal custodial wallets configured. Set PUMPPORTAL_CUSTODIAL_WALLET, PUMPPORTAL_CUSTODIAL_PRIVATE_KEY, and PUMPPORTAL_API_KEY."
+      "No PumpPortal custodial wallets available (DB + env both empty). " +
+        "Add one via the admin Lightning Wallets tab, or set PUMPPORTAL_CUSTODIAL_WALLET/_PRIVATE_KEY/API_KEY.",
     );
   }
   return wallets;
@@ -135,4 +259,6 @@ export function getWalletForLaunch(launchId: string): PumpPortalWallet {
 /** For tests / hot-reload scenarios. */
 export function _resetPoolCache(): void {
   cachedPool = null;
+  cacheExpiresAt = 0;
+  inFlightRefresh = null;
 }
