@@ -326,6 +326,48 @@ export type Database = {
         }
         Relationships: []
       }
+      lightning_wallets: {
+        Row: {
+          created_at: string
+          encrypted_api_key: string
+          encrypted_secret_key: string
+          id: string
+          last_used_at: string | null
+          launch_count: number
+          notes: string | null
+          pubkey: string
+          slot: number
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          encrypted_api_key: string
+          encrypted_secret_key: string
+          id?: string
+          last_used_at?: string | null
+          launch_count?: number
+          notes?: string | null
+          pubkey: string
+          slot: number
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          encrypted_api_key?: string
+          encrypted_secret_key?: string
+          id?: string
+          last_used_at?: string | null
+          launch_count?: number
+          notes?: string | null
+          pubkey?: string
+          slot?: number
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       platform_fee_claims: {
         Row: {
           amount_lamports: number
@@ -606,6 +648,20 @@ export type Database = {
           isOneToOne: false
           isSetofReturn: true
         }
+      }
+      admin_list_lightning_wallets: {
+        Args: { p_admin_wallet: string }
+        Returns: {
+          created_at: string
+          id: string
+          last_used_at: string
+          launch_count: number
+          notes: string
+          pubkey: string
+          slot: number
+          status: string
+          updated_at: string
+        }[]
       }
       admin_list_pumpfun_fee_health: {
         Args: { p_admin_wallet: string }
