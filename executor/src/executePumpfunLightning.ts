@@ -262,31 +262,36 @@ async function runCustodialCriticalSection(
   escrowKeypair: Keypair,
   mintKeypair: Keypair,
   wallet: PumpPortalWallet,
-  initialBuyLamports: bigint
+  initialBuyLamports: bigint,
+  isPerLaunchWallet: boolean
 ): Promise<void> {
   const custodialPubkey = wallet.publicKey;
-  // ---- Step 1: Fund the custodial wallet from escrow ----
-  const fundingAmount = initialBuyLamports + CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
-  console.log(
-    `Funding custodial wallet with ${lamportsToSol(fundingAmount)} SOL ` +
-      `(buy: ${lamportsToSol(initialBuyLamports)}, buffer: ${lamportsToSol(
-        CUSTODIAL_FUNDING_BUFFER_LAMPORTS
-      )})`
-  );
-  try {
-    const fundingSig = await fundCustodialWallet(
-      connection,
-      escrowKeypair,
-      fundingAmount,
-      wallet
+  // ---- Step 1: Fund the custodial wallet from escrow (legacy pool only) ----
+  // Per-launch model: contributor SOL already lives in the Lightning wallet
+  // (which IS the escrow), so there's nothing to transfer.
+  if (!isPerLaunchWallet) {
+    const fundingAmount = initialBuyLamports + CUSTODIAL_FUNDING_BUFFER_LAMPORTS;
+    console.log(
+      `Funding custodial wallet with ${lamportsToSol(fundingAmount)} SOL ` +
+        `(buy: ${lamportsToSol(initialBuyLamports)}, buffer: ${lamportsToSol(
+          CUSTODIAL_FUNDING_BUFFER_LAMPORTS
+        )})`
     );
-    console.log(`Custodial funding tx confirmed: ${fundingSig}`);
-  } catch (err: any) {
-    await setFailed(
-      launch.id,
-      `Failed to fund custodial wallet: ${err?.message ?? err}`
-    );
-    return;
+    try {
+      const fundingSig = await fundCustodialWallet(
+        connection,
+        escrowKeypair,
+        fundingAmount,
+        wallet
+      );
+      console.log(`Custodial funding tx confirmed: ${fundingSig}`);
+    } catch (err: any) {
+      await setFailed(
+        launch.id,
+        `Failed to fund custodial wallet: ${err?.message ?? err}`
+      );
+      return;
+    }
   }
 
   // ---- Step 2: Call Lightning create ----
