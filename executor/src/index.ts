@@ -5,7 +5,7 @@ import { executeAllPendingLaunches } from "./executeLaunch";
 import { fundAllPendingSponsoredEscrows } from "./fundSponsoredEscrow";
 import { sweepAllCancelledSponsorEscrows } from "./sweepCancelledSponsorEscrows";
 import { refundOrphanContributions } from "./refundOrphanContributions";
-import { getAllWallets } from "./pumpportalWalletPool";
+import { getAllWallets, warmWalletPool } from "./pumpportalWalletPool";
 import { supabase } from "./db";
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "30000");
@@ -54,6 +54,13 @@ async function main(): Promise<void> {
     `SOLANA_WSS_URL override set: ${process.env.SOLANA_WSS_URL ? "yes" : "no (derived from SOLANA_RPC_URL)"}`
   );
 
+  // Auto-seed the legacy Railway env wallet into lightning_wallets if it
+  // isn't already there. Idempotent — runs once per cold boot.
+  await seedLightningWalletFromEnv();
+
+  // Warm the hybrid (DB + env) wallet pool before publishing capacity.
+  await warmWalletPool();
+
   // Publish PumpPortal wallet pool size so the scheduling edge functions
   // know the current Pump.fun per-minute capacity. Failure is non-fatal —
   // schedule defaults to 1.
@@ -95,3 +102,31 @@ main().catch((err) => {
   console.error("Fatal error:", err);
   process.exit(1);
 });
+
+async function seedLightningWalletFromEnv(): Promise<void> {
+  const url = process.env.SUPABASE_URL;
+  if (!url) return;
+  const fnUrl = `${url.replace(/\/$/, "")}/functions/v1/seed-lightning-wallet-from-env`;
+  try {
+    const res = await fetch(fnUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""}`,
+      },
+      body: "{}",
+    });
+    const json: any = await res.json().catch(() => ({}));
+    if (json?.seeded) {
+      console.log(
+        `[lightning-wallets] Seeded env wallet at slot ${json.slot} (${json.pubkey})`,
+      );
+    } else if (json?.alreadyPresent) {
+      console.log(`[lightning-wallets] Env wallet already in DB at slot ${json.slot}`);
+    } else {
+      console.log(`[lightning-wallets] Seed result: ${JSON.stringify(json)}`);
+    }
+  } catch (err: any) {
+    console.warn(`[lightning-wallets] Seed call failed (non-fatal): ${err?.message ?? err}`);
+  }
+}
