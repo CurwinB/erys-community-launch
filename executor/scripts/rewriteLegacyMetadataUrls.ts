@@ -1,10 +1,9 @@
 /**
- * Rewrite `launches.ipfs_metadata_url` rows that still point at
- * gateway.pinata.cloud to https://ipfs.io/ipfs/<cid>. PumpPortal's
- * /trade-local create handler crashes with `undefined.toBuffer()` when
- * its server-side fetch of the URI gets rate-limited / served HTML by
- * Pinata's shared free-tier gateway. ipfs.io matches PumpPortal's own
- * official example exactly.
+ * Rewrite legacy `launches.ipfs_metadata_url` rows to use the dedicated
+ * Pinata gateway (PINATA_GATEWAY_DOMAIN). Covers:
+ *   - https://*.pinata.cloud/ipfs/<cid>     (shared free-tier gateway)
+ *   - https://ipfs.io/ipfs/<cid>            (rate-limits / 504s on egress)
+ *   - ipfs://<cid>
  *
  * USAGE:
  *   cd executor
@@ -36,12 +35,28 @@ gate();
 const apply = process.argv.includes("--apply");
 log(apply ? "MODE: --apply (writes will occur)" : "MODE: dry-run");
 
+const GATEWAY = (process.env.PINATA_GATEWAY_DOMAIN ?? "")
+  .trim()
+  .replace(/^https?:\/\//, "")
+  .replace(/\/.*$/, "");
+if (!GATEWAY) {
+  err("PINATA_GATEWAY_DOMAIN is not set in env. Refusing to rewrite without a target gateway.");
+  process.exit(1);
+}
+const target = (cid: string) => `https://${GATEWAY}/ipfs/${cid}`;
+
 function rewrite(url: string | null): string | null {
   if (!url) return url;
-  const m = url.match(/^https?:\/\/[^/]*pinata[^/]*\/ipfs\/(.+)$/i);
-  if (m) return `https://ipfs.io/ipfs/${m[1]}`;
+  // Already on the dedicated gateway — leave alone.
+  if (url.startsWith(`https://${GATEWAY}/ipfs/`)) return url;
+  const pinata = url.match(/^https?:\/\/[^/]*pinata[^/]*\/ipfs\/(.+)$/i);
+  if (pinata) return target(pinata[1]);
+  const ipfsIo = url.match(/^https?:\/\/[^/]*ipfs\.io\/ipfs\/(.+)$/i);
+  if (ipfsIo) return target(ipfsIo[1]);
+  const cf = url.match(/^https?:\/\/[^/]*cloudflare-ipfs[^/]*\/ipfs\/(.+)$/i);
+  if (cf) return target(cf[1]);
   const ipfsProto = url.match(/^ipfs:\/\/(.+)$/i);
-  if (ipfsProto) return `https://ipfs.io/ipfs/${ipfsProto[1]}`;
+  if (ipfsProto) return target(ipfsProto[1]);
   return url;
 }
 
@@ -51,14 +66,14 @@ async function main(): Promise<void> {
     .from("launches")
     .select("id, status, ipfs_metadata_url")
     .or(
-      "ipfs_metadata_url.ilike.%pinata.cloud%,ipfs_metadata_url.ilike.ipfs://%"
+      "ipfs_metadata_url.ilike.%pinata.cloud%,ipfs_metadata_url.ilike.%ipfs.io%,ipfs_metadata_url.ilike.%cloudflare-ipfs%,ipfs_metadata_url.ilike.ipfs://%"
     );
   if (error) {
     err(`Query failed: ${error.message}`);
     process.exit(1);
   }
   if (!data || data.length === 0) {
-    log("No legacy Pinata/ipfs:// metadata URLs found. Nothing to do.");
+    log("No legacy public-gateway metadata URLs found. Nothing to do.");
     return;
   }
   log(`Found ${data.length} launch row(s) with legacy URLs.`);

@@ -26,6 +26,21 @@ Deno.serve(async (req) => {
     return errorResponse("PINATA_JWT secret is not configured", 500);
   }
 
+  // Pinata dedicated gateway (e.g. "your-name.mypinata.cloud"). Account-
+  // isolated rate limits, much more reliable than ipfs.io for PumpPortal's
+  // server-side fetch. Falls back to ipfs.io if not configured.
+  const PINATA_GATEWAY_DOMAIN = (Deno.env.get("PINATA_GATEWAY_DOMAIN") ?? "")
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/.*$/, "");
+  const buildIpfsUrl = (cid: string): string =>
+    PINATA_GATEWAY_DOMAIN
+      ? `https://${PINATA_GATEWAY_DOMAIN}/ipfs/${cid}`
+      : `https://ipfs.io/ipfs/${cid}`;
+  if (!PINATA_GATEWAY_DOMAIN) {
+    console.warn("[create-launch-pumpfun] PINATA_GATEWAY_DOMAIN not set; falling back to ipfs.io (rate-limited)");
+  }
+
   try {
     const body = await req.json();
 
@@ -108,13 +123,10 @@ Deno.serve(async (req) => {
         if (!imgCid) {
           return errorResponse(`Pinata image upload returned no CID: ${JSON.stringify(imgPinData)}`, 500);
         }
-        // Use ipfs.io public gateway exactly as PumpPortal's official
-        // /trade-local example does. gateway.pinata.cloud is the shared
-        // free-tier gateway and frequently returns 429 / HTML challenges
-        // to server-side fetchers like PumpPortal — when that happens
-        // their create handler crashes with the cryptic
-        // `Cannot read properties of undefined (reading 'toBuffer')` 400.
-        finalImageUrl = `https://ipfs.io/ipfs/${imgCid}`;
+        // Use Pinata's dedicated gateway (account-isolated rate limits)
+        // so PumpPortal's server-side fetch doesn't get 429/504'd by the
+        // shared public-gateway pool.
+        finalImageUrl = buildIpfsUrl(imgCid);
       } catch (err: any) {
         return errorResponse(`Image IPFS upload failed: ${err.message}`, 500);
       }
@@ -161,10 +173,7 @@ Deno.serve(async (req) => {
       if (!metadataCid) {
         return errorResponse(`Pinata metadata upload returned no CID: ${JSON.stringify(metaPinData)}`, 500);
       }
-      // Use ipfs.io — matches PumpPortal's official example exactly.
-      // gateway.pinata.cloud rate-limits server-side fetchers and trips
-      // PumpPortal's `undefined.toBuffer()` 400 path.
-      ipfsMetadataUrl = `https://ipfs.io/ipfs/${metadataCid}`;
+      ipfsMetadataUrl = buildIpfsUrl(metadataCid);
     } catch (err: any) {
       return errorResponse(`Metadata IPFS upload failed: ${err.message}`, 500);
     }
