@@ -399,7 +399,10 @@ const SchedulePage = () => {
         },
       });
 
-      if (error) throw error;
+      if (error) {
+        const detail = await extractEdgeError(error);
+        throw new Error(detail);
+      }
       if (data?.error) throw new Error(data.error);
 
       const launchId = data.launch_id;
