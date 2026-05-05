@@ -1,5 +1,6 @@
 import { Connection, Keypair, VersionedTransaction } from "@solana/web3.js";
 import fetch from "node-fetch";
+import bs58 from "bs58";
 import { decryptEscrowKey } from "./decrypt";
 import {
   Launch,
@@ -212,10 +213,17 @@ export async function launchWithLocalSigning(
   // base58 string — their handler tries to wrap it in a PublicKey/Buffer
   // and crashes. Force both to plain strings here and log types so any
   // future regression is immediately diagnosable in Railway logs.
-  const mintField = String(launch.token_mint_address ?? "").trim();
+  // PumpPortal /trade-local with action:"create" expects `mint` to be the
+  // bs58-encoded SECRET KEY of the mint keypair (per their docs: `mint:
+  // bs58.encode(mintKeypair.secretKey)`). Sending the public key here causes
+  // their handler to crash with `Cannot read properties of undefined
+  // (reading 'toBuffer')` returned as a generic 400. The Lightning path in
+  // executePumpfunLightning.ts already does this correctly.
+  const mintField = bs58.encode(mintKeypair.secretKey);
+  const mintPubkey = mintKeypair.publicKey.toBase58();
   const uriField = String(launch.ipfs_metadata_url ?? "").trim();
   const pubkeyField = String(launch.escrow_wallet_public_key ?? "").trim();
-  LOG(`mint type=${typeof launch.token_mint_address} len=${mintField.length} value=${mintField}`);
+  LOG(`mint secret bs58 len=${mintField.length} (pubkey=${mintPubkey})`);
   LOG(`uri=${uriField}`);
   LOG(`publicKey type=${typeof launch.escrow_wallet_public_key} len=${pubkeyField.length} value=${pubkeyField}`);
 
@@ -263,6 +271,10 @@ export async function launchWithLocalSigning(
     if (!dryRun) await setFailed(launch.id, msg);
     return;
   }
+  const amountSol = Number(initialBuyLamports) / 1e9;
+  LOG(
+    `amount type=${typeof amountSol} value=${amountSol} initialBuyLamports=${initialBuyLamports} finite=${Number.isFinite(amountSol)} >0=${amountSol > 0}`
+  );
   const requestBody = {
     publicKey: pubkeyField,
     action: "create",
@@ -273,13 +285,18 @@ export async function launchWithLocalSigning(
     },
     mint: mintField,
     denominatedInSol: "true",
-    amount: Number(initialBuyLamports) / 1e9,
+    amount: amountSol,
     slippage: 15,
     priorityFee: 0.00005,
     pool: "pump",
   };
   const tradeLocalBody = JSON.stringify(requestBody);
-  LOG(`/trade-local request body: ${tradeLocalBody}`);
+  // Redact the mint secret key when logging.
+  const safeBodyForLog = JSON.stringify({
+    ...requestBody,
+    mint: `<redacted ${mintField.length}-char bs58 secret, pubkey=${mintPubkey}>`,
+  });
+  LOG(`/trade-local request body: ${safeBodyForLog}`);
 
   const callTradeLocal = async (attempt: number): Promise<{
     ok: true;
