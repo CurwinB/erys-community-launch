@@ -84,6 +84,65 @@ async function main() {
     bs58.encode(kpB.secretKey),
     kpB.publicKey.toBase58()
   );
+
+  // Variant C: mint = pubkey (per docs), pool = "pump", funded payer.
+  const kpC = Keypair.generate();
+  await probeWithPool(
+    "VARIANT C (mint=pubkey, pool=pump, funded payer)",
+    kpC.publicKey.toBase58(),
+    kpC.publicKey.toBase58(),
+    "pump"
+  );
+
+  // Variant D: mint = pubkey, pool omitted (let PumpPortal pick).
+  const kpD = Keypair.generate();
+  await probeWithPool(
+    "VARIANT D (mint=pubkey, pool omitted, funded payer)",
+    kpD.publicKey.toBase58(),
+    kpD.publicKey.toBase58(),
+    undefined
+  );
+}
+
+async function probeWithPool(
+  label: string,
+  mintField: string,
+  mintPubkey: string,
+  pool: string | undefined
+) {
+  const body: any = {
+    publicKey: PAYER,
+    action: "create",
+    tokenMetadata: { name: "RawTest", symbol: "RAWT", uri: URI },
+    mint: mintField,
+    denominatedInSol: "true",
+    amount: 0.1,
+    slippage: 15,
+    priorityFee: 0.00005,
+  };
+  if (pool) body.pool = pool;
+  console.log(`\n=== ${label} ===`);
+  console.log("Request:", JSON.stringify({ ...body, mint: `<${mintField.length}-char, pubkey=${mintPubkey}>` }));
+  const t0 = Date.now();
+  let res: any;
+  try {
+    res = await fetch(ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (e: any) {
+    console.error(`Network error after ${Date.now() - t0}ms: ${e.message}`);
+    return;
+  }
+  if (res.ok) {
+    const buf = new Uint8Array(await res.arrayBuffer());
+    console.log(`HTTP ${res.status} OK in ${Date.now() - t0}ms — got ${buf.length} bytes (likely serialized tx)`);
+  } else {
+    const text = await res.text().catch(() => "");
+    console.log(`HTTP ${res.status} ${res.statusText} in ${Date.now() - t0}ms`);
+    console.log(`body: ${text.slice(0, 1000)}`);
+  }
 }
 
 main().catch((e) => {
