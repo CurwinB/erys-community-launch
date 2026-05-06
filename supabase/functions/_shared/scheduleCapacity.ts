@@ -9,45 +9,19 @@ import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.103.0";
 
 export type Platform = "bags" | "pumpfun";
 
-// Per-minute base caps. Pump.fun's effective cap scales with the size of the
-// PumpPortal wallet pool (1 wallet = 1 launch/min, N wallets = N/min) since
-// each wallet is independently lockable. Workers publish the current pool
-// size to app_settings on boot.
+// Per-minute base caps. Each launch now provisions its own Lightning wallet
+// on demand at creation time, so there's no shared PumpPortal wallet pool
+// bottleneck anymore. The Pump.fun cap reflects the executor's actual
+// concurrent throughput (5s polling + fire-and-forget on one replica).
 const BASE_CAPS: Record<Platform, number> = {
-  pumpfun: 1,
+  pumpfun: 20,
   bags: 5,
 };
 
-let cachedPoolSize: { value: number; expires: number } | null = null;
-const POOL_SIZE_TTL_MS = 30_000;
-
-async function getPumpfunPoolSize(supabase: SupabaseClient): Promise<number> {
-  if (cachedPoolSize && cachedPoolSize.expires > Date.now()) {
-    return cachedPoolSize.value;
-  }
-  try {
-    const { data } = await supabase
-      .from("app_settings")
-      .select("value")
-      .eq("key", "pumpportal_wallet_pool_size")
-      .maybeSingle();
-    const parsed = parseInt(data?.value ?? "1", 10);
-    const value = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-    cachedPoolSize = { value, expires: Date.now() + POOL_SIZE_TTL_MS };
-    return value;
-  } catch {
-    return 1;
-  }
-}
-
 export async function getPlatformCap(
-  supabase: SupabaseClient,
+  _supabase: SupabaseClient,
   platform: Platform
 ): Promise<number> {
-  if (platform === "pumpfun") {
-    const pool = await getPumpfunPoolSize(supabase);
-    return BASE_CAPS.pumpfun * pool;
-  }
   return BASE_CAPS[platform];
 }
 
