@@ -80,6 +80,9 @@ const SponsoredPage = () => {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [launchDatetime, setLaunchDatetime] = useState("");
   const [creatorDeliveryWallet, setCreatorDeliveryWallet] = useState("");
+  const [saveDeliveryWallet, setSaveDeliveryWallet] = useState(true);
+  const [deliveryWalletLabel, setDeliveryWalletLabel] = useState("");
+  const { publicKey } = useWallet();
   const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -209,6 +212,18 @@ const SponsoredPage = () => {
       });
       if (error) throw error;
       if (!data?.success) throw new Error(data?.error || "Failed to claim slot");
+
+      if (trimmedDelivery) {
+        if (saveDeliveryWallet) {
+          saveWallet(publicKey, {
+            address: trimmedDelivery,
+            label: deliveryWalletLabel,
+            platform: "pumpfun",
+          });
+        } else {
+          touchSavedWallet(publicKey, trimmedDelivery);
+        }
+      }
 
       // Edge function only writes the DB row; the Railway executor funds the
       // escrow asynchronously. Switch to the funding state and poll until
