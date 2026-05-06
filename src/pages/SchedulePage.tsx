@@ -655,14 +655,6 @@ const SchedulePage = () => {
             </div>
 
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label>Description</Label>
-                <span className="text-[10px] text-muted-foreground">{form.description.length}/1000</span>
-              </div>
-              <Textarea maxLength={1000} value={form.description} onChange={(e) => update("description", e.target.value)} placeholder="Describe your token..." rows={4} />
-            </div>
-
-            <div className="space-y-2">
               <Label>Token Image</Label>
               <label className="flex cursor-pointer flex-col items-center justify-center rounded-sm border border-dashed border-border bg-background p-6 transition-colors hover:border-primary/30">
                 {imagePreview ? (
@@ -789,7 +781,7 @@ const SchedulePage = () => {
           <div className="border-l-2 border-primary bg-muted p-4">
             <p className="text-xs leading-relaxed text-muted-foreground">
               {platform === "pumpfun"
-                 ? "A unique non-custodial escrow and token mint are generated the moment you open the presale. Your seed SOL transfers in immediately. All presaler SOL is held there until the token launches automatically on Pump.fun at the scheduled time."
+                 ? "A unique non-custodial escrow and token mint are generated the moment you open the presale. Your seed SOL transfers in immediately. All presaler SOL is held there until the token launches automatically on Pump.fun at the scheduled time. Creators earn fees from their token's trading activity automatically."
                  : "A unique non-custodial escrow is generated for this presale. Your seed SOL transfers in immediately. All presaler SOL is held there until the token launches automatically on Bags.fm at the scheduled time."}
             </p>
           </div>
