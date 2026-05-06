@@ -15,6 +15,10 @@ parentPort.on("message", (msg: any) => {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 (async () => {
+  let lifetimeAttempts = 0;
+  let lastReportAt = Date.now();
+  let attemptsAtLastReport = 0;
+  const REPORT_EVERY = 250_000;
   // eslint-disable-next-line no-constant-condition
   while (true) {
     if (paused) {
@@ -27,6 +31,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     while (true) {
       const kp = Keypair.generate();
       attempts++;
+      lifetimeAttempts++;
       const pub = kp.publicKey.toBase58();
       if (pub.endsWith(SUFFIX)) {
         const secretKeyHex = Buffer.from(kp.secretKey).toString("hex");
@@ -43,6 +48,17 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
       if (attempts % 50_000 === 0) {
         await sleep(0);
         if (paused) break;
+      }
+      // Heartbeat so the main thread knows we're alive between matches.
+      if (lifetimeAttempts - attemptsAtLastReport >= REPORT_EVERY) {
+        const now = Date.now();
+        parentPort!.postMessage({
+          type: "progress",
+          attempts: lifetimeAttempts - attemptsAtLastReport,
+          sinceMs: now - lastReportAt,
+        });
+        attemptsAtLastReport = lifetimeAttempts;
+        lastReportAt = now;
       }
     }
   }
