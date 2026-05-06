@@ -789,7 +789,7 @@ const SchedulePage = () => {
           <div className="border-l-2 border-primary bg-muted p-4">
             <p className="text-xs leading-relaxed text-muted-foreground">
               {platform === "pumpfun"
-                 ? "A unique non-custodial escrow and token mint are generated the moment you open the presale. Your seed SOL transfers in immediately. All presaler SOL is held there until the token launches automatically on Pump.fun at the scheduled time."
+                 ? "A unique non-custodial escrow and token mint are generated the moment you open the presale. Your seed SOL transfers in immediately. All presaler SOL is held there until the token launches automatically on Pump.fun at the scheduled time. Creators earn fees from their token's trading activity automatically."
                  : "A unique non-custodial escrow is generated for this presale. Your seed SOL transfers in immediately. All presaler SOL is held there until the token launches automatically on Bags.fm at the scheduled time."}
             </p>
           </div>
