@@ -298,9 +298,9 @@ const WalletDropdown = () => {
       loadBalances();
     } catch (err: any) {
       console.error("=== SEND SOL FAILED ===");
-      console.error("Error:", err.message);
+      console.error("Error:", err?.message);
       console.error("Full error:", err);
-      toast.error("Send Failed", { description: err.message });
+      showSendError(err);
     } finally {
       setSending(false);
     }
@@ -421,9 +421,9 @@ const WalletDropdown = () => {
       loadBalances();
     } catch (err: any) {
       console.error("=== SEND TOKEN FAILED ===");
-      console.error("Error:", err.message);
+      console.error("Error:", err?.message);
       console.error("Full error:", err);
-      toast.error("Send Failed", { description: err.message });
+      showSendError(err);
     } finally {
       setSending(false);
     }

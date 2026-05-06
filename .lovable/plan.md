@@ -1,54 +1,36 @@
-# Saved Pump/Bags Wallets
+## Goal
+Replace the raw, overflowing "Send Failed" error (currently dumping the full Solana RPC simulation log into a toast) with a short, friendly message and an optional "details" affordance.
 
-## Where wallets are entered today
+## Scope
+File: `src/components/WalletDropdown.tsx` — both `handleSendSol` (line 232) and `handleSendToken` (line 309) catch blocks (lines 299-306, 422-429).
 
-Three flows ask the user to type a Solana destination wallet, all sent to backend as `token_delivery_wallet` / `creator_delivery_wallet`:
+## What the user sees today
+A sonner toast titled "Send Failed" with `err.message` verbatim, e.g.:
+> Transaction simulation failed. Message: Transaction simulation failed: Transaction results in an account (0) with insufficient funds for rent. Logs: [ "Program 11111…" … ]. Catch the SendTransactionError and call getLogs() on it for details.
 
-1. **Contribution** — `src/pages/LaunchPage.tsx` (`tokenDeliveryWallet` input, ~line 468). Label: "Send allocation to a different wallet?". Used for both Pump.fun and Bags launches.
-2. **Schedule a launch** — `src/pages/SchedulePage.tsx` (`form.creatorDeliveryWallet`, ~line 770). Used when the creator seeds their own presale.
-3. **Sponsored slot claim** — `src/pages/SponsoredPage.tsx` (`creatorDeliveryWallet`, ~line 467). Pump.fun-only.
-
-Each is a free-text `<Input>`. Same address often gets retyped across launches/contributions by the same connected wallet.
-
-The connected wallet (Dynamic SDK) is exposed via `useWallet()` → `publicKey`. There is no Supabase `auth.uid()` in this app — user-scoped reads use `p_wallet text` RPC params (e.g. `list_my_contributions`), which is the established pattern.
+This overflows the toast on mobile and is unreadable.
 
 ## Proposed UX
 
-Add a lightweight wallet book:
+1. Add a small helper `parseSolanaError(err): { title: string; description: string }` near the top of the file (or in `src/lib/edgeError.ts` style). It maps known patterns to friendly copy:
+   - `insufficient funds for rent` / `insufficient lamports` → title `"Not enough SOL"`, description `"This wallet doesn't have enough SOL to cover the transfer plus the network rent/fee. Try a smaller amount or top up."`
+   - `User rejected` / `rejected the request` / `User declined` → title `"Cancelled"`, description `"You cancelled the transaction in your wallet."` (use `toast.message` instead of `toast.error`)
+   - `blockhash not found` / `block height exceeded` → title `"Network timeout"`, description `"The transaction expired before it was confirmed. Please try again."`
+   - `Invalid public key` / `Non-base58` → title `"Invalid address"`
+   - Any `Transaction simulation failed` → title `"Transaction would fail"`, description = first line only, stripped of `Logs: […]` and the `Catch the SendTransactionError…` SDK hint.
+   - Default fallback → title `"Send failed"`, description = `err.message` truncated to ~140 chars with `…`.
 
-- New small component `SavedWalletPicker` rendered above each of the 3 inputs.
-- Shows a row of chips: each saved wallet (label + truncated address). Clicking one fills the input.
-- Below the input: "Save this wallet" checkbox + optional label field (e.g. "Phantom main", "Bags hot"). Defaults to checked when the field has a valid new address.
-- Each entry is tagged `pumpfun` or `bags` (matched to the current launch's platform) so the picker only shows wallets relevant to the current flow. A wallet can carry both tags.
-- Saved entries are scoped to the currently connected wallet (`publicKey`).
-- Small "Manage" link opens a modal to rename/delete entries.
+2. In both catch blocks, call the helper and pass the result to `toast.error` (or `toast.message` for cancellation). Keep `console.error` with the full error for debugging.
 
-When the connected wallet changes or disconnects, the picker hides.
+3. Cap the toast description visually: pass `style={{ maxWidth: 360 }}` and rely on sonner's built-in wrapping; the truncation in step 1 is the real fix.
 
-## Storage approach
-
-**Option A — localStorage (recommended for v1):** key `erys.savedWallets.<connectedWallet>` → array of `{ address, label, platforms: ('pumpfun'|'bags')[], lastUsedAt }`. Zero backend work, instant, private to the user's browser. Trade-off: doesn't sync across devices/browsers.
-
-**Option B — Supabase table `saved_wallets`:** columns `(id, owner_wallet, address, label, platforms text[], last_used_at, created_at)`. Reads via an RPC `list_saved_wallets(p_owner_wallet)` (matches existing `list_my_contributions` pattern — unauthenticated, owner-scoped by param; not sensitive since they're public addresses). Writes go through a new edge function `save-wallet` that requires the caller to **sign a short message with the connected wallet** (Dynamic signer) so we can verify ownership before insert/update/delete. This prevents a third party from polluting someone else's wallet book.
-
-I recommend starting with **Option A** to ship fast and avoid the signature prompt on every save. We can migrate to Option B later (with a one-time import from localStorage) if cross-device sync is requested.
-
-## Implementation steps (Option A)
-
-1. `src/lib/savedWallets.ts` — typed helpers: `listSavedWallets(owner, platform?)`, `saveWallet(owner, entry)`, `removeSavedWallet(owner, address)`, `touchSavedWallet(owner, address)`. Uses `localStorage`, namespaced per `owner`.
-2. `src/components/SavedWalletPicker.tsx` — chips row + "Manage" sheet (using existing shadcn `Sheet` + `Dialog`). Props: `platform`, `value`, `onChange`. Validates Solana address format (reuse the regex already in `LaunchPage.tsx`).
-3. `src/components/SaveWalletToggle.tsx` — checkbox + label input shown under the address `Input` when it holds a new valid address.
-4. Wire into:
-   - `LaunchPage.tsx` (platform = `launch.platform`)
-   - `SchedulePage.tsx` (platform = current `platform` state)
-   - `SponsoredPage.tsx` (platform = `pumpfun`)
-5. On successful submit in each flow, call `saveWallet` (if toggle checked) and `touchSavedWallet` so most-recently-used floats to the front.
+4. Optional: include a `Copy details` action button on the toast that copies the raw `err.message` to clipboard, so power users still have the full text.
 
 ## Out of scope
+- No change to the actual send logic, balance loading, or signing flow.
+- No change to other toasts in the app (this issue is specific to wallet send).
 
-- No DB migration, no edge functions, no auth changes for v1.
-- Existing `creator_delivery_wallet` / `token_delivery_wallet` payload shape is unchanged — backend stays exactly the same.
-
-## Question before implementation
-
-Pick **Option A (localStorage)** or **Option B (Supabase + signed save)**? Option A is what I'll build unless you say otherwise.
+## Technical notes
+- Sonner supports `toast.error(title, { description, action: { label, onClick } })` — already imported via `import { toast } from "sonner"`.
+- Truncation helper: `s.length > 140 ? s.slice(0, 137) + "…" : s`.
+- Strip Solana noise with a regex: `/\s*Logs:\s*\[[\s\S]*$/` and `/Catch the .*SendTransactionError.*$/`.
