@@ -31,6 +31,7 @@ export interface Launch {
   lightning_wallet_encrypted_api_key: string | null;
   fee_harvest_state?: string | null;
   fee_harvest_last_success_at?: string | null;
+  is_sponsored?: boolean | null;
 }
 
 export interface Contribution {
