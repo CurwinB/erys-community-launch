@@ -685,11 +685,11 @@ const SchedulePage = () => {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Date</Label>
-                <Input type="date" value={form.launchDate} onChange={(e) => update("launchDate", e.target.value)} required />
+                <Input type="date" value={form.launchDate} onChange={(e) => update("launchDate", e.target.value)} onClick={(e) => { try { (e.currentTarget as any).showPicker?.(); } catch {} }} onFocus={(e) => { try { (e.currentTarget as any).showPicker?.(); } catch {} }} required />
               </div>
               <div className="space-y-2">
                 <Label>Time</Label>
-                <Input type="time" value={form.launchTime} onChange={(e) => update("launchTime", e.target.value)} required />
+                <Input type="time" value={form.launchTime} onChange={(e) => update("launchTime", e.target.value)} onClick={(e) => { try { (e.currentTarget as any).showPicker?.(); } catch {} }} onFocus={(e) => { try { (e.currentTarget as any).showPicker?.(); } catch {} }} required />
               </div>
             </div>
             <p className="text-[10px] text-muted-foreground">
