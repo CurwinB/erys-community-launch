@@ -480,12 +480,15 @@ const SponsoredPage = () => {
                   <p className="text-xs text-muted-foreground">
                      Send your allocation to a wallet you control so you can trade the second the presale launches on Pump.fun. Leave blank to claim later via Erys.
                   </p>
-                  <Input
-                    id="delivery_wallet"
+                  <SavedWalletField
+                    platform="pumpfun"
                     value={creatorDeliveryWallet}
-                    onChange={(e) => setCreatorDeliveryWallet(e.target.value)}
-                    placeholder="Enter Solana wallet address"
-                    className="rounded-none mt-1 font-mono text-xs"
+                    onChange={setCreatorDeliveryWallet}
+                    saveEnabled={saveDeliveryWallet}
+                    onSaveEnabledChange={setSaveDeliveryWallet}
+                    saveLabel={deliveryWalletLabel}
+                    onSaveLabelChange={setDeliveryWalletLabel}
+                    inputClassName="rounded-none mt-1 font-mono text-xs"
                   />
                 </div>
 
