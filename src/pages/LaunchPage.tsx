@@ -10,6 +10,7 @@ import { Wallet, Loader2, ExternalLink, Share2, Copy, Check } from "lucide-react
 import { useState, useEffect } from "react";
 import { useWallet } from "@/hooks/useWallet";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 import LaunchHeader from "@/components/launch/LaunchHeader";
 import LaunchStats from "@/components/launch/LaunchStats";
@@ -215,7 +216,23 @@ const LaunchPage = () => {
         return;
       }
 
-      toast({ title: "You're in.", description: `${sol} SOL allocation locked on-chain.` });
+      const tg = (launch as any)?.telegram_url?.trim?.();
+      toast({
+        title: "You're in.",
+        description: `${sol} SOL allocation locked on-chain.`,
+        ...(tg
+          ? {
+              action: (
+                <ToastAction
+                  altText="Join the Telegram"
+                  onClick={() => window.open(tg, "_blank", "noopener,noreferrer")}
+                >
+                  Join the Telegram
+                </ToastAction>
+              ),
+            }
+          : {}),
+      });
       setSolAmount("");
       setTokenDeliveryWallet("");
       queryClient.invalidateQueries({ queryKey: ["contributions", id] });
