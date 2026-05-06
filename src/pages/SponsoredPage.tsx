@@ -9,6 +9,9 @@ import { Card } from "@/components/ui/card";
 import Seo from "@/components/Seo";
 import { Loader2, Copy, Check, AlertTriangle, ExternalLink, Twitter } from "lucide-react";
 import { toast } from "sonner";
+import SavedWalletField from "@/components/SavedWalletField";
+import { saveWallet, touchSavedWallet } from "@/lib/savedWallets";
+import { useWallet } from "@/hooks/useWallet";
 
 type SlotState =
   | { kind: "loading" }
