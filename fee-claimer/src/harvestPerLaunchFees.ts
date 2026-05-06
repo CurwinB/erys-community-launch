@@ -19,7 +19,7 @@ import { withCustodialLock } from "./custodialLock";
 //   1. Atomically claim a launch via claim_launch_for_harvest (state -> harvesting).
 //   2. Acquire the per-launch advisory lock (key = lightning wallet pubkey)
 //      so user-claim flows can't race the harvester.
-//   3. Peek the on-chain creator vault PDA. Skip if below 10x estimated gas.
+//   3. Peek the on-chain creator vault PDA. Skip if below 20x estimated gas.
 //   4. Sign + send Pump.fun collect_creator_fee with the lightning keypair.
 //   5. Compute split: 40% treasury, 60% contributors.
 //   6. Send treasury transfer in the same critical section.
@@ -45,13 +45,13 @@ const PRIORITY_FEE_MICRO_LAMPORTS = 50_000;
 const TX_FEE_RESERVE = 5_000n;
 const ESCROW_RENT_FLOOR_LAMPORTS = 2_000_000n;
 
-// 10x estimated gas. Estimated gas = collect tx + treasury transfer +
+// 20x estimated gas. Estimated gas = collect tx + treasury transfer +
 // safety buffer ~110k lamports default.
 const GAS_ESTIMATE_LAMPORTS = BigInt(
   process.env.PER_LAUNCH_HARVEST_GAS_ESTIMATE_LAMPORTS || "110000"
 );
 const MIN_HARVEST_MULTIPLIER = BigInt(
-  process.env.PER_LAUNCH_MIN_HARVEST_MULTIPLIER || "10"
+  process.env.PER_LAUNCH_MIN_HARVEST_MULTIPLIER || "20"
 );
 const MIN_HARVEST_LAMPORTS = GAS_ESTIMATE_LAMPORTS * MIN_HARVEST_MULTIPLIER;
 
@@ -266,7 +266,7 @@ async function runHarvestCriticalSection(
 
   if (vaultLamports < MIN_HARVEST_LAMPORTS) {
     console.log(
-      `[HARVEST] ${launch.id}: vault ${vaultLamports} < threshold ${MIN_HARVEST_LAMPORTS} (10x gas) — skip`
+      `[HARVEST] ${launch.id}: vault ${vaultLamports} < threshold ${MIN_HARVEST_LAMPORTS} (20x gas) — skip`
     );
     await recordEmpty(launch.id);
     return;
