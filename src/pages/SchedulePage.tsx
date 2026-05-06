@@ -764,9 +764,9 @@ const SchedulePage = () => {
             )}
 
             <div className="space-y-1 pt-2">
-              <Label className="text-xs text-muted-foreground">
-                Send your allocation to a different wallet? (optional)
-              </Label>
+               <Label className="text-xs text-muted-foreground">
+                 Send your allocation to a different wallet? (recommended)
+               </Label>
               <Input
                 placeholder="Enter Solana wallet address"
                 value={form.creatorDeliveryWallet}
