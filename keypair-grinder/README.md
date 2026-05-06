@@ -26,8 +26,12 @@ Railway: set the start command to `npm run build && npm start`.
 - Main thread encrypts each ground keypair and inserts into the pool.
 - When `unclaimed >= TARGET_POOL_SIZE` (default 1000), workers pause and
   the main loop polls every 60s; resumes grinding when below target.
-- Health line logged every 10 minutes for at-a-glance Railway monitoring.
+- `[alive]` heartbeat every 60s shows current grind rate (kp/s) so you
+  can see workers are healthy even when no match has landed yet.
+- `[health]` line logged every 10 minutes for at-a-glance Railway monitoring.
 
-Expected throughput: a 4-char base58 suffix needs ~11.3M attempts on
-average per keypair. With 2 workers on a small Railway replica, a cold
-1000-keypair pool fills over many hours; scale replicas to fill faster.
+Expected throughput: case-sensitive 4-char base58 suffix (`pump`) needs
+~11.3M attempts on average per keypair (58^4). On a small Railway
+replica doing ~5–20K keypairs/sec/thread with 2 workers, expect roughly
+5–20 minutes between matches. Cold-filling 1000 keypairs takes many
+hours — scale `WORKER_COUNT` or run multiple replicas to fill faster.

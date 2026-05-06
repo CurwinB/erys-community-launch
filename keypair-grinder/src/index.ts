@@ -24,6 +24,9 @@ async function main() {
   const workers: Worker[] = [];
   let paused = false;
   let currentPoolDepth = 0;
+  let aliveAttempts = 0; // attempts accumulated across all workers since last [alive] log
+  let aliveSince = Date.now();
+  let lifetimeAttempts = 0;
 
   const setPaused = (p: boolean) => {
     if (paused === p) return;
@@ -58,22 +61,26 @@ async function main() {
     }
   };
 
+  const onWorkerMessage = (msg: any) => {
+    if (msg?.type === "ground") void handleGround(msg);
+    else if (msg?.type === "progress") {
+      aliveAttempts += msg.attempts ?? 0;
+      lifetimeAttempts += msg.attempts ?? 0;
+    }
+  };
+
   // Spawn workers
   const workerPath = path.resolve(__dirname, "worker.js");
   for (let i = 0; i < WORKER_COUNT; i++) {
     const w = new Worker(workerPath, { env: process.env });
-    w.on("message", (msg: any) => {
-      if (msg?.type === "ground") void handleGround(msg);
-    });
+    w.on("message", onWorkerMessage);
     w.on("error", (err) => console.error(`[grinder] worker ${i} error:`, err));
     w.on("exit", (code) => {
       console.error(`[grinder] worker ${i} exited code=${code} — restarting in 5s`);
       setTimeout(() => {
         const replacement = new Worker(workerPath, { env: process.env });
         workers[i] = replacement;
-        replacement.on("message", (msg: any) => {
-          if (msg?.type === "ground") void handleGround(msg);
-        });
+        replacement.on("message", onWorkerMessage);
         if (paused) replacement.postMessage({ type: "pause" });
       }, 5_000);
     });
@@ -99,6 +106,19 @@ async function main() {
     } catch (err: any) {
       console.error("[grinder] pool depth refresh failed:", err?.message ?? err);
     }
+  }, 60_000);
+
+  // Heartbeat every 60s — proves the workers are actually grinding even
+  // when no match has landed yet (a 4-char base58 case-sensitive suffix
+  // averages ~11.3M attempts per match).
+  setInterval(() => {
+    const elapsedSec = Math.max(1, (Date.now() - aliveSince) / 1000);
+    const rate = Math.round(aliveAttempts / elapsedSec);
+    console.log(
+      `[grinder][alive] workers=${workers.length} rate=~${rate.toLocaleString()} kp/s window=${aliveAttempts.toLocaleString()} lifetime=${lifetimeAttempts.toLocaleString()} pool=${currentPoolDepth}/${TARGET_POOL_SIZE} ${paused ? "(paused)" : ""}`,
+    );
+    aliveAttempts = 0;
+    aliveSince = Date.now();
   }, 60_000);
 
   // Health log every 10 minutes — visible in Railway logs without
