@@ -37,6 +37,50 @@ interface ErysToken {
 const ALCHEMY_RPC = import.meta.env.VITE_SOLANA_RPC_URL;
 const connection = new Connection(ALCHEMY_RPC, "confirmed");
 
+function parseSendError(err: any): { title: string; description: string; cancelled?: boolean } {
+  const raw = (err?.message || String(err) || "").toString();
+  const lower = raw.toLowerCase();
+
+  if (lower.includes("user rejected") || lower.includes("user declined") || lower.includes("rejected the request") || lower.includes("user cancelled")) {
+    return { title: "Cancelled", description: "You cancelled the transaction in your wallet.", cancelled: true };
+  }
+  if (lower.includes("insufficient funds for rent") || lower.includes("insufficient lamports") || lower.includes("insufficient funds")) {
+    return { title: "Not enough SOL", description: "This wallet doesn't have enough SOL to cover the transfer plus the network fee. Try a smaller amount or top up." };
+  }
+  if (lower.includes("blockhash not found") || lower.includes("block height exceeded") || lower.includes("expired")) {
+    return { title: "Network timeout", description: "The transaction expired before it was confirmed. Please try again." };
+  }
+  if (lower.includes("invalid public key") || lower.includes("non-base58")) {
+    return { title: "Invalid address", description: "The recipient address isn't a valid Solana address." };
+  }
+  if (lower.includes("simulation failed")) {
+    return { title: "Transaction would fail", description: "The network rejected this transfer in simulation. Check the amount and recipient, then try again." };
+  }
+
+  // Default: strip noisy Solana SDK trailers and truncate.
+  let clean = raw
+    .replace(/\s*Logs:\s*\[[\s\S]*$/i, "")
+    .replace(/Catch the .*SendTransactionError.*$/i, "")
+    .trim();
+  if (clean.length > 140) clean = clean.slice(0, 137) + "…";
+  return { title: "Send failed", description: clean || "Something went wrong. Please try again." };
+}
+
+function showSendError(err: any) {
+  const { title, description, cancelled } = parseSendError(err);
+  const action = {
+    label: "Copy details",
+    onClick: () => {
+      try { navigator.clipboard.writeText(err?.message || String(err)); } catch {}
+    },
+  };
+  if (cancelled) {
+    toast.message(title, { description });
+  } else {
+    toast.error(title, { description, action });
+  }
+}
+
 // Pump.fun mints are owned by the Token-2022 program; Bags / legacy mints
 // by the classic SPL Token program. Token-2022 ATAs derive to a different
 // address because the program id is part of the seed, so we MUST detect
@@ -298,9 +342,9 @@ const WalletDropdown = () => {
       loadBalances();
     } catch (err: any) {
       console.error("=== SEND SOL FAILED ===");
-      console.error("Error:", err.message);
+      console.error("Error:", err?.message);
       console.error("Full error:", err);
-      toast.error("Send Failed", { description: err.message });
+      showSendError(err);
     } finally {
       setSending(false);
     }
@@ -421,9 +465,9 @@ const WalletDropdown = () => {
       loadBalances();
     } catch (err: any) {
       console.error("=== SEND TOKEN FAILED ===");
-      console.error("Error:", err.message);
+      console.error("Error:", err?.message);
       console.error("Full error:", err);
-      toast.error("Send Failed", { description: err.message });
+      showSendError(err);
     } finally {
       setSending(false);
     }
