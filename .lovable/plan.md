@@ -1,17 +1,24 @@
-## Plan: Tune fee-claimer batch/harvest parameters
+## Plan: Show real raised/presaler counts on Launched Tokens cards
 
-### 1. Increase batched-fee safety hops and batch size
-**File:** `fee-claimer/src/index.ts`
-- PumpPortal batched claim loop (`safetyHops`): change exit condition from `< 5` to `< 10` so up to 10 consecutive batches can run per 10-minute tick.
-- Local-signing claim loop (`localHops`): change exit condition from `< 5` to `< 10` for the same reason.
+### Problem
+On `src/pages/Index.tsx`, the "Launched Tokens" section passes hard-coded zeros to each `LaunchCard`:
+```
+totalEscrowLamports={0}
+contributorCount={0}
+```
+Live launches already pull these from the public `contributions_public` view via a `useQuery` aggregation. Completed launches don't — that's why every card shows `0.00 SOL` raised and `0` presalers.
 
-**File:** `fee-claimer/src/claimPumpfunFeesBatch.ts`
-- Change `PUMPFUN_FEE_BATCH_SIZE` default from `50` to `200`.
+### Fix
+**File:** `src/pages/Index.tsx`
 
-### 2. Raise per-launch harvest threshold from 10x to 20x gas
-**File:** `fee-claimer/src/harvestPerLaunchFees.ts`
-- Change `PER_LAUNCH_MIN_HARVEST_MULTIPLIER` default from `10` to `20`.
-- Update the inline comment and log message that reference "10x gas" to say "20x gas" so the code stays honest.
+1. Add a second `useQuery` (`completed-contribution-stats`) that mirrors the live one but keys off `completedLaunches?.map(l => l.id)`. Same `from("contributions_public").select("launch_id, amount_lamports").in("launch_id", ids)` aggregation into `{ total, count }` per launch_id.
+2. Replace the two `totalEscrowLamports={0}` / `contributorCount={0}` pairs (mobile row + desktop grid for completed launches) with `stats?.total || 0` / `stats?.count || 0` lookups, identical to the live-launch pattern.
+3. Drop `refetchInterval` for the completed query (these are static — one fetch per mount is enough), to keep RPC load low.
 
-### No other files touched
-The distributor, executor, edge functions, and frontend are unchanged. Both `PUMPFUN_FEE_BATCH_SIZE` and `PER_LAUNCH_MIN_HARVEST_MULTIPLIER` remain overridable via env var — only their hard-coded defaults shift.
+### Why this is safe
+- `contributions_public` is the same already-public view used for live cards. No new data is exposed; wallet addresses, signatures, and PII are not selected — only `launch_id` and `amount_lamports`.
+- No edge function, RLS policy, or DB function changes.
+- No private keys, escrow data, or admin-only fields touched.
+
+### Out of scope
+No changes to the `LaunchCard` component, RLS, or any backend.
