@@ -69,6 +69,29 @@ const Index = () => {
     },
   });
 
+  // Fetch contribution stats for completed launches (static once launched).
+  const { data: completedStats } = useQuery({
+    queryKey: ["completed-contribution-stats", completedLaunches?.map((l) => l.id)],
+    enabled: !!completedLaunches && completedLaunches.length > 0,
+    queryFn: async () => {
+      if (!completedLaunches) return {};
+      const ids = completedLaunches.map((l) => l.id);
+      const { data, error } = await supabase
+        .from("contributions_public")
+        .select("launch_id, amount_lamports")
+        .in("launch_id", ids);
+      if (error) throw error;
+
+      const stats: Record<string, { total: number; count: number }> = {};
+      (data || []).forEach((c) => {
+        if (!stats[c.launch_id]) stats[c.launch_id] = { total: 0, count: 0 };
+        stats[c.launch_id].total += Number(c.amount_lamports);
+        stats[c.launch_id].count += 1;
+      });
+      return stats;
+    },
+  });
+
   useEffect(() => {
     setCurrentPage(1);
   }, [liveLaunches?.length]);
@@ -334,7 +357,9 @@ const Index = () => {
             <>
             {isMobile ? (
               <div className="flex flex-col divide-y divide-border border border-border opacity-75">
-                {paginatedCompleted.map((launch, i) => (
+                {paginatedCompleted.map((launch, i) => {
+                  const stats = completedStats?.[launch.id];
+                  return (
                   <LaunchCard
                     key={launch.id}
                     id={launch.id}
@@ -342,19 +367,22 @@ const Index = () => {
                     tokenSymbol={launch.token_symbol}
                     imageUrl={launch.image_url}
                     launchDatetime={launch.launch_datetime}
-                    totalEscrowLamports={0}
-                    contributorCount={0}
+                    totalEscrowLamports={stats?.total || 0}
+                    contributorCount={stats?.count || 0}
                     minContributionLamports={Number(launch.min_contribution_lamports)}
                     status="launched"
                     platform={(launch.platform as "bags" | "pumpfun") || "bags"}
                     animationDelay={Math.min(i, 10) * 30}
                     variant="row"
                   />
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 opacity-75">
-                {paginatedCompleted.map((launch, i) => (
+                {paginatedCompleted.map((launch, i) => {
+                  const stats = completedStats?.[launch.id];
+                  return (
                   <LaunchCard
                     key={launch.id}
                     id={launch.id}
@@ -362,14 +390,15 @@ const Index = () => {
                     tokenSymbol={launch.token_symbol}
                     imageUrl={launch.image_url}
                     launchDatetime={launch.launch_datetime}
-                    totalEscrowLamports={0}
-                    contributorCount={0}
+                    totalEscrowLamports={stats?.total || 0}
+                    contributorCount={stats?.count || 0}
                     minContributionLamports={Number(launch.min_contribution_lamports)}
                     status="launched"
                     platform={(launch.platform as "bags" | "pumpfun") || "bags"}
                     animationDelay={i * 100}
                   />
-                ))}
+                  );
+                })}
               </div>
             )}
             {totalCompletedPages > 1 && (
