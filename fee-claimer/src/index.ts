@@ -34,7 +34,7 @@ async function pollAndClaimFees(): Promise<void> {
     // sweeps. See claimPumpfunFeesBatch.ts for the full strategy.
     // Loop in case there are more eligible launches than fit in one batch.
     let safetyHops = 0;
-    while (safetyHops++ < 5) {
+    while (safetyHops++ < 10) {
       const before = Date.now();
       await claimPumpfunFeesBatch();
       // If a batch took <1s it likely returned no work — exit.
@@ -45,7 +45,7 @@ async function pollAndClaimFees(): Promise<void> {
     // on-chain creator). PumpPortal can't claim these — we sign the
     // on-chain collect_creator_fee instruction with the escrow keypair.
     let localHops = 0;
-    while (localHops++ < 5) {
+    while (localHops++ < 10) {
       const before = Date.now();
       await claimLocalSigningFeesBatch();
       if (Date.now() - before < 1_000) break;

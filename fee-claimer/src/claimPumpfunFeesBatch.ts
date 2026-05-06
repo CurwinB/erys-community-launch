@@ -32,7 +32,7 @@ const WORKER_ID =
   process.env.WORKER_ID || process.env.RAILWAY_REPLICA_ID || "distributor-default";
 
 // Tunables
-const BATCH_SIZE = parseInt(process.env.PUMPFUN_FEE_BATCH_SIZE || "50", 10);
+const BATCH_SIZE = parseInt(process.env.PUMPFUN_FEE_BATCH_SIZE || "200", 10);
 // Single collectCreatorFee call sweeps ALL of our coins' creator vaults at
 // once (PumpPortal `pool: "pump"` semantics — see memory file
 // pumpfun-creator-fees.md §31). So one cycle = one priority fee.
