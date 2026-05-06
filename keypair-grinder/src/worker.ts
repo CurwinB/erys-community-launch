@@ -1,7 +1,8 @@
 import { parentPort } from "worker_threads";
 import { Keypair } from "@solana/web3.js";
 
-const SUFFIX = (process.env.SUFFIX ?? "pump").toLowerCase();
+// Case-sensitive: pump.fun mints end in literal lowercase `pump`.
+const SUFFIX = process.env.SUFFIX ?? "pump";
 let paused = false;
 
 if (!parentPort) throw new Error("worker must be spawned with worker_threads");
@@ -27,7 +28,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
       const kp = Keypair.generate();
       attempts++;
       const pub = kp.publicKey.toBase58();
-      if (pub.toLowerCase().endsWith(SUFFIX)) {
+      if (pub.endsWith(SUFFIX)) {
         const secretKeyHex = Buffer.from(kp.secretKey).toString("hex");
         parentPort!.postMessage({
           type: "ground",

@@ -221,7 +221,7 @@ Deno.serve(async (req) => {
           if (
             secret.length === 64 &&
             derivedPub === row.public_key &&
-            /pump$/i.test(row.public_key)
+            /pump$/.test(row.public_key)
           ) {
             mintPublicKey = row.public_key;
             encryptedMintPk = row.encrypted_private_key;
