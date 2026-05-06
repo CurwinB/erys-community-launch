@@ -388,6 +388,8 @@ const SponsoredPage = () => {
                     type="datetime-local"
                     value={launchDatetime}
                     onChange={(e) => setLaunchDatetime(e.target.value)}
+                    onClick={(e) => { try { (e.currentTarget as any).showPicker?.(); } catch {} }}
+                    onFocus={(e) => { try { (e.currentTarget as any).showPicker?.(); } catch {} }}
                     min={minDateTime}
                     max={maxDateTime}
                     required
