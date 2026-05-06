@@ -5,8 +5,7 @@ import { executeAllPendingLaunches } from "./executeLaunch";
 import { fundAllPendingSponsoredEscrows } from "./fundSponsoredEscrow";
 import { sweepAllCancelledSponsorEscrows } from "./sweepCancelledSponsorEscrows";
 import { refundOrphanContributions } from "./refundOrphanContributions";
-import { getAllWallets, warmWalletPool } from "./pumpportalWalletPool";
-import { supabase } from "./db";
+import { warmWalletPool } from "./pumpportalWalletPool";
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "30000");
 
@@ -61,21 +60,10 @@ async function main(): Promise<void> {
   // Warm the hybrid (DB + env) wallet pool before publishing capacity.
   await warmWalletPool();
 
-  // Publish PumpPortal wallet pool size so the scheduling edge functions
-  // know the current Pump.fun per-minute capacity. Failure is non-fatal —
-  // schedule defaults to 1.
-  try {
-    const pool = getAllWallets();
-    if (pool.length > 0) {
-      await supabase.rpc("set_app_setting", {
-        p_key: "pumpportal_wallet_pool_size",
-        p_value: String(pool.length),
-      });
-      console.log(`Published Pump.fun wallet pool size: ${pool.length}`);
-    }
-  } catch (err: any) {
-    console.warn(`Could not publish wallet pool size: ${err?.message ?? err}`);
-  }
+  // Pump.fun scheduling capacity is now a fixed constant in
+  // supabase/functions/_shared/scheduleCapacity.ts. Per-launch Lightning
+  // wallets removed the shared-wallet bottleneck, so we no longer publish
+  // pumpportal_wallet_pool_size from here.
 
   const tick = async () => {
     await fundAllPendingSponsoredEscrows(WORKER_ID);

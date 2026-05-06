@@ -10,8 +10,7 @@ import { distributeTokensForLaunch } from "./distribute";
 import { claimPumpfunFeesBatch } from "./claimPumpfunFeesBatch";
 import { claimLocalSigningFeesBatch } from "./claimLocalSigningFees";
 import { harvestPerLaunchFees } from "./harvestPerLaunchFees";
-import { getAllWallets, warmWalletPool } from "./pumpportalWalletPool";
-import { supabase } from "./db";
+import { warmWalletPool } from "./pumpportalWalletPool";
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "30000");
 
@@ -108,18 +107,10 @@ async function main(): Promise<void> {
   // Warm the hybrid (DB + env) wallet pool before publishing capacity.
   await warmWalletPool();
 
-  try {
-    const pool = getAllWallets();
-    if (pool.length > 0) {
-      await supabase.rpc("set_app_setting", {
-        p_key: "pumpportal_wallet_pool_size",
-        p_value: String(pool.length),
-      });
-      console.log(`Published Pump.fun wallet pool size: ${pool.length}`);
-    }
-  } catch (err: any) {
-    console.warn(`Could not publish wallet pool size: ${err?.message ?? err}`);
-  }
+  // Pump.fun scheduling capacity is now a fixed constant in the
+  // edge-function shared module. Per-launch Lightning wallets removed the
+  // shared-wallet bottleneck, so we no longer publish
+  // pumpportal_wallet_pool_size from here.
 
   await pollAndDistribute();
   setInterval(pollAndDistribute, POLL_INTERVAL_MS);
