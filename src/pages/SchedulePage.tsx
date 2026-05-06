@@ -783,11 +783,15 @@ const SchedulePage = () => {
                <Label className="text-xs text-muted-foreground">
                  Send your allocation to a different wallet? (recommended)
                </Label>
-              <Input
-                placeholder="Enter Solana wallet address"
+              <SavedWalletField
+                platform={platform === "pumpfun" ? "pumpfun" : "bags"}
                 value={form.creatorDeliveryWallet}
-                onChange={(e) => update("creatorDeliveryWallet", e.target.value)}
-                className="font-mono text-xs"
+                onChange={(v) => update("creatorDeliveryWallet", v)}
+                saveEnabled={saveDeliveryWallet}
+                onSaveEnabledChange={setSaveDeliveryWallet}
+                saveLabel={deliveryWalletLabel}
+                onSaveLabelChange={setDeliveryWalletLabel}
+                inputClassName="font-mono text-xs"
               />
               <p className="text-[10px] text-muted-foreground">
                 {platform === "pumpfun"
