@@ -480,12 +480,16 @@ const LaunchPage = () => {
                 <label className="text-xs text-muted-foreground">
                   Send allocation to a different wallet? (optional)
                 </label>
-                <Input
-                  placeholder="Enter Solana wallet address"
+                <SavedWalletField
+                  platform={isPumpfun ? "pumpfun" : "bags"}
                   value={tokenDeliveryWallet}
-                  onChange={(e) => setTokenDeliveryWallet(e.target.value)}
-                  className="font-mono text-xs"
+                  onChange={setTokenDeliveryWallet}
+                  saveEnabled={saveDeliveryWallet}
+                  onSaveEnabledChange={setSaveDeliveryWallet}
+                  saveLabel={deliveryWalletLabel}
+                  onSaveLabelChange={setDeliveryWalletLabel}
                   disabled={!canContribute}
+                  inputClassName="font-mono text-xs"
                 />
                 <p className="text-[10px] text-muted-foreground">
                   {isPumpfun
