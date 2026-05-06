@@ -16,11 +16,15 @@ import LaunchHeader from "@/components/launch/LaunchHeader";
 import LaunchStats from "@/components/launch/LaunchStats";
 import ContributionFeed from "@/components/launch/ContributionFeed";
 import HowItWorks from "@/components/launch/HowItWorks";
+import SavedWalletField from "@/components/SavedWalletField";
+import { saveWallet, touchSavedWallet } from "@/lib/savedWallets";
 
 const LaunchPage = () => {
   const { id } = useParams<{ id: string }>();
   const [solAmount, setSolAmount] = useState("");
   const [tokenDeliveryWallet, setTokenDeliveryWallet] = useState("");
+  const [saveDeliveryWallet, setSaveDeliveryWallet] = useState(true);
+  const [deliveryWalletLabel, setDeliveryWalletLabel] = useState("");
   const [isContributing, setIsContributing] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [copied, setCopied] = useState(false);
@@ -235,6 +239,19 @@ const LaunchPage = () => {
       });
       setSolAmount("");
       setTokenDeliveryWallet("");
+      const platformTag = isPumpfun ? "pumpfun" : "bags";
+      if (trimmedDelivery) {
+        if (saveDeliveryWallet) {
+          saveWallet(publicKey, {
+            address: trimmedDelivery,
+            label: deliveryWalletLabel,
+            platform: platformTag,
+          });
+        } else {
+          touchSavedWallet(publicKey, trimmedDelivery);
+        }
+      }
+      setDeliveryWalletLabel("");
       queryClient.invalidateQueries({ queryKey: ["contributions", id] });
       queryClient.invalidateQueries({ queryKey: ["escrowBalance", launch.escrow_wallet_public_key] });
     } catch (err: any) {
@@ -463,12 +480,16 @@ const LaunchPage = () => {
                 <label className="text-xs text-muted-foreground">
                   Send allocation to a different wallet? (optional)
                 </label>
-                <Input
-                  placeholder="Enter Solana wallet address"
+                <SavedWalletField
+                  platform={isPumpfun ? "pumpfun" : "bags"}
                   value={tokenDeliveryWallet}
-                  onChange={(e) => setTokenDeliveryWallet(e.target.value)}
-                  className="font-mono text-xs"
+                  onChange={setTokenDeliveryWallet}
+                  saveEnabled={saveDeliveryWallet}
+                  onSaveEnabledChange={setSaveDeliveryWallet}
+                  saveLabel={deliveryWalletLabel}
+                  onSaveLabelChange={setDeliveryWalletLabel}
                   disabled={!canContribute}
+                  inputClassName="font-mono text-xs"
                 />
                 <p className="text-[10px] text-muted-foreground">
                   {isPumpfun

@@ -9,6 +9,9 @@ import { Card } from "@/components/ui/card";
 import Seo from "@/components/Seo";
 import { Loader2, Copy, Check, AlertTriangle, ExternalLink, Twitter } from "lucide-react";
 import { toast } from "sonner";
+import SavedWalletField from "@/components/SavedWalletField";
+import { saveWallet, touchSavedWallet } from "@/lib/savedWallets";
+import { useWallet } from "@/hooks/useWallet";
 
 type SlotState =
   | { kind: "loading" }
@@ -77,6 +80,9 @@ const SponsoredPage = () => {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [launchDatetime, setLaunchDatetime] = useState("");
   const [creatorDeliveryWallet, setCreatorDeliveryWallet] = useState("");
+  const [saveDeliveryWallet, setSaveDeliveryWallet] = useState(true);
+  const [deliveryWalletLabel, setDeliveryWalletLabel] = useState("");
+  const { publicKey } = useWallet();
   const [submitting, setSubmitting] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -206,6 +212,18 @@ const SponsoredPage = () => {
       });
       if (error) throw error;
       if (!data?.success) throw new Error(data?.error || "Failed to claim slot");
+
+      if (trimmedDelivery) {
+        if (saveDeliveryWallet) {
+          saveWallet(publicKey, {
+            address: trimmedDelivery,
+            label: deliveryWalletLabel,
+            platform: "pumpfun",
+          });
+        } else {
+          touchSavedWallet(publicKey, trimmedDelivery);
+        }
+      }
 
       // Edge function only writes the DB row; the Railway executor funds the
       // escrow asynchronously. Switch to the funding state and poll until
@@ -462,12 +480,15 @@ const SponsoredPage = () => {
                   <p className="text-xs text-muted-foreground">
                      Send your allocation to a wallet you control so you can trade the second the presale launches on Pump.fun. Leave blank to claim later via Erys.
                   </p>
-                  <Input
-                    id="delivery_wallet"
+                  <SavedWalletField
+                    platform="pumpfun"
                     value={creatorDeliveryWallet}
-                    onChange={(e) => setCreatorDeliveryWallet(e.target.value)}
-                    placeholder="Enter Solana wallet address"
-                    className="rounded-none mt-1 font-mono text-xs"
+                    onChange={setCreatorDeliveryWallet}
+                    saveEnabled={saveDeliveryWallet}
+                    onSaveEnabledChange={setSaveDeliveryWallet}
+                    saveLabel={deliveryWalletLabel}
+                    onSaveLabelChange={setDeliveryWalletLabel}
+                    inputClassName="rounded-none mt-1 font-mono text-xs"
                   />
                 </div>
 
