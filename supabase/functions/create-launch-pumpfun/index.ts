@@ -199,12 +199,58 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Step 2: Generate the mint keypair locally (we sign create with it).
-    const mint = await generateSolanaKeypair();
-    const encryptedMintPk = await encryptKey(
-      uint8ArrayToHex(mint.secretKey),
-      ESCROW_ENCRYPTION_KEY
-    );
+    // Step 2: Acquire a vanity `…pump` mint keypair from the pre-ground pool.
+    // Falls back to a random keypair if the pool is empty so launches are
+    // never blocked on grinder availability.
+    let mintPublicKey: string;
+    let encryptedMintPk: string;
+    let claimedPoolRowId: string | null = null;
+    try {
+      const { data: claimed, error: claimErr } = await supabase.rpc(
+        "claim_pump_keypair_from_pool",
+        { p_launch_id: null }
+      );
+      if (claimErr) {
+        console.warn("[create-launch-pumpfun] pool claim RPC failed:", claimErr.message);
+      } else if (Array.isArray(claimed) && claimed.length > 0) {
+        const row = claimed[0] as { id: string; public_key: string; encrypted_private_key: string };
+        try {
+          const decryptedHex = await decryptKey(row.encrypted_private_key, ESCROW_ENCRYPTION_KEY);
+          const secret = hexToUint8Array(decryptedHex);
+          const derivedPub = base58Encode(secret.slice(32));
+          if (
+            secret.length === 64 &&
+            derivedPub === row.public_key &&
+            /pump$/i.test(row.public_key)
+          ) {
+            mintPublicKey = row.public_key;
+            encryptedMintPk = row.encrypted_private_key;
+            claimedPoolRowId = row.id;
+            console.log(`[create-launch-pumpfun] using pooled vanity mint ${mintPublicKey}`);
+          } else {
+            console.warn(
+              `[create-launch-pumpfun] pool row ${row.id} failed verification (derived=${derivedPub} stored=${row.public_key}); falling back to random`
+            );
+          }
+        } catch (verifyErr: any) {
+          console.warn(
+            `[create-launch-pumpfun] pool row ${row.id} decrypt/verify threw: ${verifyErr?.message ?? verifyErr}`
+          );
+        }
+      }
+    } catch (err: any) {
+      console.warn("[create-launch-pumpfun] pool claim threw:", err?.message ?? err);
+    }
+
+    if (!claimedPoolRowId) {
+      console.warn("[create-launch-pumpfun] pump_keypair_pool unavailable — generating random mint (no `pump` suffix)");
+      const mint = await generateSolanaKeypair();
+      mintPublicKey = mint.publicKey;
+      encryptedMintPk = await encryptKey(
+        uint8ArrayToHex(mint.secretKey),
+        ESCROW_ENCRYPTION_KEY
+      );
+    }
 
     // Step 2b: Provision a fresh per-launch PumpPortal Lightning wallet.
     // This wallet IS the escrow for this launch — contributors send SOL
@@ -250,7 +296,7 @@ Deno.serve(async (req) => {
         lightning_wallet_encrypted_private_key: encryptedLightningPk,
         lightning_wallet_encrypted_api_key: encryptedLightningApi,
         created_by_wallet,
-        token_mint_address: mint.publicKey,
+          token_mint_address: mintPublicKey,
         ipfs_metadata_url: ipfsMetadataUrl,
         platform: "pumpfun",
         pumpfun_mint_keypair_encrypted: encryptedMintPk,
@@ -262,13 +308,27 @@ Deno.serve(async (req) => {
       return { data: inserted.data, slot };
     });
 
+    // Patch the pool row with the launch id so we can audit which launch
+    // consumed which keypair. Best-effort: a failure here is non-fatal.
+    if (claimedPoolRowId) {
+      const { error: patchErr } = await supabase
+        .from("pump_keypair_pool")
+        .update({ claimed_by_launch_id: data.id })
+        .eq("id", claimedPoolRowId);
+      if (patchErr) {
+        console.warn(
+          `[create-launch-pumpfun] failed to backfill claimed_by_launch_id on pool row ${claimedPoolRowId}: ${patchErr.message}`
+        );
+      }
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
         launch_id: data.id,
         url: `/launch/${data.id}`,
         escrow_wallet: lightning.pubkey,
-        mint_address: mint.publicKey,
+        mint_address: mintPublicKey,
         adjusted_launch_datetime: slot.adjustedTime,
         original_launch_datetime: slot.originalTime,
         was_adjusted: slot.wasAdjusted,
@@ -333,6 +393,29 @@ async function encryptKey(dataHex: string, encryptionKeyHex: string): Promise<st
   const authTag = encrypted.slice(encrypted.length - 16);
 
   return `${uint8ArrayToHex(iv)}:${uint8ArrayToHex(authTag)}:${uint8ArrayToHex(ciphertext)}`;
+}
+
+async function decryptKey(blob: string, encryptionKeyHex: string): Promise<string> {
+  const parts = blob.split(":");
+  if (parts.length !== 3) throw new Error("invalid encrypted blob format");
+  const [ivHex, tagHex, ctHex] = parts;
+  const iv = hexToUint8Array(ivHex);
+  const authTag = hexToUint8Array(tagHex);
+  const ciphertext = hexToUint8Array(ctHex);
+  const combined = new Uint8Array(ciphertext.length + authTag.length);
+  combined.set(ciphertext);
+  combined.set(authTag, ciphertext.length);
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    hexToUint8Array(encryptionKeyHex),
+    { name: "AES-GCM" },
+    false,
+    ["decrypt"]
+  );
+  const decrypted = new Uint8Array(
+    await crypto.subtle.decrypt({ name: "AES-GCM", iv }, cryptoKey, combined)
+  );
+  return uint8ArrayToHex(decrypted);
 }
 
 function hexToUint8Array(hex: string): Uint8Array {

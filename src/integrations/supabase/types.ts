@@ -538,6 +538,33 @@ export type Database = {
         }
         Relationships: []
       }
+      pump_keypair_pool: {
+        Row: {
+          claimed_at: string | null
+          claimed_by_launch_id: string | null
+          created_at: string
+          encrypted_private_key: string
+          id: string
+          public_key: string
+        }
+        Insert: {
+          claimed_at?: string | null
+          claimed_by_launch_id?: string | null
+          created_at?: string
+          encrypted_private_key: string
+          id?: string
+          public_key: string
+        }
+        Update: {
+          claimed_at?: string | null
+          claimed_by_launch_id?: string | null
+          created_at?: string
+          encrypted_private_key?: string
+          id?: string
+          public_key?: string
+        }
+        Relationships: []
+      }
       pumpfun_fee_sweeps: {
         Row: {
           amount_lamports: number
@@ -1293,6 +1320,14 @@ export type Database = {
           isOneToOne: false
           isSetofReturn: true
         }
+      }
+      claim_pump_keypair_from_pool: {
+        Args: { p_launch_id?: string }
+        Returns: {
+          encrypted_private_key: string
+          id: string
+          public_key: string
+        }[]
       }
       claim_pumpfun_launch_for_worker: {
         Args: { p_lock_expiry_seconds?: number; p_worker_id: string }
