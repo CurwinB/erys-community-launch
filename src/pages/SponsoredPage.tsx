@@ -437,6 +437,9 @@ const SponsoredPage = () => {
                       placeholder="https://t.me/..."
                       className="rounded-none mt-1"
                     />
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      Add your Telegram so contributors can coordinate the shill together.
+                    </p>
                   </div>
                   <div>
                     <Label htmlFor="website">Website</Label>

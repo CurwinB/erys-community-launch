@@ -674,6 +674,9 @@ const SchedulePage = () => {
             <h3 className="text-sm font-semibold text-foreground">Social Links (optional)</h3>
             <Input value={form.twitterUrl} onChange={(e) => update("twitterUrl", e.target.value)} placeholder="Twitter URL" />
             <Input value={form.telegramUrl} onChange={(e) => update("telegramUrl", e.target.value)} placeholder="Telegram URL" />
+            <p className="text-[10px] text-muted-foreground -mt-2">
+              Add your Telegram so contributors can coordinate the shill together.
+            </p>
             <Input value={form.websiteUrl} onChange={(e) => update("websiteUrl", e.target.value)} placeholder="Website URL" />
           </div>
 
