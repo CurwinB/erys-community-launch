@@ -141,6 +141,7 @@ async function recordCycle(args: {
   escrowBefore: bigint;
   escrowAfter: bigint;
   allocations: AllocInput[];
+  notes?: string | null;
 }): Promise<void> {
   const { error } = await supabase.rpc("record_harvest_cycle", {
     p_launch_id: args.launchId,
@@ -153,7 +154,7 @@ async function recordCycle(args: {
     p_escrow_balance_before: args.escrowBefore.toString() as any,
     p_escrow_balance_after: args.escrowAfter.toString() as any,
     p_allocations: args.allocations as any,
-    p_notes: null,
+    p_notes: args.notes ?? null,
   });
   if (error) {
     throw new Error(`record_harvest_cycle failed: ${error.message}`);
