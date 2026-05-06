@@ -393,7 +393,7 @@ export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
       await markDistributed(contribution.id, txSignature);
       totalDistributed += tokenAmount;
       successCount++;
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 200));
     } catch (err: any) {
       console.error(`Failed to send tokens to ${contribution.wallet_address}:`, err.message);
       await markDistributionFailed(contribution.id, err.message);
