@@ -122,7 +122,7 @@ Deno.serve(async (req) => {
     const metadataObj = {
       name: token_name,
       symbol: String(token_symbol).toUpperCase(),
-      description: description || "",
+      description: "Community launch powered by https://erys.live",
       image: image_url || "",
       twitter: twitter_url || "",
       telegram: telegram_url || "",
