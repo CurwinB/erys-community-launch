@@ -55,8 +55,11 @@ const MIN_HARVEST_MULTIPLIER = BigInt(
 );
 const MIN_HARVEST_LAMPORTS = GAS_ESTIMATE_LAMPORTS * MIN_HARVEST_MULTIPLIER;
 
-const TREASURY_BPS = 4000; // 40%
-const CONTRIBUTOR_BPS = 6000; // 60%
+// Per-launch Pump.fun fee split: 70% to creator (launches.created_by_wallet),
+// 30% to platform treasury. Sponsored launches follow the same routing —
+// creator share NEVER re-routes to treasury based on sponsor identity.
+const CREATOR_BPS = 7000; // 70%
+const TREASURY_BPS = 3000; // 30%
 
 const COLLECT_CREATOR_FEE_DISCRIMINATOR = Buffer.from([
   20, 22, 86, 123, 198, 28, 219, 132,
@@ -138,6 +141,7 @@ async function recordCycle(args: {
   escrowBefore: bigint;
   escrowAfter: bigint;
   allocations: AllocInput[];
+  notes?: string | null;
 }): Promise<void> {
   const { error } = await supabase.rpc("record_harvest_cycle", {
     p_launch_id: args.launchId,
@@ -150,7 +154,7 @@ async function recordCycle(args: {
     p_escrow_balance_before: args.escrowBefore.toString() as any,
     p_escrow_balance_after: args.escrowAfter.toString() as any,
     p_allocations: args.allocations as any,
-    p_notes: null,
+    p_notes: args.notes ?? null,
   });
   if (error) {
     throw new Error(`record_harvest_cycle failed: ${error.message}`);
@@ -238,6 +242,20 @@ async function runHarvestCriticalSection(
   connection: Connection,
   treasuryPubkey: PublicKey
 ): Promise<void> {
+  // Resolve creator pubkey BEFORE signing anything. created_by_wallet is
+  // NOT NULL in schema, but we validate base58 to fail fast if corrupted.
+  let creatorPubkey: PublicKey;
+  try {
+    if (!launch.created_by_wallet) throw new Error("created_by_wallet is empty");
+    creatorPubkey = new PublicKey(launch.created_by_wallet);
+  } catch (err: any) {
+    await recordFailure(
+      launch.id,
+      `Missing or invalid created_by_wallet — cannot route 70% creator share: ${err?.message ?? err}`
+    );
+    return;
+  }
+
   const vaultPda = getCreatorVaultPda(lightningKp.publicKey);
   let vaultLamports = 0n;
   try {
@@ -258,12 +276,13 @@ async function runHarvestCriticalSection(
   const escrowBefore = BigInt(
     await connection.getBalance(lightningKp.publicKey, "confirmed")
   );
-  // Need to cover claim tx + treasury transfer tx (2 tx fees + priority).
-  const requiredBudget = TX_FEE_RESERVE * 2n + 100_000n;
+  // Need to cover claim tx + creator transfer tx + treasury transfer tx
+  // (3 tx fees + priority).
+  const requiredBudget = TX_FEE_RESERVE * 3n + 100_000n;
   if (escrowBefore < requiredBudget) {
     await recordFailure(
       launch.id,
-      `Lightning wallet balance ${escrowBefore} below required ${requiredBudget} for claim+treasury tx fees`
+      `Lightning wallet balance ${escrowBefore} below required ${requiredBudget} for claim+creator+treasury tx fees`
     );
     return;
   }
@@ -311,8 +330,40 @@ async function runHarvestCriticalSection(
     return;
   }
 
-  const treasuryLamports = (gross * BigInt(TREASURY_BPS)) / 10000n;
-  const contributorLamports = gross - treasuryLamports;
+  // 70/30 split. Treasury absorbs the rounding remainder so creator gets
+  // exactly floor(gross * 0.7) and treasury gets the rest.
+  const creatorLamports = (gross * BigInt(CREATOR_BPS)) / 10000n;
+  const treasuryLamports = gross - creatorLamports;
+
+  // ---- Creator transfer (paid first) ----
+  let creatorSig: string;
+  try {
+    const tx = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: lightningKp.publicKey,
+        toPubkey: creatorPubkey,
+        lamports: Number(creatorLamports),
+      })
+    );
+    tx.feePayer = lightningKp.publicKey;
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+    tx.recentBlockhash = blockhash;
+    tx.sign(lightningKp);
+    creatorSig = await connection.sendRawTransaction(tx.serialize(), {
+      preflightCommitment: "confirmed",
+    });
+    await connection.confirmTransaction(
+      { signature: creatorSig, blockhash, lastValidBlockHeight },
+      "confirmed"
+    );
+    console.log(`[HARVEST] ${launch.id}: creator tx https://solscan.io/tx/${creatorSig}`);
+  } catch (err: any) {
+    await recordFailure(
+      launch.id,
+      `Creator transfer failed (claim landed ${claimSig}): ${err?.message ?? err}`
+    );
+    return;
+  }
 
   // ---- Treasury transfer ----
   let treasurySig: string;
@@ -339,7 +390,7 @@ async function runHarvestCriticalSection(
   } catch (err: any) {
     await recordFailure(
       launch.id,
-      `Treasury transfer failed (claim landed ${claimSig}): ${err?.message ?? err}`
+      `Treasury transfer failed (claim ${claimSig}, creator ${creatorSig}): ${err?.message ?? err}`
     );
     return;
   }
@@ -348,64 +399,35 @@ async function runHarvestCriticalSection(
     await connection.getBalance(lightningKp.publicKey, "confirmed")
   );
 
-  // ---- Build per-contributor allocations ----
-  const { data: contributions, error: contribErr } = await supabase
-    .from("contributions")
-    .select("id, wallet_address, amount_lamports, basis_points, refund_tx_signature")
-    .eq("launch_id", launch.id);
-
-  if (contribErr) {
-    await recordFailure(launch.id, `Failed to load contributions: ${contribErr.message}`);
-    return;
-  }
-
-  const eligible = (contributions || []).filter((c: any) => !c.refund_tx_signature);
-  const totalContrib = eligible.reduce(
-    (acc: bigint, c: any) => acc + BigInt(c.amount_lamports),
-    0n
-  );
-
+  // Creator is paid directly on-chain — no per-contributor allocation rows.
   const allocations: AllocInput[] = [];
-  if (totalContrib > 0n && contributorLamports > 0n) {
-    let allocated = 0n;
-    // Sort descending by amount so the biggest contributor absorbs rounding remainder.
-    const sorted = [...eligible].sort((a: any, b: any) =>
-      BigInt(b.amount_lamports) > BigInt(a.amount_lamports) ? 1 : -1
-    );
-    for (const c of sorted) {
-      const amt = BigInt(c.amount_lamports);
-      const share = (contributorLamports * amt) / totalContrib;
-      allocations.push({
-        contribution_id: c.id,
-        wallet_address: c.wallet_address,
-        basis_points: Number(c.basis_points ?? 0),
-        lamports: share.toString(),
-      });
-      allocated += share;
-    }
-    // Push remainder onto the largest contributor.
-    const remainder = contributorLamports - allocated;
-    if (remainder > 0n && allocations.length > 0) {
-      allocations[0].lamports = (BigInt(allocations[0].lamports) + remainder).toString();
-    }
-  }
 
   await recordCycle({
     launchId: launch.id,
     gross,
     treasury: treasuryLamports,
-    contributor: contributorLamports,
+    // contributor column repurposed to record creator share (no schema change).
+    contributor: creatorLamports,
     claimSig,
     treasurySig,
     vaultBefore: vaultLamports,
     escrowBefore,
     escrowAfter,
     allocations,
+    notes: `creator=${creatorPubkey.toBase58()} creator_tx=${creatorSig}`,
   });
 
   console.log(
-    `[HARVEST] ${launch.id}: cycle done. gross=${Number(gross) / LAMPORTS_PER_SOL} SOL, treasury=${
-      Number(treasuryLamports) / LAMPORTS_PER_SOL
-    } SOL, contributors=${Number(contributorLamports) / LAMPORTS_PER_SOL} SOL across ${allocations.length} wallet(s)`
+    `[HARVEST][SPLIT] launch=${launch.id} sponsored=${!!launch.is_sponsored} gross=${gross.toString()} ` +
+      `creator_bps=${CREATOR_BPS} creator_lamports=${creatorLamports.toString()} ` +
+      `creator_wallet=${creatorPubkey.toBase58()} creator_tx=${creatorSig} ` +
+      `treasury_bps=${TREASURY_BPS} treasury_lamports=${treasuryLamports.toString()} ` +
+      `treasury_wallet=${treasuryPubkey.toBase58()} treasury_tx=${treasurySig}`
+  );
+
+  console.log(
+    `[HARVEST] ${launch.id}: cycle done. gross=${Number(gross) / LAMPORTS_PER_SOL} SOL, creator=${
+      Number(creatorLamports) / LAMPORTS_PER_SOL
+    } SOL (70%), treasury=${Number(treasuryLamports) / LAMPORTS_PER_SOL} SOL (30%)`
   );
 }
