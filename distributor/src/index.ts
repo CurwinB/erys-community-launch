@@ -7,10 +7,6 @@ import {
   resetStaleExecutingLaunches,
 } from "./db";
 import { distributeTokensForLaunch } from "./distribute";
-import { claimPumpfunFeesBatch } from "./claimPumpfunFeesBatch";
-import { claimLocalSigningFeesBatch } from "./claimLocalSigningFees";
-import { harvestPerLaunchFees } from "./harvestPerLaunchFees";
-import { warmWalletPool } from "./pumpportalWalletPool";
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "30000");
 
@@ -57,38 +53,6 @@ async function pollAndDistribute(): Promise<void> {
   }
 }
 
-async function pollAndClaimFees(): Promise<void> {
-  try {
-    // Batched fee claiming: one custodial-lock acquisition per cycle,
-    // up to N launches processed inside it, then parallel escrow→treasury
-    // sweeps. See claimPumpfunFeesBatch.ts for the full strategy.
-    // Loop in case there are more eligible launches than fit in one batch.
-    let safetyHops = 0;
-    while (safetyHops++ < 5) {
-      const before = Date.now();
-      await claimPumpfunFeesBatch();
-      // If a batch took <1s it likely returned no work — exit.
-      if (Date.now() - before < 1_000) break;
-    }
-
-    // Parallel path: launches executed via local signing (escrow IS the
-    // on-chain creator). PumpPortal can't claim these — we sign the
-    // on-chain collect_creator_fee instruction with the escrow keypair.
-    let localHops = 0;
-    while (localHops++ < 5) {
-      const before = Date.now();
-      await claimLocalSigningFeesBatch();
-      if (Date.now() - before < 1_000) break;
-    }
-
-    // Per-launch Lightning wallet harvest path. Splits fees 40/60 and writes
-    // claimable allocation rows for contributors.
-    await harvestPerLaunchFees();
-  } catch (err: any) {
-    console.error("Error in pollAndClaimFees:", err.message);
-  }
-}
-
 async function main(): Promise<void> {
   console.log("Erys Distributor starting...");
 
@@ -104,26 +68,12 @@ async function main(): Promise<void> {
   console.log(`Connected to Supabase: ${process.env.SUPABASE_URL}`);
   console.log(`Using RPC: ${process.env.SOLANA_RPC_URL?.split("/v2/")[0]}/v2/***`);
 
-  // Warm the hybrid (DB + env) wallet pool before publishing capacity.
-  await warmWalletPool();
-
-  // Pump.fun scheduling capacity is now a fixed constant in the
-  // edge-function shared module. Per-launch Lightning wallets removed the
-  // shared-wallet bottleneck, so we no longer publish
-  // pumpportal_wallet_pool_size from here.
+  // Pump.fun creator-fee claiming runs in its own dedicated `fee-claimer`
+  // Railway service. The distributor only handles SPL token distribution
+  // to contributors after a launch lands.
 
   await pollAndDistribute();
   setInterval(pollAndDistribute, POLL_INTERVAL_MS);
-
-  // Pump.fun creator fee claiming runs every 10 minutes
-  // Individual launches are only claimed if 10 minutes have passed since last claim
-  const PUMPFUN_CLAIM_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
-
-  console.log("Pump.fun fee claiming enabled. Checking every 10 minutes.");
-
-  // Run immediately on startup then on interval
-  await pollAndClaimFees();
-  setInterval(pollAndClaimFees, PUMPFUN_CLAIM_INTERVAL_MS);
 
   process.on("SIGTERM", () => {
     console.log("SIGTERM received. Shutting down gracefully...");
