@@ -655,14 +655,6 @@ const SchedulePage = () => {
             </div>
 
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label>Description</Label>
-                <span className="text-[10px] text-muted-foreground">{form.description.length}/1000</span>
-              </div>
-              <Textarea maxLength={1000} value={form.description} onChange={(e) => update("description", e.target.value)} placeholder="Describe your token..." rows={4} />
-            </div>
-
-            <div className="space-y-2">
               <Label>Token Image</Label>
               <label className="flex cursor-pointer flex-col items-center justify-center rounded-sm border border-dashed border-border bg-background p-6 transition-colors hover:border-primary/30">
                 {imagePreview ? (
