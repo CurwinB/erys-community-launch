@@ -22,6 +22,8 @@ import { useWallet } from "@/hooks/useWallet";
 import { Upload, Copy, ExternalLink, Check, Loader2, AlertCircle } from "lucide-react";
 import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 import PlatformPausedCard from "@/components/schedule/PlatformPausedCard";
+import SavedWalletField from "@/components/SavedWalletField";
+import { saveWallet, touchSavedWallet } from "@/lib/savedWallets";
 
 const RPC_URL = import.meta.env.VITE_SOLANA_RPC_URL;
 const connection = new Connection(RPC_URL, "confirmed");
@@ -97,6 +99,8 @@ const SchedulePage = () => {
   } | null>(null);
   const [successData, setSuccessData] = useState<{ id: string; url: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [saveDeliveryWallet, setSaveDeliveryWallet] = useState(true);
+  const [deliveryWalletLabel, setDeliveryWalletLabel] = useState("");
 
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [slotPreview, setSlotPreview] = useState<{
@@ -315,6 +319,18 @@ const SchedulePage = () => {
     });
     if (error) throw error;
     if (data?.error) throw new Error(data.error);
+    if (trimmedDelivery) {
+      const platformTag = platform === "pumpfun" ? "pumpfun" : "bags";
+      if (saveDeliveryWallet) {
+        saveWallet(publicKey, {
+          address: trimmedDelivery,
+          label: deliveryWalletLabel,
+          platform: platformTag,
+        });
+      } else {
+        touchSavedWallet(publicKey, trimmedDelivery);
+      }
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
