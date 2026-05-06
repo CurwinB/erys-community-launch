@@ -5,8 +5,7 @@ import { executeAllPendingLaunches } from "./executeLaunch";
 import { fundAllPendingSponsoredEscrows } from "./fundSponsoredEscrow";
 import { sweepAllCancelledSponsorEscrows } from "./sweepCancelledSponsorEscrows";
 import { refundOrphanContributions } from "./refundOrphanContributions";
-import { getAllWallets, warmWalletPool } from "./pumpportalWalletPool";
-import { supabase } from "./db";
+import { warmWalletPool } from "./pumpportalWalletPool";
 
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "30000");
 
