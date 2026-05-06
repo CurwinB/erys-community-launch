@@ -1,0 +1,23 @@
+{
+  "name": "erys-fee-claimer",
+  "version": "1.0.0",
+  "description": "Erys Pump.fun creator-fee claiming service",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@solana/spl-token": "^0.3.8",
+    "@solana/web3.js": "^1.91.1",
+    "@supabase/supabase-js": "^2.39.0",
+    "bs58": "^5.0.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.2"
+  }
+}
