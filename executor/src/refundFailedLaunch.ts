@@ -4,6 +4,7 @@ import {
   PublicKey,
   SystemProgram,
   Transaction,
+  LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import { decryptEscrowKey } from "./decrypt";
 import { supabase } from "./db";
@@ -24,7 +25,7 @@ export async function refundFailedLaunch(launchId: string): Promise<void> {
   const { data: launch, error: launchErr } = await supabase
     .from("launches")
     .select(
-      "escrow_wallet_encrypted_private_key, status, platform, pumpfun_launch_signature, processing_fee_tx_signature, processing_fee_lamports"
+      "escrow_wallet_encrypted_private_key, status, platform, pumpfun_launch_signature, processing_fee_tx_signature, processing_fee_lamports, is_sponsored, sponsored_amount_lamports, sponsored_tx_signature"
     )
     .eq("id", launchId)
     .single();
@@ -127,6 +128,23 @@ export async function refundFailedLaunch(launchId: string): Promise<void> {
     return;
   }
 
+  // Reserve the sponsored seed (if any) so refunds can ONLY draw from
+  // contributor SOL. Mirrors the carve-out in cancelAndRefund.ts: without
+  // it, the platform's 0.1 SOL seed gets paid out to the influencer (or
+  // silently overpays a real contributor whose payout is capped by escrow),
+  // and sweepCancelledSponsorEscrows later finds an empty escrow.
+  const sponsorSeed = (launch as any).is_sponsored
+    ? BigInt((launch as any).sponsored_amount_lamports || 0)
+    : 0n;
+  if (sponsorSeed > 0n) {
+    escrowAvailable =
+      escrowAvailable > sponsorSeed ? escrowAvailable - sponsorSeed : 0n;
+    console.log(
+      `refundFailedLaunch ${launchId}: reserving ${Number(sponsorSeed) / LAMPORTS_PER_SOL} SOL sponsor seed for treasury sweep.`,
+    );
+  }
+  const sponsoredTxSignature = ((launch as any).sponsored_tx_signature || "") as string;
+
   let refunded = 0;
   let partial = 0;
   let unrecoverable = 0;
@@ -135,6 +153,19 @@ export async function refundFailedLaunch(launchId: string): Promise<void> {
   for (const contrib of contributions as any[]) {
     try {
       if (contrib.refund_tx_signature) continue;
+
+      // Skip the platform-funded sponsor seed contribution row. Its
+      // wallet_address is the influencer's pump wallet, but the SOL must
+      // return to the platform treasury via sweepCancelledSponsorEscrows.
+      if (
+        sponsoredTxSignature &&
+        contrib.tx_signature === sponsoredTxSignature
+      ) {
+        console.log(
+          `refundFailedLaunch ${launchId}: skipping sponsor seed contribution row ${contrib.id} (${contrib.amount_lamports} lamports) — reserved for treasury recovery.`,
+        );
+        continue;
+      }
 
       const requested = BigInt(contrib.amount_lamports) - TX_FEE;
       if (requested <= 0n) {
