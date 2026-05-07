@@ -14,6 +14,11 @@ const bagsSteps = [
     title: "Earn Creator Fees Forever",
     body: "You're written on-chain as a permanent fee-share recipient. Every trade, every block, your wallet earns. Forever.",
   },
+  {
+    step: "4",
+    title: "0.3 SOL Threshold",
+    body: "If the presale doesn't reach 0.3 SOL by launch time, it's cancelled and SOL is refunded to every contributor's wallet automatically.",
+  },
 ];
 
 const pumpfunSteps = [
@@ -32,6 +37,11 @@ const pumpfunSteps = [
     title: "No Claim, No Wait",
      body: "Tokens are in your wallet the second the presale launches. Trade immediately — no claim flow, no delay.",
   },
+  {
+    step: "4",
+    title: "0.3 SOL Threshold",
+    body: "If the presale doesn't reach 0.3 SOL by launch time, it's cancelled and SOL is refunded to every contributor's wallet automatically.",
+  },
 ];
 
 interface HowItWorksProps {
@@ -41,7 +51,7 @@ interface HowItWorksProps {
 const HowItWorks = ({ platform }: HowItWorksProps) => {
   const steps = platform === "pumpfun" ? pumpfunSteps : bagsSteps;
   return (
-    <div className="grid gap-4 md:grid-cols-3">
+    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
       {steps.map((s) => (
         <div key={s.step} className="flex items-start gap-3 border border-border bg-card p-4">
           <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-sm bg-primary font-mono text-xs font-bold text-primary-foreground">

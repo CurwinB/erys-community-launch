@@ -59,9 +59,11 @@ const RiskPage = () => {
           </Section>
 
           <Section title="5. Refund mechanics">
-            If a launch fails or is cancelled, contributions are refunded to the originating wallet
-            less Solana network fees. Refund timing depends on Solana finality and platform
-            conditions. We do not guarantee any specific refund window.
+            Any presale that fails to reach the 0.3 SOL minimum raise by its scheduled launch time
+            is cancelled automatically and contributions are refunded to the originating wallets.
+            More generally, if a launch fails or is cancelled, contributions are refunded to the
+            originating wallet less Solana network fees. Refund timing depends on Solana finality
+            and platform conditions. We do not guarantee any specific refund window.
           </Section>
 
           <Section title="6. Sponsored and influencer slots">

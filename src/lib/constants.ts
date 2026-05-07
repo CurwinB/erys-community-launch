@@ -1,5 +1,14 @@
 export const LAMPORTS_PER_SOL = 1_000_000_000;
 
+/**
+ * Minimum total presale raise (in SOL) required for a launch to execute.
+ * Enforced server-side in executor/src/executeBags.ts and executePumpfun.ts.
+ * If the escrow holds less than this at launch time, the launch is
+ * cancelled and every contributor is refunded automatically.
+ */
+export const MIN_RAISE_SOL = 0.3;
+export const MIN_RAISE_LAMPORTS = MIN_RAISE_SOL * LAMPORTS_PER_SOL;
+
 export function lamportsToSol(lamports: number): number {
   return lamports / LAMPORTS_PER_SOL;
 }

@@ -363,6 +363,16 @@ const SponsoredPage = () => {
                  you. Pick your own launch time below — we'll auto-shift forward by a few
                 minutes if your chosen slot is already booked.
               </p>
+              <Card className="rounded-none border-primary/30 bg-primary/5 p-4 mb-4">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
+                  <p className="text-xs leading-relaxed text-foreground">
+                    Your token must collect at least{" "}
+                    <span className="font-mono font-semibold text-primary">0.3 SOL</span>{" "}
+                    in presale contributions by launch time, or it will be cancelled and all SOL refunded automatically to contributor wallets.
+                  </p>
+                </div>
+              </Card>
               <Card className="rounded-none border-border bg-card p-4">
                 <div className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">
                   Link expires in

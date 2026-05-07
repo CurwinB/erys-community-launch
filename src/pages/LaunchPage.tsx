@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import CountdownTimer from "@/components/CountdownTimer";
 import Seo from "@/components/Seo";
 import { formatSol, solToLamports, LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
-import { Wallet, Loader2, ExternalLink, Share2, Copy, Check } from "lucide-react";
+import { Wallet, Loader2, ExternalLink, Share2, Copy, Check, AlertTriangle } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useWallet } from "@/hooks/useWallet";
 import { useToast } from "@/hooks/use-toast";
@@ -523,10 +523,17 @@ const LaunchPage = () => {
                       : "Ape In"}
               </Button>
 
+              <div className="flex items-start gap-2 border border-primary/30 bg-primary/5 p-3">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-primary" />
+                <p className="text-[11px] leading-relaxed text-foreground">
+                  Presale must reach <span className="font-mono font-semibold text-primary">0.3 SOL</span> total by launch time. If it doesn't, the launch is cancelled and all SOL is refunded automatically to contributor wallets.
+                </p>
+              </div>
+
               <p className="text-[10px] leading-relaxed text-muted-foreground">
                 {isPumpfun
-                   ? "Your SOL sits in a non-custodial escrow until launch. Allocation is pro-rata at first-block entry on the bonding curve. A small platform fee covers infra. If the presale is cancelled your SOL is refunded automatically."
-                   : "Your SOL sits in a non-custodial escrow until launch. You receive a pro-rata token allocation AND a permanent on-chain creator-fee share. If the presale is cancelled your SOL is refunded automatically."}
+                   ? "Your SOL sits in a non-custodial escrow until launch. Allocation is pro-rata at first-block entry on the bonding curve. A small platform fee covers infra."
+                   : "Your SOL sits in a non-custodial escrow until launch. You receive a pro-rata token allocation AND a permanent on-chain creator-fee share."}
               </p>
             </div>
 
