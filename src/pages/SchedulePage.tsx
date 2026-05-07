@@ -747,6 +747,9 @@ const SchedulePage = () => {
             <p className="text-xs text-muted-foreground">
               Platform-enforced minimum: <span className="font-mono text-foreground">0.1 SOL</span> per contributor. No maximum.
             </p>
+            <p className="text-xs text-muted-foreground">
+              Presale must reach <span className="font-mono font-semibold text-primary">0.3 SOL</span> total to launch. Your seed buy counts. If the threshold isn't met by launch time, every contributor (including you) is refunded automatically.
+            </p>
           </div>
 
           <div className="space-y-3 border border-primary/40 bg-card p-6">
