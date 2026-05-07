@@ -242,19 +242,54 @@ async function runHarvestCriticalSection(
   connection: Connection,
   treasuryPubkey: PublicKey
 ): Promise<void> {
-  // Resolve creator pubkey BEFORE signing anything. created_by_wallet is
-  // NOT NULL in schema, but we validate base58 to fail fast if corrupted.
-  let creatorPubkey: PublicKey;
-  try {
-    if (!launch.created_by_wallet) throw new Error("created_by_wallet is empty");
-    creatorPubkey = new PublicKey(launch.created_by_wallet);
-  } catch (err: any) {
+  // Resolve creator pubkey BEFORE signing anything.
+  // - Sponsored launches: prefer creator_delivery_wallet (entered by the
+  //   influencer at claim time), fall back to created_by_wallet.
+  // - Non-sponsored launches: created_by_wallet.
+  // Legacy sponsored rows sometimes have a URL string in created_by_wallet
+  // (e.g. STARBY) — tryParsePubkey returns null on those instead of throwing.
+  const isSponsored = !!(launch as any).is_sponsored;
+  const createdByRaw = (launch as any).created_by_wallet ?? null;
+  const deliveryRaw = (launch as any).creator_delivery_wallet ?? null;
+
+  let creatorPubkey: PublicKey | null = null;
+  let resolutionPath = "unresolved";
+  if (isSponsored) {
+    const fromDelivery = tryParsePubkey(deliveryRaw);
+    if (fromDelivery) {
+      creatorPubkey = fromDelivery;
+      resolutionPath = "sponsored:creator_delivery_wallet";
+    } else {
+      const fromCreated = tryParsePubkey(createdByRaw);
+      if (fromCreated) {
+        creatorPubkey = fromCreated;
+        resolutionPath = "sponsored:created_by_wallet";
+      }
+    }
+  } else {
+    const fromCreated = tryParsePubkey(createdByRaw);
+    if (fromCreated) {
+      creatorPubkey = fromCreated;
+      resolutionPath = "non_sponsored:created_by_wallet";
+    }
+  }
+
+  if (!creatorPubkey) {
+    console.error(
+      `[HARVEST][CREATOR_RESOLVE] launch=${launch.id} sponsored=${isSponsored} result=unresolved ` +
+        `created_by_wallet=${JSON.stringify(createdByRaw)} creator_delivery_wallet=${JSON.stringify(deliveryRaw)}`
+    );
     await recordFailure(
       launch.id,
-      `Missing or invalid created_by_wallet — cannot route 70% creator share: ${err?.message ?? err}`
+      "Could not resolve creator destination wallet for 70% share"
     );
     return;
   }
+
+  console.log(
+    `[HARVEST][CREATOR_RESOLVE] launch=${launch.id} sponsored=${isSponsored} ` +
+      `path=${resolutionPath} creator=${creatorPubkey.toBase58()}`
+  );
 
   const vaultPda = getCreatorVaultPda(lightningKp.publicKey);
   let vaultLamports = 0n;
@@ -414,7 +449,7 @@ async function runHarvestCriticalSection(
     escrowBefore,
     escrowAfter,
     allocations,
-    notes: `creator=${creatorPubkey.toBase58()} creator_tx=${creatorSig}`,
+    notes: `path=${resolutionPath} creator=${creatorPubkey.toBase58()} creator_tx=${creatorSig}`,
   });
 
   console.log(
