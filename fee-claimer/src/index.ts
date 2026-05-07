@@ -29,30 +29,11 @@ function validateEnv(): void {
 
 async function pollAndClaimFees(): Promise<void> {
   try {
-    // Batched fee claiming: one custodial-lock acquisition per cycle,
-    // up to N launches processed inside it, then parallel escrow→treasury
-    // sweeps. See claimPumpfunFeesBatch.ts for the full strategy.
-    // Loop in case there are more eligible launches than fit in one batch.
-    let safetyHops = 0;
-    while (safetyHops++ < 10) {
-      const before = Date.now();
-      await claimPumpfunFeesBatch();
-      // If a batch took <1s it likely returned no work — exit.
-      if (Date.now() - before < 1_000) break;
-    }
-
-    // Parallel path: launches executed via local signing (escrow IS the
-    // on-chain creator). PumpPortal can't claim these — we sign the
-    // on-chain collect_creator_fee instruction with the escrow keypair.
-    let localHops = 0;
-    while (localHops++ < 10) {
-      const before = Date.now();
-      await claimLocalSigningFeesBatch();
-      if (Date.now() - before < 1_000) break;
-    }
-
-    // Per-launch Lightning wallet harvest path. Splits fees 70/30 between
-    // the launch creator and the treasury.
+    // NOTE: legacy batch sweeps (claimPumpfunFeesBatch / claimLocalSigningFeesBatch)
+    // are intentionally disabled. They sweep 100% of the creator vault to the
+    // treasury and pre-drain it before the per-launch 70/30 harvester can run.
+    // Only the per-launch Lightning wallet harvest path runs now — splits 70/30
+    // between the launch creator and the treasury.
     await harvestPerLaunchFees();
   } catch (err: any) {
     console.error("Error in pollAndClaimFees:", err.message);
