@@ -139,7 +139,7 @@ Deno.serve(async (req) => {
     const metadataObj: Record<string, unknown> = {
       name: token_name,
       symbol: symbolUpper,
-      description: "Community launch powered by https://erys.live",
+      description: "Deployed using https://erys.live",
       image: finalImageUrl,
       showName: true,
       createdOn: "https://pump.fun",
