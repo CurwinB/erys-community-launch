@@ -1,5 +1,5 @@
-import { formatSol } from "@/lib/constants";
-import { Coins, Users } from "lucide-react";
+import { formatSol, MIN_RAISE_LAMPORTS, MIN_RAISE_SOL } from "@/lib/constants";
+import { Check, Coins, Users } from "lucide-react";
 
 interface LaunchStatsProps {
   totalEscrow: number;
@@ -21,6 +21,8 @@ const LaunchStats = ({ totalEscrow, contributorCount, onChainLamports }: LaunchS
     typeof onChainLamports === "number" && onChainLamports > totalEscrow
       ? onChainLamports - totalEscrow
       : 0;
+  const thresholdReached = displayed >= MIN_RAISE_LAMPORTS;
+  const pct = Math.min(100, (displayed / MIN_RAISE_LAMPORTS) * 100);
 
   return (
   <div className="grid grid-cols-2 gap-4">
@@ -35,6 +37,26 @@ const LaunchStats = ({ totalEscrow, contributorCount, onChainLamports }: LaunchS
           {formatSol(pendingLamports)} pending
         </p>
       )}
+      <div className="mt-3 space-y-1">
+        <div className="h-1 w-full bg-border">
+          <div
+            className={`h-full ${thresholdReached ? "bg-success" : "bg-primary"}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <div className="flex items-center gap-1 text-[10px] uppercase tracking-widest text-muted-foreground">
+          {thresholdReached ? (
+            <>
+              <Check className="h-3 w-3 text-success" />
+              <span>Min raise met</span>
+            </>
+          ) : (
+            <span>
+              Min to launch: <span className="font-mono text-foreground">{MIN_RAISE_SOL} SOL</span>
+            </span>
+          )}
+        </div>
+      </div>
     </div>
     <div className="border border-border bg-card p-4">
       <div className="flex items-center gap-2">
