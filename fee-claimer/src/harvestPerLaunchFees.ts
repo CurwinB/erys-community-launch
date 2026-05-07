@@ -72,6 +72,18 @@ function getCreatorVaultPda(creator: PublicKey): PublicKey {
   )[0];
 }
 
+function tryParsePubkey(s: string | null | undefined): PublicKey | null {
+  if (!s || typeof s !== "string") return null;
+  const trimmed = s.trim();
+  if (trimmed.length < 32 || trimmed.length > 44) return null;
+  if (!/^[1-9A-HJ-NP-Za-km-z]+$/.test(trimmed)) return null;
+  try {
+    return new PublicKey(trimmed);
+  } catch {
+    return null;
+  }
+}
+
 function getEventAuthorityPda(): PublicKey {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("__event_authority")],
