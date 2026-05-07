@@ -73,7 +73,6 @@ const SponsoredPage = () => {
   // form
   const [tokenName, setTokenName] = useState("");
   const [tokenSymbol, setTokenSymbol] = useState("");
-  const [description, setDescription] = useState("");
   const [twitterUrl, setTwitterUrl] = useState("");
   const [telegramUrl, setTelegramUrl] = useState("");
   const [websiteUrl, setWebsiteUrl] = useState("");
@@ -201,7 +200,6 @@ const SponsoredPage = () => {
           link_token: linkToken,
           token_name: tokenName.trim(),
           token_symbol: tokenSymbol.trim(),
-          description: description.trim() || undefined,
           image_url,
           twitter_url: twitterUrl.trim() || undefined,
           telegram_url: telegramUrl.trim() || undefined,
@@ -426,16 +424,6 @@ const SponsoredPage = () => {
                   <p className="text-[10px] text-muted-foreground mt-1">
                      If your chosen minute is full, we'll slide forward to the next open Pump.fun launch slot.
                   </p>
-                </div>
-                <div>
-                  <Label htmlFor="description">Description</Label>
-                  <Textarea
-                    id="description"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    rows={3}
-                    className="rounded-none mt-1"
-                  />
                 </div>
                 <div>
                   <Label htmlFor="image">Token Image</Label>
