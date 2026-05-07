@@ -31,9 +31,9 @@ Deno.serve(async (req) => {
 
     const linkToken = crypto.randomUUID().replace(/-/g, "");
     const now = new Date();
-    // Link is valid for 48 hours; the influencer picks the actual launch
+    // Link is valid for 24 hours; the influencer picks the actual launch
     // time when they claim the slot.
-    const expiresAt = new Date(now.getTime() + 48 * 60 * 60 * 1000);
+    const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
     const { data, error } = await supabase
       .from("launches")
