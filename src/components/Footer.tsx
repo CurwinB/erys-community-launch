@@ -1,9 +1,23 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
+import { Copy, Check } from "lucide-react";
 
 const CONTACT_EMAIL = "info@erys.live";
+const CONTRACT_ADDRESS = "4T1GVUfBjwhPv2GQiWP8GiUiq5GGhdybtVRJY733BAGS";
 
 const Footer = () => {
   const year = new Date().getFullYear();
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(CONTRACT_ADDRESS);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* ignore */
+    }
+  };
   return (
     <footer className="border-t border-border bg-background">
       <div className="container mx-auto px-4 py-12">
@@ -87,28 +101,55 @@ const Footer = () => {
           </div>
         </div>
 
-        <div className="mt-10 flex flex-col items-start justify-between gap-3 border-t border-border pt-6 text-xs text-muted-foreground md:flex-row md:items-center">
-          <span>
-            © {year} Erys. Launch on{" "}
-            <a
-              href="https://bags.fm"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-foreground transition-colors hover:text-primary"
-            >
-              Bags.fm
-            </a>{" "}
-            or{" "}
-            <a
-              href="https://pump.fun"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-foreground transition-colors hover:text-primary"
-            >
-              Pump.fun
-            </a>
-            .
-          </span>
+        <div className="mt-10 flex flex-col items-start justify-between gap-4 border-t border-border pt-6 text-xs text-muted-foreground md:flex-row md:items-center">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
+            <span>
+              © {year} Erys. Launch on{" "}
+              <a
+                href="https://bags.fm"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-foreground transition-colors hover:text-primary"
+              >
+                Bags.fm
+              </a>{" "}
+              or{" "}
+              <a
+                href="https://pump.fun"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-foreground transition-colors hover:text-primary"
+              >
+                Pump.fun
+              </a>
+              .
+            </span>
+
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                CA
+              </span>
+              <div className="flex items-center gap-1.5 overflow-hidden rounded border border-border bg-card px-2 py-1 transition-colors hover:border-primary/30">
+                <span className="max-w-[200px] truncate font-mono text-[11px] text-foreground sm:max-w-[260px]">
+                  {CONTRACT_ADDRESS}
+                </span>
+                <button
+                  onClick={handleCopy}
+                  className="flex shrink-0 items-center gap-1 text-muted-foreground transition-colors hover:text-primary"
+                  aria-label="Copy contract address"
+                >
+                  {copied ? (
+                    <>
+                      <Check className="h-3 w-3" />
+                      <span className="font-mono text-[10px]">Copied</span>
+                    </>
+                  ) : (
+                    <Copy className="h-3 w-3" />
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
           <span className="font-mono uppercase tracking-widest">
             Not financial advice · Crypto involves risk
           </span>
