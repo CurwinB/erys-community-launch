@@ -136,11 +136,9 @@ const Index = () => {
     { key: "funded", label: "Most Funded" },
   ];
 
-  const totalCompletedPages = Math.ceil((completedLaunches?.length || 0) / LAUNCHES_PER_PAGE);
-  const paginatedCompleted = completedLaunches?.slice(
-    (completedPage - 1) * LAUNCHES_PER_PAGE,
-    completedPage * LAUNCHES_PER_PAGE,
-  ) || [];
+  const COMPLETED_LIMIT = 3;
+  const totalCompletedPages = 1;
+  const paginatedCompleted = completedLaunches?.slice(0, COMPLETED_LIMIT) || [];
 
   const features = [
     {
