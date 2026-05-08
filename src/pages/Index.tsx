@@ -7,7 +7,7 @@ import Seo from "@/components/Seo";
 import { supabase } from "@/integrations/supabase/client";
 import { LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { Coins, Clock, Shield, ArrowDown } from "lucide-react";
+import { Coins, Clock, Shield, TrendingUp, Rocket } from "lucide-react";
 
 type SortKey = "soonest" | "contributors" | "funded";
 
@@ -176,35 +176,84 @@ const Index = () => {
         }}
       />
       {/* Hero */}
-      <section className="border-b border-border">
-        <div className="container mx-auto px-4 py-5 md:py-8">
-          <div className="mx-auto max-w-2xl text-center">
-            <div className="mb-2 inline-flex items-center gap-2 rounded-sm border border-primary/30 bg-primary/5 px-2 py-1">
-              <span className="text-[10px] font-medium text-primary">PRESALES ON BAGS.FM &amp; PUMP.FUN</span>
-            </div>
-            <h1 className="text-xl font-bold tracking-tight text-foreground md:text-2xl">
-              Run a fair-launch presale on Solana.
+      <section className="relative overflow-hidden border-b border-border">
+        {/* Ambient glow */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 -z-10"
+          style={{
+            background:
+              "radial-gradient(60% 50% at 50% 0%, hsl(var(--primary) / 0.15) 0%, transparent 70%)",
+          }}
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-px"
+          style={{
+            background:
+              "linear-gradient(90deg, transparent, hsl(var(--primary) / 0.6), transparent)",
+          }}
+        />
+        <div className="container mx-auto px-4 py-16 md:py-24">
+          <div className="mx-auto max-w-3xl text-center">
+            <h1 className="text-4xl font-bold leading-[1.05] tracking-tight text-foreground md:text-6xl">
+              Get in before <br className="hidden sm:block" />
+              <span className="text-primary [text-shadow:0_0_40px_hsl(var(--primary)/0.5)]">
+                the launch.
+              </span>
             </h1>
-            <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
-               Open a presale, schedule launch time, let your community ape in before the token launches on Bags or Pump. Allocations drop on-chain the moment it goes live.
+            <p className="mx-auto mt-6 max-w-xl text-base text-muted-foreground md:text-lg">
+              Presales for Pump.fun &amp; Bags launches. Tokens auto-distributed the moment trading opens.
             </p>
-            <div className="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
-              <Link to="/schedule">
-                <Button size="lg" className="w-full sm:w-auto">
+            <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+              <Button
+                size="lg"
+                className="w-full px-8 shadow-[0_0_30px_hsl(var(--primary)/0.35)] sm:w-auto"
+                onClick={() =>
+                  document.getElementById("launches")?.scrollIntoView({ behavior: "smooth" })
+                }
+              >
+                Join Presales
+              </Button>
+              <Link to="/schedule" className="w-full sm:w-auto">
+                <Button variant="outline" size="lg" className="w-full sm:w-auto">
                   Launch a Presale
                 </Button>
               </Link>
-              <Button
-                variant="outline"
-                size="lg"
-                className="w-full sm:w-auto"
+            </div>
+
+            {/* Identity blocks */}
+            <div className="mx-auto mt-12 grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2">
+              <button
                 onClick={() =>
-                  document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" })
+                  document.getElementById("launches")?.scrollIntoView({ behavior: "smooth" })
                 }
+                className="group relative border border-border bg-card/60 p-5 text-left backdrop-blur transition-all hover:border-primary/60 hover:bg-card"
               >
-                How presales work
-                <ArrowDown className="ml-2 h-4 w-4" />
-              </Button>
+                <div className="mb-3 flex items-center gap-2">
+                  <TrendingUp className="h-4 w-4 text-primary" />
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground group-hover:text-primary">
+                    For Traders
+                  </span>
+                </div>
+                <p className="text-base font-semibold text-foreground">
+                  Be there before the first candle.
+                </p>
+              </button>
+              <Link
+                to="/schedule"
+                className="group relative border border-border bg-card/60 p-5 text-left backdrop-blur transition-all hover:border-primary/60 hover:bg-card"
+              >
+                <div className="mb-3 flex items-center gap-2">
+                  <Rocket className="h-4 w-4 text-primary" />
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground group-hover:text-primary">
+                    For Creators
+                  </span>
+                </div>
+                <p className="text-base font-semibold text-foreground">
+                  Launch with built-in community momentum.
+                </p>
+              </Link>
             </div>
           </div>
         </div>
