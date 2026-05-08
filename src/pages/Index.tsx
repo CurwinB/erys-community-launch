@@ -194,21 +194,20 @@ const Index = () => {
               "linear-gradient(90deg, transparent, hsl(var(--primary) / 0.6), transparent)",
           }}
         />
-        <div className="container mx-auto px-4 py-16 md:py-24">
+        <div className="container mx-auto px-4 py-6 md:py-8">
           <div className="mx-auto max-w-3xl text-center">
-            <h1 className="text-4xl font-bold leading-[1.05] tracking-tight text-foreground md:text-6xl">
-              Get in before <br className="hidden sm:block" />
-              <span className="text-primary [text-shadow:0_0_40px_hsl(var(--primary)/0.5)]">
+            <h1 className="text-2xl font-bold leading-[1.1] tracking-tight text-foreground md:text-3xl">
+              Get in before{" "}
+              <span className="text-primary [text-shadow:0_0_30px_hsl(var(--primary)/0.5)]">
                 the launch.
               </span>
             </h1>
-            <p className="mx-auto mt-6 max-w-xl text-base text-muted-foreground md:text-lg">
+            <p className="mx-auto mt-2 max-w-xl text-xs text-muted-foreground md:text-sm">
               Presales for Pump.fun &amp; Bags launches. Tokens auto-distributed the moment trading opens.
             </p>
-            <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <div className="mt-3 flex flex-col items-center justify-center gap-2 sm:flex-row">
               <Button
-                size="lg"
-                className="w-full px-8 shadow-[0_0_30px_hsl(var(--primary)/0.35)] sm:w-auto"
+                className="w-full px-6 shadow-[0_0_20px_hsl(var(--primary)/0.35)] sm:w-auto"
                 onClick={() =>
                   document.getElementById("launches")?.scrollIntoView({ behavior: "smooth" })
                 }
@@ -216,41 +215,41 @@ const Index = () => {
                 Join Presales
               </Button>
               <Link to="/schedule" className="w-full sm:w-auto">
-                <Button variant="outline" size="lg" className="w-full sm:w-auto">
+                <Button variant="outline" className="w-full sm:w-auto">
                   Launch a Presale
                 </Button>
               </Link>
             </div>
 
             {/* Identity blocks */}
-            <div className="mx-auto mt-12 grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="mx-auto mt-4 grid max-w-2xl grid-cols-2 gap-2">
               <button
                 onClick={() =>
                   document.getElementById("launches")?.scrollIntoView({ behavior: "smooth" })
                 }
-                className="group relative border border-border bg-card/60 p-5 text-left backdrop-blur transition-all hover:border-primary/60 hover:bg-card"
+                className="group border border-border bg-card/60 px-3 py-2 text-left backdrop-blur transition-all hover:border-primary/60 hover:bg-card"
               >
-                <div className="mb-3 flex items-center gap-2">
-                  <TrendingUp className="h-4 w-4 text-primary" />
-                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground group-hover:text-primary">
+                <div className="mb-0.5 flex items-center gap-1.5">
+                  <TrendingUp className="h-3 w-3 text-primary" />
+                  <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground group-hover:text-primary">
                     For Traders
                   </span>
                 </div>
-                <p className="text-base font-semibold text-foreground">
+                <p className="text-xs font-semibold text-foreground">
                   Be there before the first candle.
                 </p>
               </button>
               <Link
                 to="/schedule"
-                className="group relative border border-border bg-card/60 p-5 text-left backdrop-blur transition-all hover:border-primary/60 hover:bg-card"
+                className="group border border-border bg-card/60 px-3 py-2 text-left backdrop-blur transition-all hover:border-primary/60 hover:bg-card"
               >
-                <div className="mb-3 flex items-center gap-2">
-                  <Rocket className="h-4 w-4 text-primary" />
-                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground group-hover:text-primary">
+                <div className="mb-0.5 flex items-center gap-1.5">
+                  <Rocket className="h-3 w-3 text-primary" />
+                  <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground group-hover:text-primary">
                     For Creators
                   </span>
                 </div>
-                <p className="text-base font-semibold text-foreground">
+                <p className="text-xs font-semibold text-foreground">
                   Launch with built-in community momentum.
                 </p>
               </Link>
