@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
+import { Copy, Check } from "lucide-react";
 
 const CONTACT_EMAIL = "info@erys.live";
 
