@@ -3,9 +3,21 @@ import { Link } from "react-router-dom";
 import { Copy, Check } from "lucide-react";
 
 const CONTACT_EMAIL = "info@erys.live";
+const CONTRACT_ADDRESS = "4T1GVUfBjwhPv2GQiWP8GiUiq5GGhdybtVRJY733BAGS";
 
 const Footer = () => {
   const year = new Date().getFullYear();
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(CONTRACT_ADDRESS);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* ignore */
+    }
+  };
   return (
     <footer className="border-t border-border bg-background">
       <div className="container mx-auto px-4 py-12">
