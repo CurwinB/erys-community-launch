@@ -201,7 +201,7 @@ const Index = () => {
               </span>
             </h1>
             <p className="mx-auto mt-2 max-w-xl text-xs text-muted-foreground md:text-sm">
-              Presales for Pump.fun &amp; Bags launches. Tokens auto-distributed the moment trading opens.
+              Presales for Pump.fun &amp; Bags launches. Tokens auto-distribute the moment trading opens. No dev holding your bag. No trust required. Just your position, already set.
             </p>
             <div className="mt-3 flex flex-col items-center justify-center gap-2 sm:flex-row">
               <Button
@@ -248,7 +248,7 @@ const Index = () => {
                   </span>
                 </div>
                 <p className="text-xs font-semibold text-foreground">
-                  Launch with built-in community momentum.
+                  Launch with a crowd already holding.
                 </p>
               </Link>
             </div>
