@@ -86,7 +86,8 @@ const TOTAL_BPS = 10000n;
 function calculateSharesFromBalance(
   contributions: Contribution[],
   actualBalance: bigint,
-  creatorWallet: string
+  creatorWallet: string,
+  enforceCreatorFloor: boolean
 ): Map<string, bigint> {
   const shares = new Map<string, bigint>();
   const totalLamports = contributions.reduce(
@@ -121,7 +122,7 @@ function calculateSharesFromBalance(
     return shares;
   }
 
-  if (creatorEntry && creatorEntry.share < CREATOR_MIN) {
+  if (enforceCreatorFloor && creatorEntry && creatorEntry.share < CREATOR_MIN) {
     const deficit = CREATOR_MIN - creatorEntry.share;
     creatorEntry.share = CREATOR_MIN;
     const othersTotal = rawShares
@@ -316,18 +317,18 @@ export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
   const shares = calculateSharesFromBalance(
     contributions,
     originalTotalBalance,
-    launch.created_by_wallet
+    launch.created_by_wallet,
+    launch.is_sponsored === true
   );
 
-  // Invariant guard: if the creator is among contributors, their final
-  // share must be >= 5% of the original total. If this fails, something in
-  // the math regressed — abort the entire distribution before sending so we
-  // can fix it instead of silently shorting the creator. The lock is
-  // released by the outer finally and the launch will be retried.
+  // Invariant guard: only enforced for sponsored launches, where the
+  // creator is contractually entitled to a 5% floor. Non-sponsored launches
+  // use pure proportional allocation with no floor.
   const creatorContrib = contributions.find(
     (c) => c.wallet_address === launch.created_by_wallet
   );
-  if (creatorContrib) {
+  const enforceCreatorFloor = launch.is_sponsored === true;
+  if (enforceCreatorFloor && creatorContrib) {
     const creatorMin = (originalTotalBalance * CREATOR_MIN_BPS) / TOTAL_BPS;
     const creatorShare = shares.get(creatorContrib.id) ?? 0n;
     if (creatorShare < creatorMin) {
@@ -338,6 +339,24 @@ export async function distributeTokensForLaunch(launch: Launch): Promise<void> {
     }
     console.log(
       `Creator share OK: ${creatorShare} (>= 5% floor ${creatorMin})`
+    );
+  }
+
+  // Per-launch allocation method log.
+  const methodLabel = enforceCreatorFloor ? "sponsored-floor" : "proportional-only";
+  if (creatorContrib) {
+    const creatorShare = shares.get(creatorContrib.id) ?? 0n;
+    const creatorBps =
+      originalTotalBalance > 0n
+        ? (creatorShare * TOTAL_BPS) / originalTotalBalance
+        : 0n;
+    const creatorPctStr = (Number(creatorBps) / 100).toFixed(2);
+    console.log(
+      `Allocation method for launch ${launch.id}: ${methodLabel}; creator received ${creatorBps.toString()} bps (${creatorPctStr}%) of ${originalTotalBalance.toString()}`
+    );
+  } else {
+    console.log(
+      `Allocation method for launch ${launch.id}: ${methodLabel}; creator not in contributor list`
     );
   }
 

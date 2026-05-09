@@ -1,41 +1,39 @@
-# Fix: stop refunding the sponsor seed to the influencer on execution failures
+## Files I will touch
 
-## Problem (confirmed)
+- `distributor/src/distribute.ts` — only file changed.
 
-`executor/src/refundFailedLaunch.ts` iterates every `contributions` row and refunds to `contrib.wallet_address`. For sponsored launches, `fundSponsoredEscrow.ts` previously inserted a row representing the platform's 0.1 SOL seed with `wallet_address = influencer pump wallet` and `tx_signature = launch.sponsored_tx_signature`. So when a sponsored launch hits any `setFailed` path, the platform's seed is sent to the influencer and `sweepCancelledSponsorEscrows` later finds an empty escrow (real example: launch `ac19ded6…`).
+No other files need edits. `is_sponsored` is already on the `Launch` type in `distributor/src/db.ts`, so no type or query changes are required.
 
-`cancelAndRefund.ts` already handles this correctly via a sponsor-seed carve-out. We mirror that here.
+## Change summary
 
-## Change — `executor/src/refundFailedLaunch.ts` only
+Branch the creator-floor logic on `launch.is_sponsored`:
 
-1. **Expand the launch select** to include the fields needed to identify a sponsored seed:
-   - `is_sponsored`, `sponsored_amount_lamports`, `sponsored_tx_signature`
+- **Sponsored (`is_sponsored === true`)**: keep existing behavior — creator gets `max(proportional, 5%)`, with the same redistribution + invariant guard as today.
+- **Non-sponsored (`is_sponsored !== true`)**: pure proportional. No 5% floor, no redistribution from other contributors, no post-calc invariant assertion against the floor.
 
-2. **Identify the seed contribution** after loading contributions. Match by `tx_signature === launch.sponsored_tx_signature` (this is the exact dedupe key `fundSponsoredEscrow` uses when inserting the row — more precise than `is_fee_claimer`, which is `true` for normal contributors too). Skip the row entirely in the refund loop (`continue` before the payout block) so no SOL is sent to the influencer for the seed.
+Add one log line per launch describing which method was applied and the creator's resulting percentage (in bps / %).
 
-3. **Reserve the seed lamports from `escrowAvailable`** before the loop, identical to `cancelAndRefund.ts` lines 88–100:
-   ```ts
-   const sponsorSeed = launch.is_sponsored
-     ? BigInt(launch.sponsored_amount_lamports || 0) : 0n;
-   if (sponsorSeed > 0n) {
-     escrowAvailable = escrowAvailable > sponsorSeed
-       ? escrowAvailable - sponsorSeed : 0n;
-     console.log(`refundFailedLaunch ${launchId}: reserving ${Number(sponsorSeed) / LAMPORTS_PER_SOL} SOL sponsor seed for treasury sweep.`);
-   }
-   ```
-   This guards real contributors from being silently overpaid out of the seed if any individual refund payout is capped by remaining escrow.
+## Technical detail
 
-4. **Log when the seed row is skipped**, e.g.
-   `refundFailedLaunch ${launchId}: skipping sponsor seed contribution row ${contrib.id} (${amount} lamports) — reserved for treasury recovery.`
+1. `calculateSharesFromBalance(...)` gains an `enforceCreatorFloor: boolean` parameter.
+   - When `false`: skip the `creatorEntry.share < CREATOR_MIN` redistribution block entirely. Keep the single-contributor short-circuit and the BigInt remainder dump on `rawShares[0]` (those are correctness fixes, unrelated to the floor).
+   - When `true`: behavior is unchanged from today.
 
-5. Add the `LAMPORTS_PER_SOL` import from `@solana/web3.js` for the log line.
+2. In `distributeTokensForLaunch(...)`:
+   - Compute `enforceCreatorFloor = launch.is_sponsored === true`.
+   - Pass it into `calculateSharesFromBalance`.
+   - Replace the existing "Creator share OK" / invariant block with:
+     - If `enforceCreatorFloor` and `creatorContrib` exists → keep the current `creatorShare >= creatorMin` assertion + existing OK log.
+     - Else → skip the assertion entirely (no floor to enforce).
+   - After share calc, if `creatorContrib` exists, log one line:
+     ```
+     Allocation method for launch <id>: <"sponsored-floor" | "proportional-only">; creator received <bps> bps (<pct>%) of <originalTotalBalance>
+     ```
+     If creator is not a contributor, log that instead (method + "creator not in contributor list").
 
-## Out of scope
+3. No DB schema, no migrations, no other modules. Constants `CREATOR_MIN_BPS` / `TOTAL_BPS` stay (still used in the sponsored branch).
 
-No changes to `cancelAndRefund.ts`, executor entry, distributor, fee-claimer, or any other file. The existing `sweepCancelledSponsorEscrows` worker already recovers the reserved seed on its next cycle once the launch is `cancelled`.
+## Risks
 
-## Why this is safe
-
-- Existing non-sponsored launches: `is_sponsored` is false → carve-out is a no-op, behavior unchanged.
-- Sponsored launches that already succeeded: function early-returns on `launched`/`sweep_recovery` (lines 43–51), unaffected.
-- Already-refunded sponsored seeds (historic rows like `ac19ded6…`): `refund_tx_signature` is set, the loop already `continue`s — no double-spend risk.
+- Non-sponsored launches where the creator contributed less than 5% will now receive strictly their proportional share. This is the intended behavior change.
+- Invariant guard is intentionally bypassed for non-sponsored launches; if the math regresses there, it will not be caught by the floor assertion. Acceptable since there is no floor to violate.
