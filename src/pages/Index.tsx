@@ -234,7 +234,7 @@ const Index = () => {
                   </span>
                 </div>
                 <p className="text-xs font-semibold text-foreground">
-                  Be there before the first candle.
+                  Rug-proof. Pre-launch. First candle yours.
                 </p>
               </button>
               <Link
