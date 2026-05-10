@@ -1,8 +1,6 @@
 import * as dotenv from "dotenv";
 dotenv.config();
 
-import { claimPumpfunFeesBatch } from "./claimPumpfunFeesBatch";
-import { claimLocalSigningFeesBatch } from "./claimLocalSigningFees";
 import { harvestPerLaunchFees } from "./harvestPerLaunchFees";
 import { warmWalletPool } from "./pumpportalWalletPool";
 

@@ -86,16 +86,47 @@ export async function cancelAndRefund(
   let partial = 0;
   let failed = 0;
 
+  // Pass 1: build eligible set and compute proration up-front so every
+  // contributor receives exactly their share of available escrow.
+  const eligible: { contrib: any; requested: bigint }[] = [];
   for (const contrib of contributions as any[]) {
-    try {
-      if (contrib.refund_tx_signature) continue;
+    if (contrib.refund_tx_signature) continue;
+    const requested = BigInt(contrib.amount_lamports) - TX_FEE;
+    if (requested <= 0n) {
+      failed++;
+      continue;
+    }
+    eligible.push({ contrib, requested });
+  }
 
-      const requested = BigInt(contrib.amount_lamports) - TX_FEE;
-      if (requested <= 0n) {
-        failed++;
-        continue;
-      }
-      if (escrowAvailable <= TX_FEE) {
+  const totalRequested = eligible.reduce((s, e) => s + e.requested, 0n);
+  const payoutPool = escrowAvailable - TX_FEE * BigInt(eligible.length);
+
+  if (eligible.length > 0 && (payoutPool <= 0n || totalRequested === 0n)) {
+    for (const { contrib, requested } of eligible) {
+      await supabase
+        .from("contributions")
+        .update({ refund_shortfall_lamports: Number(requested) })
+        .eq("id", contrib.id);
+      failed++;
+    }
+    console.log(
+      `cancelAndRefund ${launch.id}: refunded=0 partial=0 failed=${failed} total=${contributions.length} (escrow insufficient for any payout)`,
+    );
+    return;
+  }
+
+  // Clamp so nobody receives more than they put in if escrow somehow exceeds owed.
+  const effectivePool =
+    payoutPool < totalRequested ? payoutPool : totalRequested;
+
+  // Pass 2: pay each contributor their proportional share.
+  for (const { contrib, requested } of eligible) {
+    try {
+      const payout = (requested * effectivePool) / totalRequested;
+      const shortfall = requested - payout;
+
+      if (payout <= 0n) {
         await supabase
           .from("contributions")
           .update({ refund_shortfall_lamports: Number(requested) })
@@ -103,10 +134,6 @@ export async function cancelAndRefund(
         failed++;
         continue;
       }
-
-      const spendable = escrowAvailable - TX_FEE;
-      const payout = requested < spendable ? requested : spendable;
-      const shortfall = requested - payout;
 
       const recipient = new PublicKey(
         contrib.token_delivery_wallet || contrib.wallet_address,
@@ -127,7 +154,6 @@ export async function cancelAndRefund(
         })
         .eq("id", contrib.id);
 
-      escrowAvailable -= payout + TX_FEE;
       refunded++;
       if (shortfall > 0n) partial++;
       console.log(
