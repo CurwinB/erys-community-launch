@@ -132,53 +132,74 @@ export async function refundFailedLaunch(launchId: string): Promise<void> {
   let unrecoverable = 0;
   let failed = 0;
 
+  // Pass 1: build eligible set and compute proration up-front so every
+  // contributor receives exactly their share of available escrow.
+  const eligible: { contrib: any; requested: bigint }[] = [];
   for (const contrib of contributions as any[]) {
-    try {
-      if (contrib.refund_tx_signature) continue;
+    if (contrib.refund_tx_signature) continue;
+    const requested = BigInt(contrib.amount_lamports) - TX_FEE;
+    if (requested <= 0n) {
+      failed++;
+      continue;
+    }
+    eligible.push({ contrib, requested });
+  }
 
-      const requested = BigInt(contrib.amount_lamports) - TX_FEE;
-      if (requested <= 0n) {
-        failed++;
-        continue;
-      }
+  const totalRequested = eligible.reduce((s, e) => s + e.requested, 0n);
+  const payoutPool = escrowAvailable - TX_FEE * BigInt(eligible.length);
 
-      if (escrowAvailable <= TX_FEE) {
-        await supabase
-          .from("contributions")
-          .update({ refund_shortfall_lamports: Number(requested) })
-          .eq("id", contrib.id);
-        unrecoverable++;
-        continue;
-      }
-
-      const spendable = escrowAvailable - TX_FEE;
-      const payout = requested < spendable ? requested : spendable;
-      const shortfall = requested - payout;
-
-      const txSignature = await sendRefundWithRetry(
-        connection,
-        escrowKeypair,
-        new PublicKey(contrib.wallet_address),
-        Number(payout),
-      );
-
+  if (eligible.length > 0 && (payoutPool <= 0n || totalRequested === 0n)) {
+    for (const { contrib, requested } of eligible) {
       await supabase
         .from("contributions")
-        .update({
-          refund_tx_signature: txSignature,
-          refund_shortfall_lamports: Number(shortfall),
-        })
+        .update({ refund_shortfall_lamports: Number(requested) })
         .eq("id", contrib.id);
+      unrecoverable++;
+    }
+  } else {
+    // Clamp so nobody receives more than they put in if escrow somehow exceeds owed.
+    const effectivePool =
+      payoutPool < totalRequested ? payoutPool : totalRequested;
 
-      escrowAvailable -= payout + TX_FEE;
-      refunded++;
-      if (shortfall > 0n) partial++;
-    } catch (err: any) {
-      console.error(
-        `refundFailedLaunch: refund failed for ${contrib.wallet_address}:`,
-        err.message,
-      );
-      failed++;
+    // Pass 2: pay each contributor their proportional share.
+    for (const { contrib, requested } of eligible) {
+      try {
+        const payout = (requested * effectivePool) / totalRequested;
+        const shortfall = requested - payout;
+
+        if (payout <= 0n) {
+          await supabase
+            .from("contributions")
+            .update({ refund_shortfall_lamports: Number(requested) })
+            .eq("id", contrib.id);
+          unrecoverable++;
+          continue;
+        }
+
+        const txSignature = await sendRefundWithRetry(
+          connection,
+          escrowKeypair,
+          new PublicKey(contrib.wallet_address),
+          Number(payout),
+        );
+
+        await supabase
+          .from("contributions")
+          .update({
+            refund_tx_signature: txSignature,
+            refund_shortfall_lamports: Number(shortfall),
+          })
+          .eq("id", contrib.id);
+
+        refunded++;
+        if (shortfall > 0n) partial++;
+      } catch (err: any) {
+        console.error(
+          `refundFailedLaunch: refund failed for ${contrib.wallet_address}:`,
+          err.message,
+        );
+        failed++;
+      }
     }
   }
 
