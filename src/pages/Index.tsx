@@ -248,7 +248,7 @@ const Index = () => {
                   </span>
                 </div>
                 <p className="text-xs font-semibold text-foreground">
-                  Launch with a crowd already holding &amp; shilling.
+                  Built-in shill army from block one.
                 </p>
               </Link>
             </div>
