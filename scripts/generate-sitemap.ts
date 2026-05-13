@@ -31,7 +31,7 @@ async function fetchLaunchEntries(): Promise<SitemapEntry[]> {
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     const { data, error } = await supabase
       .from("launches_public")
-      .select("id, updated_at, created_at")
+      .select("id, created_at")
       .order("created_at", { ascending: false })
       .limit(2000);
     if (error) {
@@ -40,7 +40,7 @@ async function fetchLaunchEntries(): Promise<SitemapEntry[]> {
     }
     return (data ?? []).map((row: any) => ({
       path: `/launch/${row.id}`,
-      lastmod: (row.updated_at ?? row.created_at ?? "").slice(0, 10) || undefined,
+      lastmod: (row.created_at ?? "").slice(0, 10) || undefined,
       changefreq: "hourly" as const,
       priority: "0.7",
     }));
