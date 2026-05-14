@@ -956,6 +956,10 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      admin_set_app_setting: {
+        Args: { p_admin_wallet: string; p_key: string; p_value: string }
+        Returns: undefined
+      }
       claim_allocation_for_user: {
         Args: {
           p_allocation_id: string

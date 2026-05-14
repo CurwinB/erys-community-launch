@@ -1,22 +1,74 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, Pencil, X } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
+import { useWallet } from "@/hooks/useWallet";
+import { toast } from "@/hooks/use-toast";
 
 const CONTACT_EMAIL = "info@erys.live";
-const CONTRACT_ADDRESS = "4T1GVUfBjwhPv2GQiWP8GiUiq5GGhdybtVRJY733BAGS";
+const FALLBACK_CONTRACT_ADDRESS = "4T1GVUfBjwhPv2GQiWP8GiUiq5GGhdybtVRJY733BAGS";
+const SETTING_KEY = "footer_contract_address";
 
 const Footer = () => {
   const year = new Date().getFullYear();
   const [copied, setCopied] = useState(false);
+  const [contractAddress, setContractAddress] = useState<string>(FALLBACK_CONTRACT_ADDRESS);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const { isAdmin } = useIsAdmin();
+  const { publicKey } = useWallet();
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", SETTING_KEY)
+        .maybeSingle();
+      if (!cancelled && !error && data?.value) {
+        setContractAddress(data.value);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(CONTRACT_ADDRESS);
+      await navigator.clipboard.writeText(contractAddress);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
       /* ignore */
     }
+  };
+
+  const startEdit = () => {
+    setDraft(contractAddress);
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    const value = draft.trim();
+    if (!value || !publicKey) return;
+    setSaving(true);
+    const { error } = await supabase.rpc("admin_set_app_setting", {
+      p_admin_wallet: publicKey,
+      p_key: SETTING_KEY,
+      p_value: value,
+    });
+    setSaving(false);
+    if (error) {
+      toast({ title: "Failed to update CA", description: error.message, variant: "destructive" });
+      return;
+    }
+    setContractAddress(value);
+    setEditing(false);
+    toast({ title: "Contract address updated" });
   };
   return (
     <footer className="border-t border-border bg-background">
@@ -129,25 +181,67 @@ const Footer = () => {
               <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
                 CA
               </span>
-              <div className="flex items-center gap-1.5 overflow-hidden rounded border border-border bg-card px-2 py-1 transition-colors hover:border-primary/30">
-                <span className="max-w-[200px] truncate font-mono text-[11px] text-foreground sm:max-w-[260px]">
-                  {CONTRACT_ADDRESS}
-                </span>
-                <button
-                  onClick={handleCopy}
-                  className="flex shrink-0 items-center gap-1 text-muted-foreground transition-colors hover:text-primary"
-                  aria-label="Copy contract address"
-                >
-                  {copied ? (
-                    <>
-                      <Check className="h-3 w-3" />
-                      <span className="font-mono text-[10px]">Copied</span>
-                    </>
-                  ) : (
-                    <Copy className="h-3 w-3" />
+              {editing ? (
+                <div className="flex items-center gap-1.5 rounded border border-primary/40 bg-card px-2 py-1">
+                  <input
+                    autoFocus
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveEdit();
+                      if (e.key === "Escape") setEditing(false);
+                    }}
+                    disabled={saving}
+                    className="w-[260px] bg-transparent font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground"
+                    placeholder="Contract address"
+                  />
+                  <button
+                    onClick={saveEdit}
+                    disabled={saving}
+                    className="text-muted-foreground transition-colors hover:text-primary disabled:opacity-50"
+                    aria-label="Save contract address"
+                  >
+                    <Check className="h-3 w-3" />
+                  </button>
+                  <button
+                    onClick={() => setEditing(false)}
+                    disabled={saving}
+                    className="text-muted-foreground transition-colors hover:text-destructive"
+                    aria-label="Cancel"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 overflow-hidden rounded border border-border bg-card px-2 py-1 transition-colors hover:border-primary/30">
+                  <span className="max-w-[200px] truncate font-mono text-[11px] text-foreground sm:max-w-[260px]">
+                    {contractAddress}
+                  </span>
+                  <button
+                    onClick={handleCopy}
+                    className="flex shrink-0 items-center gap-1 text-muted-foreground transition-colors hover:text-primary"
+                    aria-label="Copy contract address"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="h-3 w-3" />
+                        <span className="font-mono text-[10px]">Copied</span>
+                      </>
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )}
+                  </button>
+                  {isAdmin && (
+                    <button
+                      onClick={startEdit}
+                      className="flex shrink-0 items-center text-muted-foreground transition-colors hover:text-primary"
+                      aria-label="Edit contract address"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
                   )}
-                </button>
-              </div>
+                </div>
+              )}
             </div>
           </div>
           <span className="font-mono uppercase tracking-widest">
