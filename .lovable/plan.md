@@ -1,81 +1,42 @@
+# Increase launchWallet SOL reserve for Bags createLaunchTransaction
+
+## What Bags told us
+
+> "Make sure the createLaunchTransaction call gets a launchWallet passed that has enough SOL to cover the TX cost of launching."
+
+In every recent failed launch the escrow (launchWallet) held ~0.256 SOL and we passed the *entire* balance minus a 20,000-lamport (0.00002 SOL) reserve as `initialBuyLamports`. The Bags launch transaction itself (priority fee, compute units, ATA rent for the launch wallet's token account, lookup-table rent paid by the wallet, etc.) costs far more than 20k lamports, so Bags' build step rejects with a 500.
+
+## Root cause
+
+`executor/src/executeBags.ts` lines 477–487:
+
+```text
+ATA_COST                       = 2,039,280   (per *contributor* ATA only)
+TX_FEE                         = 5,000       (per contributor distribution)
+PRIORITY_FEE_PER_CONTRIBUTOR   = 10,000
+BASE_TX_FEES                   = 20,000      <-- the only buffer left in escrow for the LAUNCH tx itself
+LOOKUP_TABLE_RENT              = 2,550,000   (only if >15 contributors)
+
+netBuyLamports = availableLamports - ataReserve - lookupTableReserve - BASE_TX_FEES
+```
+
+Problems:
+1. `BASE_TX_FEES = 20_000` lamports is meant to cover *the launch tx fee itself* on the launchWallet, but Bags' launch tx pays priority + compute + creator-ATA rent (~0.005–0.012 SOL real-world). 20k is two orders of magnitude too small.
+2. We don't read the actual on-chain escrow balance before calling Bags — we trust `sum(contributions)`. Sponsor seed, dust, or already-debited processing fee can drift this.
+
+## Fix
+
+1. Replace `BASE_TX_FEES = 20_000n` with a `LAUNCH_TX_RESERVE` constant sized to cover Bags' launch tx in the worst case. Use **15,000,000 lamports (0.015 SOL)** — empirically covers compute + priority + creator ATA rent + tx fee with margin, and is still small relative to our 0.3 SOL minimum raise.
+2. Before computing `netBuyLamports`, read `connection.getBalance(escrowPubkey)` and use `min(availableLamports, onChainBalance)` so we never promise Bags more SOL than the wallet actually holds.
+3. Bump the `netBuyLamports < 10_000_000` guard message to include the on-chain balance so future failures are diagnosable.
+4. No changes to fee-claimer math, BPS, processing fee, or distribution logic.
+
 ## Files touched
 
-1. `fee-claimer/src/index.ts` — remove dead imports.
-2. `executor/src/refundFailedLaunch.ts` — convert refund loop from FIFO to proportional.
-3. `executor/src/cancelAndRefund.ts` — same conversion.
+- `executor/src/executeBags.ts` — reserve constant, on-chain balance check, error message.
 
-No other files, no DB schema changes, no changes to retry/confirm helpers, decrypt, or the Pump.fun on-chain skip guard.
+## Out of scope
 
----
-
-## 1. `fee-claimer/src/index.ts`
-
-Delete lines 4 and 5:
-
-```ts
-import { claimPumpfunFeesBatch } from "./claimPumpfunFeesBatch";
-import { claimLocalSigningFeesBatch } from "./claimLocalSigningFees";
-```
-
-Leave the explanatory comment inside `pollAndClaimFees` intact (it documents *why* the batch path is disabled, still useful). No other edits.
-
----
-
-## 2 & 3. Proportional refund algorithm (applied identically to both files)
-
-### Current behavior (FIFO)
-
-Loop iterates contributions in `contributed_at` order. Each one tries to take its full `amount_lamports - TX_FEE` from `escrowAvailable`; once escrow runs dry, remaining contributors get a `refund_shortfall_lamports` row and zero SOL.
-
-### New behavior (proportional)
-
-Replace the single existing loop with a **two-pass** structure:
-
-**Pass 1 — compute the proration ratio (no on-chain calls):**
-
-- Build `eligible: { contrib, requested: bigint }[]` from contributions where:
-  - `refund_tx_signature` is null (already-refunded rows skipped, same as today), AND
-  - `requested = BigInt(amount_lamports) - TX_FEE > 0n` (sub-fee dust skipped, same as today, counted as `failed`).
-- `totalRequested = sum(eligible.requested)`.
-- `payoutPool = escrowAvailable - TX_FEE * BigInt(eligible.length)` — reserve one tx fee per refund tx up front so we don't over-promise.
-- If `payoutPool <= 0n` or `totalRequested === 0n`: write `refund_shortfall_lamports = Number(requested)` for every eligible contrib, increment `unrecoverable` (refundFailedLaunch) / `failed` (cancelAndRefund), return after logging.
-- Otherwise: clamp `effectivePool = min(payoutPool, totalRequested)` so nobody gets more than they put in (handles the rare case where escrow somehow exceeds owed, e.g. stray top-ups).
-
-**Pass 2 — pay each eligible contrib their share:**
-
-For each `{ contrib, requested }` in `eligible`:
-
-```ts
-// integer math, floor division — leaves at most ~N lamports of dust in escrow
-const payout = (requested * effectivePool) / totalRequested;
-const shortfall = requested - payout;
-```
-
-- If `payout <= 0n`: persist `refund_shortfall_lamports = Number(requested)`, count as unrecoverable/failed, continue.
-- Else: send refund tx via existing `sendRefundWithRetry(...)` (unchanged) for `Number(payout)` lamports, then update row with `refund_tx_signature` + `refund_shortfall_lamports = Number(shortfall)`. Increment `refunded`; if `shortfall > 0n` increment `partial`.
-- On thrown error from send/confirm: increment `failed`, do not mutate `effectivePool` (the reserved TX_FEE is simply unused — safe).
-- Do **not** subtract from a running balance between iterations — the proration was decided up-front, so a later send failure doesn't redistribute leftover SOL to earlier contributors. This keeps refunds idempotent and re-runnable: re-invoking the function will recompute proration over the still-unrefunded set against current escrow balance.
-
-### Recipient address
-
-- `refundFailedLaunch.ts`: keeps `new PublicKey(contrib.wallet_address)` (unchanged).
-- `cancelAndRefund.ts`: keeps `new PublicKey(contrib.token_delivery_wallet || contrib.wallet_address)` (unchanged).
-
-### Counters & logging
-
-Same final summary log lines as today (`refunded / partial / unrecoverable / failed / total` for refundFailedLaunch; `refunded / partial / failed / total` for cancelAndRefund). The post-loop processing-fee shortfall warning block in `refundFailedLaunch.ts` is untouched.
-
-### Things explicitly not changing
-
-- `RENT_EXEMPT_RESERVE` and `TX_FEE` constants.
-- Pump.fun on-chain mint guard at the top of `refundFailedLaunch.ts`.
-- The `cancelled` status update + worker-lock clear at the top of `cancelAndRefund.ts`.
-- `sendRefundWithRetry` and `sleep` helpers.
-- DB schema, RLS, migrations.
-- Sponsored escrow sweep worker (still runs separately for any leftover dust).
-
-### Risks / notes
-
-- Floor-division dust (≤ N lamports across N contributors, well under 1 cent) stays in escrow and is later swept by `sweepCancelledSponsorEscrows` for sponsored cancels, or remains as residual dust for organic-fail launches (same fate as today's leftover rent).
-- Proration is computed against `escrowAvailable` *at function entry*. If the function is re-run later (e.g. after a transient RPC failure), only still-unrefunded rows participate, and the new proration is computed against the then-current balance — correct behavior.
-- A contributor whose individual `payout` rounds to `0n` (only possible if `requested * effectivePool < totalRequested`, i.e. extreme dilution) will be marked fully unrecoverable rather than getting a 1-lamport tx. Acceptable.
+- Pump.fun executor (separate code path; Bags-specific guidance).
+- Refund logic (unchanged — if `netBuyLamports` falls below threshold the existing `setFailed` path triggers normal refunds).
+- Retrying the already-failed launches in DB (admin can use existing retry once deployed; configKeys are reusable per existing logic).
