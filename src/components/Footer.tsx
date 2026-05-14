@@ -181,25 +181,67 @@ const Footer = () => {
               <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
                 CA
               </span>
-              <div className="flex items-center gap-1.5 overflow-hidden rounded border border-border bg-card px-2 py-1 transition-colors hover:border-primary/30">
-                <span className="max-w-[200px] truncate font-mono text-[11px] text-foreground sm:max-w-[260px]">
-                  {CONTRACT_ADDRESS}
-                </span>
-                <button
-                  onClick={handleCopy}
-                  className="flex shrink-0 items-center gap-1 text-muted-foreground transition-colors hover:text-primary"
-                  aria-label="Copy contract address"
-                >
-                  {copied ? (
-                    <>
-                      <Check className="h-3 w-3" />
-                      <span className="font-mono text-[10px]">Copied</span>
-                    </>
-                  ) : (
-                    <Copy className="h-3 w-3" />
+              {editing ? (
+                <div className="flex items-center gap-1.5 rounded border border-primary/40 bg-card px-2 py-1">
+                  <input
+                    autoFocus
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveEdit();
+                      if (e.key === "Escape") setEditing(false);
+                    }}
+                    disabled={saving}
+                    className="w-[260px] bg-transparent font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground"
+                    placeholder="Contract address"
+                  />
+                  <button
+                    onClick={saveEdit}
+                    disabled={saving}
+                    className="text-muted-foreground transition-colors hover:text-primary disabled:opacity-50"
+                    aria-label="Save contract address"
+                  >
+                    <Check className="h-3 w-3" />
+                  </button>
+                  <button
+                    onClick={() => setEditing(false)}
+                    disabled={saving}
+                    className="text-muted-foreground transition-colors hover:text-destructive"
+                    aria-label="Cancel"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 overflow-hidden rounded border border-border bg-card px-2 py-1 transition-colors hover:border-primary/30">
+                  <span className="max-w-[200px] truncate font-mono text-[11px] text-foreground sm:max-w-[260px]">
+                    {contractAddress}
+                  </span>
+                  <button
+                    onClick={handleCopy}
+                    className="flex shrink-0 items-center gap-1 text-muted-foreground transition-colors hover:text-primary"
+                    aria-label="Copy contract address"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="h-3 w-3" />
+                        <span className="font-mono text-[10px]">Copied</span>
+                      </>
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )}
+                  </button>
+                  {isAdmin && (
+                    <button
+                      onClick={startEdit}
+                      className="flex shrink-0 items-center text-muted-foreground transition-colors hover:text-primary"
+                      aria-label="Edit contract address"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
                   )}
-                </button>
-              </div>
+                </div>
+              )}
             </div>
           </div>
           <span className="font-mono uppercase tracking-widest">
