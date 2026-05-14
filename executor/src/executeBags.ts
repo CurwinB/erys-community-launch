@@ -472,26 +472,46 @@ export async function executeBagsLaunch(
   }
 
   // SOL available for the actual launch buy after the processing fee debit.
-  const availableLamports = totalLamports - processingFeeLamports;
+  // Cap by the actual on-chain escrow balance — sponsor seed, dust, or
+  // already-debited fees can drift our DB-derived figure, and Bags rejects
+  // the launch tx if the launchWallet can't actually cover its own costs.
+  let onChainEscrowLamports = 0n;
+  try {
+    onChainEscrowLamports = BigInt(
+      await connection.getBalance(escrowPubkey, "confirmed"),
+    );
+  } catch (balErr: any) {
+    console.warn(
+      `Failed to fetch on-chain escrow balance for ${escrowPubkey.toBase58()}: ${balErr?.message ?? balErr}. Falling back to DB-derived total.`,
+    );
+    onChainEscrowLamports = totalLamports - processingFeeLamports;
+  }
+  const dbAvailable = totalLamports - processingFeeLamports;
+  const availableLamports =
+    dbAvailable < onChainEscrowLamports ? dbAvailable : onChainEscrowLamports;
 
   const ATA_COST = 2_039_280n;
   const TX_FEE = 5_000n;
   const PRIORITY_FEE_PER_CONTRIBUTOR = 10_000n;
-  const BASE_TX_FEES = 20_000n;
+  // Reserve left in the escrow (launchWallet) so Bags' createLaunchTransaction
+  // build can pay the launch tx fee + priority + compute + creator-ATA rent.
+  // Bags support reported 500s when launchWallet had only ~20k lamports
+  // headroom; 0.015 SOL covers the worst-case launch tx with margin.
+  const LAUNCH_TX_RESERVE = 15_000_000n;
   const LOOKUP_TABLE_RENT = 2_550_000n;
   const contributorCount = BigInt(contributions.length);
   const ataReserve =
     contributorCount * (ATA_COST + TX_FEE + PRIORITY_FEE_PER_CONTRIBUTOR);
   const lookupTableReserve = contributorCount > 15n ? LOOKUP_TABLE_RENT : 0n;
   const netBuyLamports =
-    availableLamports - ataReserve - lookupTableReserve - BASE_TX_FEES;
+    availableLamports - ataReserve - lookupTableReserve - LAUNCH_TX_RESERVE;
 
   if (netBuyLamports < 10_000_000n) {
     await setFailed(
       launch.id,
-      `Insufficient SOL. Total: ${totalLamports}, Processing fee: ${processingFeeLamports}, Available: ${availableLamports}, Reserve: ${
-        ataReserve + lookupTableReserve + BASE_TX_FEES
-      }, Net: ${netBuyLamports}`,
+      `Insufficient SOL. Total: ${totalLamports}, Processing fee: ${processingFeeLamports}, On-chain escrow: ${onChainEscrowLamports}, Available: ${availableLamports}, Reserve: ${
+        ataReserve + lookupTableReserve + LAUNCH_TX_RESERVE
+      } (ata=${ataReserve}, lut=${lookupTableReserve}, launchTx=${LAUNCH_TX_RESERVE}), Net: ${netBuyLamports}`,
     );
     return;
   }
