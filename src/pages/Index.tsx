@@ -234,7 +234,7 @@ const Index = () => {
                   </span>
                 </div>
                 <p className="text-xs font-semibold text-foreground">
-                  Rug-proof entry position. First candle yours.
+                  Rug-proof entry position. First candle is yours.
                 </p>
               </button>
               <Link
