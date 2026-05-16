@@ -92,7 +92,7 @@ const Footer = () => {
             <ul className="space-y-2 text-sm">
               <li>
                 <Link to="/schedule" className="text-foreground transition-colors hover:text-primary">
-                  Launch a Presale
+                  Schedule launch
                 </Link>
               </li>
               <li>

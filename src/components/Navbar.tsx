@@ -27,7 +27,7 @@ const Navbar = () => {
         <div className="ml-auto flex items-center gap-3">
           <Link to="/schedule">
             <Button size="sm" className="hidden sm:inline-flex">
-              Launch a Presale
+              Schedule launch
             </Button>
           </Link>
           {connected && (

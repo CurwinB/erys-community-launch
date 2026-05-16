@@ -194,14 +194,14 @@ const Index = () => {
         />
         <div className="container mx-auto px-4 py-6 md:py-8">
           <div className="mx-auto max-w-3xl text-center">
-            <h1 className="text-2xl font-bold leading-[1.1] tracking-tight text-foreground md:text-3xl">
-              Get in before{" "}
+            <h1 className="text-2xl font-bold leading-[1.1] tracking-tight text-foreground md:text-2xl">
+              Everyone gets in at the same price.{" "}
               <span className="text-primary [text-shadow:0_0_30px_hsl(var(--primary)/0.5)]">
-                the launch.
+                Block one.
               </span>
             </h1>
             <p className="mx-auto mt-2 max-w-xl text-xs text-muted-foreground md:text-sm">
-              Scheduled launches for Pump.fun &amp; Bags launches. Tokens auto-distribute the moment trading opens. No dev holding your bag. No trust required. Just your position, already set.
+              Tired of buying the top? On Erys, the community pools SOL before launch. No snipers. No insider allocations. No pre-launch dumps. Your bag is locked on-chain before the token exists.
             </p>
             <div className="mt-3 flex flex-col items-center justify-center gap-2 sm:flex-row">
               <Button
@@ -210,11 +210,11 @@ const Index = () => {
                   document.getElementById("launches")?.scrollIntoView({ behavior: "smooth" })
                 }
               >
-                Join Presales
+                Pool into a launch
               </Button>
               <Link to="/schedule" className="w-full sm:w-auto">
                 <Button variant="outline" className="w-full sm:w-auto">
-                  Schedule a Presale
+                  Schedule a Launch
                 </Button>
               </Link>
             </div>
@@ -244,7 +244,7 @@ const Index = () => {
                 <div className="mb-0.5 flex items-center gap-1.5">
                   <Rocket className="h-3 w-3 text-primary" />
                   <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground group-hover:text-primary">
-                    For Creators
+                    For Devs
                   </span>
                 </div>
                 <p className="text-xs font-semibold text-foreground">
@@ -371,9 +371,9 @@ const Index = () => {
             </>
           ) : (
             <div className="mx-auto flex max-w-md flex-col items-center justify-center border border-border bg-card px-6 py-12 text-center">
-              <p className="mb-6 text-muted-foreground">No presales open yet.</p>
+              <p className="mb-6 text-muted-foreground">No launches scheduled right now.</p>
                <Link to="/schedule">
-                 <Button>Open Presale</Button>
+                 <Button>Schedule Launch</Button>
                </Link>
             </div>
           )}

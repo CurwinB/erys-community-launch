@@ -575,7 +575,7 @@ const SchedulePage = () => {
   }
 
   const submitLabel = (() => {
-    if (!connected) return "Login to Open Presale";
+    if (!connected) return "Login to Schedule Launch";
     switch (step) {
       case "creating":
         return "Creating presale…";
@@ -586,19 +586,19 @@ const SchedulePage = () => {
       case "recording":
         return "Locking your allocation…";
       default:
-        return "Open Presale & Ape In";
+        return "Schedule Launch & Ape In";
     }
   })();
 
   return (
     <main className="min-h-screen">
       <Seo
-        title="Launch a Presale — Erys"
+        title="Schedule launch — Erys"
          description="Open a fair-launch presale on Bags.fm or Pump.fun. Set the launch time, min/max buys, and let your community ape in before the bonding curve opens."
         path="/schedule"
       />
       <div className="container mx-auto max-w-xl px-4 py-12">
-        <h1 className="text-2xl font-bold text-foreground md:text-3xl">Launch a Presale.</h1>
+        <h1 className="text-2xl font-bold text-foreground md:text-3xl">Schedule launch.</h1>
         <p className="mt-2 text-sm text-muted-foreground">
            Pick your launchpad and let your community ape SOL into a non-custodial presale escrow before launch.
         </p>
