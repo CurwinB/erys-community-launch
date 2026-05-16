@@ -80,8 +80,8 @@ const Footer = () => {
                 erys<span className="text-primary">.</span>
               </span>
             </Link>
-            <p className="mt-3 max-w-xs text-sm text-muted-foreground">
-              The fair-launch presale platform for Solana tokens. Open a presale on Bags.fm or Pump.fun and let your community ape in early.
+            <p className="mt-3 max-w-sm text-sm text-muted-foreground">
+              When you launch on Erys, you're not just minting a token. You're building a community of contributors who chose to be there from block one. They know they got a fair entry. That's loyalty you can't manufacture.
             </p>
           </div>
 
