@@ -153,8 +153,8 @@ const Index = () => {
     },
     {
       icon: Shield,
-      title: "Non-Custodial Escrow.",
-       body: "SOL sits in a per-presale escrow on Solana. Presales that don't reach 0.3 SOL by launch time are cancelled and refunded automatically.",
+      title: "Community pools SOL",
+      body: "Set a name, ticker, and target raise. The launch is live. Contributors can start pooling immediately.",
     },
   ];
 
