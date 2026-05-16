@@ -123,7 +123,7 @@ const LaunchCard = ({
           <div className="flex items-center gap-2">
             <Users className="h-3.5 w-3.5 text-primary" />
             <div>
-              <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Presalers</span>
+              <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Contributors</span>
               <p className="font-mono text-sm font-semibold text-foreground">{contributorCount}</p>
             </div>
           </div>

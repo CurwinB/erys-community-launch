@@ -61,7 +61,7 @@ const LaunchStats = ({ totalEscrow, contributorCount, onChainLamports }: LaunchS
     <div className="border border-border bg-card p-4">
       <div className="flex items-center gap-2">
         <Users className="h-4 w-4 text-primary" />
-        <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Presalers</span>
+        <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Contributors</span>
       </div>
       <p className="mt-2 font-mono text-2xl font-bold text-foreground">{contributorCount}</p>
     </div>
