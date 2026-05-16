@@ -144,11 +144,11 @@ const Index = () => {
     {
       icon: Coins,
       title: "Two Launchpads. One Presale Flow.",
-      body: "Pick Bags for permanent creator-fee share or Pump for first-block entry on the bonding curve.",
+      body: "When the raise closes, the pooled SOL hits Pump.fun or Bags simultaneously. Every contributor gets in at the same block, at the same price — with tokens distributed by their share of the pool. Fully transparent, fully on-chain.",
     },
     {
       icon: Clock,
-      title: "Apes Get Allocation, Not Promises.",
+      title: "Tokens distributed proportionally",
       body: "Tokens hit presaler wallets the second the bonding curve opens. No claim, no vesting, no waiting.",
     },
     {
@@ -201,7 +201,7 @@ const Index = () => {
               </span>
             </h1>
             <p className="mx-auto mt-2 max-w-xl text-xs text-muted-foreground md:text-sm">
-              Tired of buying the top? On Erys, the community pools SOL before launch. No snipers. No insider allocations. No pre-launch dumps. Your bag is locked on-chain before the token exists.
+              Tired of buying the top? On Erys, the community pools SOL before launch on Bags and Pump.fun. No snipers. No insider allocations. No pre-launch dumps. Your bag is locked on-chain before the token exists.
             </p>
             <div className="mt-3 flex flex-col items-center justify-center gap-2 sm:flex-row">
               <Button
@@ -481,7 +481,7 @@ const Index = () => {
       {/* How it works */}
       <section id="how-it-works" className="border-t border-border">
         <div className="container mx-auto px-4 py-16">
-          <h2 className="mb-8 text-2xl font-bold text-foreground">How presales work</h2>
+          <h2 className="mb-8 text-2xl font-bold text-foreground">How Launches work</h2>
           <div className="grid gap-4 md:grid-cols-3">
             {features.map((f) => (
               <div
