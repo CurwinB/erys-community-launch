@@ -148,8 +148,8 @@ const Index = () => {
     },
     {
       icon: Clock,
-      title: "Tokens distributed proportionally",
-      body: "Tokens hit presaler wallets the second the bonding curve opens. No claim, no vesting, no waiting.",
+      title: "Community pools SOL",
+      body: "Anyone can contribute a minimum of 0.1 SOL. All contributions are escrowed on-chain — no one can move that SOL until launch. The raise needs to hit 0.3 SOL total to execute; if it doesn't, every contributor gets their SOL back proportionally.",
     },
     {
       icon: Shield,
