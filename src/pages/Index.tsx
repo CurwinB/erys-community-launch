@@ -153,8 +153,8 @@ const Index = () => {
     },
     {
       icon: Shield,
-      title: "Community pools SOL",
-      body: "Set a name, ticker, and target raise. The launch is live. Contributors can start pooling immediately.",
+      title: "Everyone in at block one, proportionally",
+      body: "When the raise closes, the pooled SOL hits Pump.fun or Bags simultaneously. Every contributor gets in at the same block, at the same price — with tokens distributed by their share of the pool. Fully transparent, fully on-chain.",
     },
   ];
 
