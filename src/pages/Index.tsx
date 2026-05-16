@@ -199,7 +199,7 @@ const Index = () => {
               <span className="text-border">/</span>
               <span className="text-primary">Pump.fun</span>
               <span className="text-border">·</span>
-              <span>Fair-launch presales on Solana</span>
+              <span>Fair-launch infrastructure</span>
             </div>
             <h1 className="text-2xl font-bold leading-[1.1] tracking-tight text-foreground md:text-2xl">
               Everyone gets in at the same price.{" "}
