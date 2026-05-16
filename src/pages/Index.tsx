@@ -194,6 +194,13 @@ const Index = () => {
         />
         <div className="container mx-auto px-4 py-6 md:py-8">
           <div className="mx-auto max-w-3xl text-center">
+            <div className="mx-auto mb-4 inline-flex items-center gap-2 border border-border bg-card/60 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-muted-foreground backdrop-blur md:text-[11px]">
+              <span className="text-primary">Bags.fm</span>
+              <span className="text-border">/</span>
+              <span className="text-primary">Pump.fun</span>
+              <span className="text-border">·</span>
+              <span>Fair-launch presales on Solana</span>
+            </div>
             <h1 className="text-2xl font-bold leading-[1.1] tracking-tight text-foreground md:text-2xl">
               Everyone gets in at the same price.{" "}
               <span className="text-primary [text-shadow:0_0_30px_hsl(var(--primary)/0.5)]">
