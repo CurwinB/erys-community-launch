@@ -73,7 +73,7 @@ const Footer = () => {
   return (
     <footer className="border-t border-border bg-background">
       <div className="container mx-auto px-4 py-12">
-        <div className="grid gap-10 md:grid-cols-4">
+        <div className="grid gap-10 md:grid-cols-2 lg:grid-cols-5">
           <div>
             <Link to="/" className="inline-flex items-center gap-1">
               <span className="text-xl font-bold tracking-tight text-foreground">
