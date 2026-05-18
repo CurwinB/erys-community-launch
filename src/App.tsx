@@ -19,6 +19,10 @@ import TermsPage from "./pages/TermsPage";
 import PrivacyPage from "./pages/PrivacyPage";
 import RiskPage from "./pages/RiskPage";
 import ContactPage from "./pages/ContactPage";
+import HowItWorksPage from "./pages/HowItWorksPage";
+import AntiSniperPage from "./pages/AntiSniperPage";
+import FairLaunchPage from "./pages/FairLaunchPage";
+import FaqPage from "./pages/FaqPage";
 import NotFound from "./pages/NotFound";
 import { useLocation } from "react-router-dom";
 
@@ -96,6 +100,10 @@ const App = () => (
             <Route path="/privacy" element={<PrivacyPage />} />
             <Route path="/risk" element={<RiskPage />} />
             <Route path="/contact" element={<ContactPage />} />
+            <Route path="/how-it-works" element={<HowItWorksPage />} />
+            <Route path="/anti-sniper" element={<AntiSniperPage />} />
+            <Route path="/fair-launch" element={<FairLaunchPage />} />
+            <Route path="/faq" element={<FaqPage />} />
             <Route path="*" element={<NotFound />} />
             </Routes>
           </ErrorBoundary>
