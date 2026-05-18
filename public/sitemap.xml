@@ -31,6 +31,26 @@
     <priority>0.3</priority>
   </url>
   <url>
+    <loc>https://erys.live/how-it-works</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://erys.live/anti-sniper</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://erys.live/fair-launch</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://erys.live/faq</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
     <loc>https://erys.live/launch/82fcf324-b179-456d-9fe1-e79a17f7056a</loc>
     <lastmod>2026-05-10</lastmod>
     <changefreq>hourly</changefreq>
