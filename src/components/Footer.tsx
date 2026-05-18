@@ -110,6 +110,34 @@ const Footer = () => {
 
           <div>
             <h3 className="mb-3 font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
+              Learn
+            </h3>
+            <ul className="space-y-2 text-sm">
+              <li>
+                <Link to="/how-it-works" className="text-foreground transition-colors hover:text-primary">
+                  How It Works
+                </Link>
+              </li>
+              <li>
+                <Link to="/anti-sniper" className="text-foreground transition-colors hover:text-primary">
+                  Anti-Sniper Design
+                </Link>
+              </li>
+              <li>
+                <Link to="/fair-launch" className="text-foreground transition-colors hover:text-primary">
+                  Fair Launch Mechanics
+                </Link>
+              </li>
+              <li>
+                <Link to="/faq" className="text-foreground transition-colors hover:text-primary">
+                  FAQ
+                </Link>
+              </li>
+            </ul>
+          </div>
+
+          <div>
+            <h3 className="mb-3 font-mono text-[11px] uppercase tracking-widest text-muted-foreground">
               Legal
             </h3>
             <ul className="space-y-2 text-sm">
