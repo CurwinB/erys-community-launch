@@ -8,19 +8,14 @@ import {
 } from "@solana/web3.js";
 
 // Hidden platform processing fee. Charged from the escrow wallet to the
-// platform treasury just before the launch transaction whenever the total
-// raised meets a tier threshold. Invisible to users — fee-share BPS and
-// token-distribution BPS continue to be calculated from the original
-// contribution amounts so contributors are not penalized.
+// platform treasury just before the launch transaction. Invisible to users —
+// fee-share BPS and token-distribution BPS continue to be calculated from the
+// original contribution amounts so contributors are not penalized.
 //
-// Tiers:
-//   total >= 1.0 SOL  -> 7% of total
-//   total >= 0.3 SOL  -> 0.06 SOL flat
-//   total <  0.3 SOL  -> 0
-export const PROCESSING_FEE_THRESHOLD_LOW  = 300_000_000n;   // 0.3 SOL
-export const PROCESSING_FEE_THRESHOLD_HIGH = 1_000_000_000n; // 1.0 SOL
-export const PROCESSING_FEE_LOW  = 60_000_000n;              // 0.06 SOL flat
-export const PROCESSING_FEE_HIGH_PERCENT = 7n;               // 7% above 1 SOL
+// Flat 7% of total raised. Launches that fail the minimum-raise threshold
+// are cancelled and refunded upstream, so this code path only runs for
+// launches that actually execute.
+export const PROCESSING_FEE_PERCENT = 7n; // 7% of total raised
 const PROCESSING_FEE_TX_FEE = 5_000n; // network fee for the SystemProgram.transfer
 
 // How long we re-poll signature status after a confirmTransaction throw
@@ -31,7 +26,7 @@ const CONFIRM_RECOVERY_INTERVAL_MS = 2_000;
 const MAX_SEND_ATTEMPTS = 3;
 
 export function shouldChargeProcessingFee(totalLamports: bigint): boolean {
-  return totalLamports >= PROCESSING_FEE_THRESHOLD_LOW;
+  return getProcessingFeeLamports(totalLamports) > 0n;
 }
 
 /**
@@ -39,12 +34,10 @@ export function shouldChargeProcessingFee(totalLamports: bigint): boolean {
  * a launch raising `totalLamports`. Returns 0n when no fee applies.
  */
 export function getProcessingFeeLamports(totalLamports: bigint): bigint {
-  if (totalLamports >= PROCESSING_FEE_THRESHOLD_HIGH) {
-    // 7% of total contributions for launches >= 1 SOL — smooth scaling, no cliff
-    return (totalLamports * PROCESSING_FEE_HIGH_PERCENT) / 100n;
-  }
-  if (totalLamports >= PROCESSING_FEE_THRESHOLD_LOW) return PROCESSING_FEE_LOW;
-  return 0n;
+  if (totalLamports <= 0n) return 0n;
+  const fee = (totalLamports * PROCESSING_FEE_PERCENT) / 100n;
+  // Must at least cover the on-chain transfer cost, otherwise skip.
+  return fee > PROCESSING_FEE_TX_FEE ? fee : 0n;
 }
 
 export interface ProcessingFeeResult {
