@@ -24,6 +24,15 @@ import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 import PlatformPausedCard from "@/components/schedule/PlatformPausedCard";
 import SavedWalletField from "@/components/SavedWalletField";
 import { saveWallet, touchSavedWallet } from "@/lib/savedWallets";
+import { Switch } from "@/components/ui/switch";
+
+type LaunchCategory = "meme" | "community" | "tech" | "other";
+const CATEGORY_OPTIONS: Array<{ value: LaunchCategory; label: string }> = [
+  { value: "meme", label: "Meme" },
+  { value: "community", label: "Community" },
+  { value: "tech", label: "Tech/Product" },
+  { value: "other", label: "Other" },
+];
 
 const RPC_URL = import.meta.env.VITE_SOLANA_RPC_URL;
 const connection = new Connection(RPC_URL, "confirmed");
@@ -89,6 +98,22 @@ const SchedulePage = () => {
   });
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+
+  // Launch Profile (optional cosmetic metadata) — never sent to create-launch.
+  const [profile, setProfile] = useState({
+    hook: "",
+    profile_description: "",
+    category: "" as "" | LaunchCategory,
+    twitter_handle: "",
+    launch_window: "",
+  });
+  const [memeImages, setMemeImages] = useState<string[]>([]);
+  const [uploadingMemeSlot, setUploadingMemeSlot] = useState<number | null>(null);
+  const [checklist, setChecklist] = useState({
+    memes_ready: false,
+    posts_scheduled: false,
+    community_notified: false,
+  });
 
   const [step, setStep] = useState<Step>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
