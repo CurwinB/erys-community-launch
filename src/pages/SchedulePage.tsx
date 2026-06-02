@@ -465,6 +465,46 @@ const SchedulePage = () => {
       // Now run the contribution flow
       await performContribution(launchId, escrowWallet);
 
+      // Fire-and-forget: persist optional Launch Profile cosmetic metadata.
+      // Isolated from the launch pipeline — failures don't block success.
+      try {
+        const hasProfileData =
+          !!profile.hook.trim() ||
+          !!profile.profile_description.trim() ||
+          !!profile.category ||
+          !!profile.twitter_handle.trim() ||
+          !!form.websiteUrl.trim() ||
+          memeImages.length > 0 ||
+          checklist.memes_ready ||
+          checklist.posts_scheduled ||
+          checklist.community_notified ||
+          !!profile.launch_window.trim();
+        if (hasProfileData) {
+          await supabase.functions.invoke("save-launch-profile", {
+            body: {
+              launch_id: launchId,
+              created_by_wallet: publicKey,
+              profile: {
+                hook: profile.hook.trim() || null,
+                profile_description: profile.profile_description.trim() || null,
+                category: profile.category || null,
+                twitter_handle: profile.twitter_handle.trim() || null,
+                website_url: form.websiteUrl.trim() || null,
+                meme_images: memeImages,
+                launch_checklist: checklist,
+                launch_window: profile.launch_window.trim() || null,
+              },
+            },
+          });
+        }
+      } catch (profileErr) {
+        console.warn("Launch profile save failed (non-blocking):", profileErr);
+        toast({
+          title: "Launch profile didn't save",
+          description: "Your launch was created. You can retry adding profile details later.",
+        });
+      }
+
       const url = `${window.location.origin}/launch/${launchId}`;
       setSuccessData({ id: launchId, url });
       setStep("success");
