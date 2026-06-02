@@ -115,6 +115,46 @@ const SchedulePage = () => {
     community_notified: false,
   });
 
+  const handleMemeUpload = async (slot: number, file: File) => {
+    if (file.size > 4 * 1024 * 1024) {
+      toast({
+        title: "Image too large",
+        description: "Meme images must be 4 MB or less.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setUploadingMemeSlot(slot);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const { data, error } = await supabase.functions.invoke(
+        "upload-meme-to-pinata",
+        { body: fd }
+      );
+      if (error) throw error;
+      const url = (data as any)?.url;
+      if (!url) throw new Error("Upload returned no URL");
+      setMemeImages((prev) => {
+        const next = [...prev];
+        next[slot] = url;
+        return next.filter(Boolean).slice(0, 3);
+      });
+    } catch (err: any) {
+      console.error("Meme upload failed", err);
+      toast({
+        title: "Upload failed",
+        description: err?.message || "Could not upload meme image.",
+        variant: "destructive",
+      });
+    } finally {
+      setUploadingMemeSlot(null);
+    }
+  };
+
+  const removeMeme = (idx: number) =>
+    setMemeImages((prev) => prev.filter((_, i) => i !== idx));
+
   const [step, setStep] = useState<Step>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [pendingLaunch, setPendingLaunch] = useState<{
