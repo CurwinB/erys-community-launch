@@ -4,6 +4,9 @@ import { Users, Coins, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import CountdownTimer from "@/components/CountdownTimer";
 import { formatSol } from "@/lib/constants";
+import PreparednessBadge from "@/components/launch/PreparednessBadge";
+import CategoryBadge from "@/components/launch/CategoryBadge";
+import type { PreparednessTier } from "@/lib/preparedness";
 
 interface LaunchCardProps {
   id: string;
@@ -18,6 +21,8 @@ interface LaunchCardProps {
   platform?: "bags" | "pumpfun";
   animationDelay?: number;
   variant?: "card" | "row";
+  preparednessTier?: PreparednessTier;
+  category?: string | null;
 }
 
 const LaunchCard = ({
@@ -33,6 +38,8 @@ const LaunchCard = ({
   platform = "bags",
   animationDelay = 0,
   variant = "card",
+  preparednessTier = "none",
+  category = null,
 }: LaunchCardProps) => {
   const isLive = status === "scheduled";
   const [copied, setCopied] = useState(false);
@@ -61,6 +68,8 @@ const LaunchCard = ({
         animationDelay={animationDelay}
         copied={copied}
         onCopy={handleCopy}
+        preparednessTier={preparednessTier}
+        category={category}
       />
     );
   }
@@ -99,6 +108,8 @@ const LaunchCard = ({
                 Bags
               </span>
             )}
+            <CategoryBadge category={category} size="sm" />
+            <PreparednessBadge tier={preparednessTier} size="sm" />
           </div>
           <span className="font-mono text-xs text-muted-foreground">${tokenSymbol}</span>
         </div>
@@ -187,6 +198,8 @@ interface RowVariantProps {
   animationDelay: number;
   copied: boolean;
   onCopy: (e: React.MouseEvent) => void;
+  preparednessTier?: PreparednessTier;
+  category?: string | null;
 }
 
 const RowVariant = ({
@@ -202,6 +215,8 @@ const RowVariant = ({
   animationDelay,
   copied,
   onCopy,
+  preparednessTier = "none",
+  category = null,
 }: RowVariantProps) => {
   const isLive = status === "scheduled";
   const [countdown, setCountdown] = useState(() => formatCompactCountdown(launchDatetime));
@@ -240,6 +255,8 @@ const RowVariant = ({
               Bags
             </span>
           )}
+          <CategoryBadge category={category} size="sm" />
+          <PreparednessBadge tier={preparednessTier} size="sm" />
         </div>
         <div className="mt-0.5 flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
           <span className="truncate">${tokenSymbol}</span>
