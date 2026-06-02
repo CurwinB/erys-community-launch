@@ -7,6 +7,7 @@ import Seo from "@/components/Seo";
 import { supabase } from "@/integrations/supabase/client";
 import { LAUNCH_PUBLIC_COLUMNS } from "@/lib/constants";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { getPreparednessTier } from "@/lib/preparedness";
 import { Coins, Clock, Shield, TrendingUp, Rocket } from "lucide-react";
 
 type SortKey = "soonest" | "contributors" | "funded";
