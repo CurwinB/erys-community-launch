@@ -16,6 +16,7 @@ import LaunchHeader from "@/components/launch/LaunchHeader";
 import LaunchStats from "@/components/launch/LaunchStats";
 import ContributionFeed from "@/components/launch/ContributionFeed";
 import HowItWorks from "@/components/launch/HowItWorks";
+import LaunchProfile from "@/components/launch/LaunchProfile";
 import SavedWalletField from "@/components/SavedWalletField";
 import { saveWallet, touchSavedWallet } from "@/lib/savedWallets";
 
@@ -371,6 +372,18 @@ const LaunchPage = () => {
 
       <div className="container mx-auto grid gap-6 px-4 py-8 lg:grid-cols-5">
         <div className="space-y-6 lg:col-span-3">
+          <LaunchProfile
+            launch={{
+              profile_description:
+                (launch as any).profile_description || launch.description,
+              website_url: launch.website_url,
+              twitter_handle: (launch as any).twitter_handle,
+              meme_images: (launch as any).meme_images,
+              launch_checklist: (launch as any).launch_checklist,
+              launch_window: (launch as any).launch_window,
+            }}
+          />
+
           {isScheduled && (
             <div className="border border-border bg-card p-6">
               <span className="text-[10px] uppercase tracking-widest text-muted-foreground">Presale ends in</span>
