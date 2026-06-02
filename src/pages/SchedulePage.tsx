@@ -802,6 +802,178 @@ const SchedulePage = () => {
           </div>
 
           <div className="space-y-4 border border-border bg-card p-6">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">Launch Profile (optional)</h3>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                More detail helps contributors decide whether to ape in. All fields below are optional and don't affect the launch itself.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Hook</Label>
+              <Input
+                value={profile.hook}
+                maxLength={100}
+                onChange={(e) => setProfile((p) => ({ ...p, hook: e.target.value }))}
+                placeholder="The angle or vibe in one line"
+              />
+              <p className="text-right font-mono text-[10px] text-muted-foreground">
+                {profile.hook.length}/100
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Description</Label>
+              <Textarea
+                value={profile.profile_description}
+                maxLength={500}
+                rows={4}
+                onChange={(e) =>
+                  setProfile((p) => ({ ...p, profile_description: e.target.value }))
+                }
+                placeholder="What's the story? Who's it for?"
+              />
+              <p className="text-right font-mono text-[10px] text-muted-foreground">
+                {profile.profile_description.length}/500
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Category</Label>
+              <div className="flex flex-wrap gap-2">
+                {CATEGORY_OPTIONS.map((opt) => {
+                  const active = profile.category === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() =>
+                        setProfile((p) => ({
+                          ...p,
+                          category: p.category === opt.value ? "" : opt.value,
+                        }))
+                      }
+                      className={`border px-3 py-1.5 text-xs uppercase tracking-wider transition-colors ${
+                        active
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border bg-background text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Twitter/X handle</Label>
+              <Input
+                value={profile.twitter_handle}
+                onChange={(e) =>
+                  setProfile((p) => ({
+                    ...p,
+                    twitter_handle: e.target.value.replace(/^@+/, ""),
+                  }))
+                }
+                placeholder="yourhandle"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Meme images (up to 3)</Label>
+              <div className="grid grid-cols-3 gap-2">
+                {[0, 1, 2].map((slot) => {
+                  const url = memeImages[slot];
+                  const uploading = uploadingMemeSlot === slot;
+                  return (
+                    <div key={slot} className="relative aspect-square">
+                      {url ? (
+                        <>
+                          <img
+                            src={url}
+                            alt={`Meme ${slot + 1}`}
+                            className="h-full w-full border border-border object-cover"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeMeme(slot)}
+                            className="absolute right-1 top-1 bg-background/80 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-foreground hover:bg-destructive hover:text-destructive-foreground"
+                          >
+                            Remove
+                          </button>
+                        </>
+                      ) : (
+                        <label className="flex h-full w-full cursor-pointer flex-col items-center justify-center border border-dashed border-border bg-background text-muted-foreground transition-colors hover:border-primary/30">
+                          {uploading ? (
+                            <Loader2 className="h-5 w-5 animate-spin" />
+                          ) : (
+                            <>
+                              <Upload className="mb-1 h-4 w-4" />
+                              <span className="text-[10px] uppercase tracking-wider">
+                                Slot {slot + 1}
+                              </span>
+                            </>
+                          )}
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/gif,image/webp"
+                            className="hidden"
+                            disabled={uploading}
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) handleMemeUpload(slot, f);
+                              e.currentTarget.value = "";
+                            }}
+                          />
+                        </label>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                PNG, JPEG, GIF, or WEBP. Max 4 MB each. Uploaded to IPFS via Pinata.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Launch window</Label>
+              <Input
+                value={profile.launch_window}
+                onChange={(e) =>
+                  setProfile((p) => ({ ...p, launch_window: e.target.value }))
+                }
+                placeholder="e.g. Friday evening EST"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs">Readiness checklist</Label>
+              {(
+                [
+                  { key: "memes_ready", label: "Memes ready" },
+                  { key: "posts_scheduled", label: "Posts scheduled" },
+                  { key: "community_notified", label: "Community notified" },
+                ] as const
+              ).map((item) => (
+                <div
+                  key={item.key}
+                  className="flex items-center justify-between border border-border bg-background px-3 py-2"
+                >
+                  <span className="text-xs text-foreground">{item.label}</span>
+                  <Switch
+                    checked={checklist[item.key]}
+                    onCheckedChange={(v) =>
+                      setChecklist((c) => ({ ...c, [item.key]: !!v }))
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-4 border border-border bg-card p-6">
              <h3 className="text-sm font-semibold text-foreground">Launch Time</h3>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
