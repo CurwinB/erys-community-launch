@@ -24,6 +24,15 @@ import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 import PlatformPausedCard from "@/components/schedule/PlatformPausedCard";
 import SavedWalletField from "@/components/SavedWalletField";
 import { saveWallet, touchSavedWallet } from "@/lib/savedWallets";
+import { Switch } from "@/components/ui/switch";
+
+type LaunchCategory = "meme" | "community" | "tech" | "other";
+const CATEGORY_OPTIONS: Array<{ value: LaunchCategory; label: string }> = [
+  { value: "meme", label: "Meme" },
+  { value: "community", label: "Community" },
+  { value: "tech", label: "Tech/Product" },
+  { value: "other", label: "Other" },
+];
 
 const RPC_URL = import.meta.env.VITE_SOLANA_RPC_URL;
 const connection = new Connection(RPC_URL, "confirmed");
@@ -89,6 +98,62 @@ const SchedulePage = () => {
   });
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+
+  // Launch Profile (optional cosmetic metadata) — never sent to create-launch.
+  const [profile, setProfile] = useState({
+    hook: "",
+    profile_description: "",
+    category: "" as "" | LaunchCategory,
+    twitter_handle: "",
+    launch_window: "",
+  });
+  const [memeImages, setMemeImages] = useState<string[]>([]);
+  const [uploadingMemeSlot, setUploadingMemeSlot] = useState<number | null>(null);
+  const [checklist, setChecklist] = useState({
+    memes_ready: false,
+    posts_scheduled: false,
+    community_notified: false,
+  });
+
+  const handleMemeUpload = async (slot: number, file: File) => {
+    if (file.size > 4 * 1024 * 1024) {
+      toast({
+        title: "Image too large",
+        description: "Meme images must be 4 MB or less.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setUploadingMemeSlot(slot);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const { data, error } = await supabase.functions.invoke(
+        "upload-meme-to-pinata",
+        { body: fd }
+      );
+      if (error) throw error;
+      const url = (data as any)?.url;
+      if (!url) throw new Error("Upload returned no URL");
+      setMemeImages((prev) => {
+        const next = [...prev];
+        next[slot] = url;
+        return next.filter(Boolean).slice(0, 3);
+      });
+    } catch (err: any) {
+      console.error("Meme upload failed", err);
+      toast({
+        title: "Upload failed",
+        description: err?.message || "Could not upload meme image.",
+        variant: "destructive",
+      });
+    } finally {
+      setUploadingMemeSlot(null);
+    }
+  };
+
+  const removeMeme = (idx: number) =>
+    setMemeImages((prev) => prev.filter((_, i) => i !== idx));
 
   const [step, setStep] = useState<Step>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -440,6 +505,46 @@ const SchedulePage = () => {
       // Now run the contribution flow
       await performContribution(launchId, escrowWallet);
 
+      // Fire-and-forget: persist optional Launch Profile cosmetic metadata.
+      // Isolated from the launch pipeline — failures don't block success.
+      try {
+        const hasProfileData =
+          !!profile.hook.trim() ||
+          !!profile.profile_description.trim() ||
+          !!profile.category ||
+          !!profile.twitter_handle.trim() ||
+          !!form.websiteUrl.trim() ||
+          memeImages.length > 0 ||
+          checklist.memes_ready ||
+          checklist.posts_scheduled ||
+          checklist.community_notified ||
+          !!profile.launch_window.trim();
+        if (hasProfileData) {
+          await supabase.functions.invoke("save-launch-profile", {
+            body: {
+              launch_id: launchId,
+              created_by_wallet: publicKey,
+              profile: {
+                hook: profile.hook.trim() || null,
+                profile_description: profile.profile_description.trim() || null,
+                category: profile.category || null,
+                twitter_handle: profile.twitter_handle.trim() || null,
+                website_url: form.websiteUrl.trim() || null,
+                meme_images: memeImages,
+                launch_checklist: checklist,
+                launch_window: profile.launch_window.trim() || null,
+              },
+            },
+          });
+        }
+      } catch (profileErr) {
+        console.warn("Launch profile save failed (non-blocking):", profileErr);
+        toast({
+          title: "Launch profile didn't save",
+          description: "Your launch was created. You can retry adding profile details later.",
+        });
+      }
+
       const url = `${window.location.origin}/launch/${launchId}`;
       setSuccessData({ id: launchId, url });
       setStep("success");
@@ -694,6 +799,178 @@ const SchedulePage = () => {
               Add your Telegram so contributors can coordinate the shill together.
             </p>
             <Input value={form.websiteUrl} onChange={(e) => update("websiteUrl", e.target.value)} placeholder="Website URL" />
+          </div>
+
+          <div className="space-y-4 border border-border bg-card p-6">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">Launch Profile (optional)</h3>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                More detail helps contributors decide whether to ape in. All fields below are optional and don't affect the launch itself.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Hook</Label>
+              <Input
+                value={profile.hook}
+                maxLength={100}
+                onChange={(e) => setProfile((p) => ({ ...p, hook: e.target.value }))}
+                placeholder="The angle or vibe in one line"
+              />
+              <p className="text-right font-mono text-[10px] text-muted-foreground">
+                {profile.hook.length}/100
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Description</Label>
+              <Textarea
+                value={profile.profile_description}
+                maxLength={500}
+                rows={4}
+                onChange={(e) =>
+                  setProfile((p) => ({ ...p, profile_description: e.target.value }))
+                }
+                placeholder="What's the story? Who's it for?"
+              />
+              <p className="text-right font-mono text-[10px] text-muted-foreground">
+                {profile.profile_description.length}/500
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Category</Label>
+              <div className="flex flex-wrap gap-2">
+                {CATEGORY_OPTIONS.map((opt) => {
+                  const active = profile.category === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() =>
+                        setProfile((p) => ({
+                          ...p,
+                          category: p.category === opt.value ? "" : opt.value,
+                        }))
+                      }
+                      className={`border px-3 py-1.5 text-xs uppercase tracking-wider transition-colors ${
+                        active
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border bg-background text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Twitter/X handle</Label>
+              <Input
+                value={profile.twitter_handle}
+                onChange={(e) =>
+                  setProfile((p) => ({
+                    ...p,
+                    twitter_handle: e.target.value.replace(/^@+/, ""),
+                  }))
+                }
+                placeholder="yourhandle"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Meme images (up to 3)</Label>
+              <div className="grid grid-cols-3 gap-2">
+                {[0, 1, 2].map((slot) => {
+                  const url = memeImages[slot];
+                  const uploading = uploadingMemeSlot === slot;
+                  return (
+                    <div key={slot} className="relative aspect-square">
+                      {url ? (
+                        <>
+                          <img
+                            src={url}
+                            alt={`Meme ${slot + 1}`}
+                            className="h-full w-full border border-border object-cover"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeMeme(slot)}
+                            className="absolute right-1 top-1 bg-background/80 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-foreground hover:bg-destructive hover:text-destructive-foreground"
+                          >
+                            Remove
+                          </button>
+                        </>
+                      ) : (
+                        <label className="flex h-full w-full cursor-pointer flex-col items-center justify-center border border-dashed border-border bg-background text-muted-foreground transition-colors hover:border-primary/30">
+                          {uploading ? (
+                            <Loader2 className="h-5 w-5 animate-spin" />
+                          ) : (
+                            <>
+                              <Upload className="mb-1 h-4 w-4" />
+                              <span className="text-[10px] uppercase tracking-wider">
+                                Slot {slot + 1}
+                              </span>
+                            </>
+                          )}
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/gif,image/webp"
+                            className="hidden"
+                            disabled={uploading}
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) handleMemeUpload(slot, f);
+                              e.currentTarget.value = "";
+                            }}
+                          />
+                        </label>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                PNG, JPEG, GIF, or WEBP. Max 4 MB each. Uploaded to IPFS via Pinata.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs">Launch window</Label>
+              <Input
+                value={profile.launch_window}
+                onChange={(e) =>
+                  setProfile((p) => ({ ...p, launch_window: e.target.value }))
+                }
+                placeholder="e.g. Friday evening EST"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs">Readiness checklist</Label>
+              {(
+                [
+                  { key: "memes_ready", label: "Memes ready" },
+                  { key: "posts_scheduled", label: "Posts scheduled" },
+                  { key: "community_notified", label: "Community notified" },
+                ] as const
+              ).map((item) => (
+                <div
+                  key={item.key}
+                  className="flex items-center justify-between border border-border bg-background px-3 py-2"
+                >
+                  <span className="text-xs text-foreground">{item.label}</span>
+                  <Switch
+                    checked={checklist[item.key]}
+                    onCheckedChange={(v) =>
+                      setChecklist((c) => ({ ...c, [item.key]: !!v }))
+                    }
+                  />
+                </div>
+              ))}
+            </div>
           </div>
 
           <div className="space-y-4 border border-border bg-card p-6">

@@ -1,6 +1,9 @@
 import { Button } from "@/components/ui/button";
 import StatusBadge from "@/components/StatusBadge";
 import { ExternalLink } from "lucide-react";
+import CategoryBadge from "@/components/launch/CategoryBadge";
+import PreparednessBadge from "@/components/launch/PreparednessBadge";
+import { getPreparednessTier } from "@/lib/preparedness";
 
 interface LaunchHeaderProps {
   launch: {
@@ -13,10 +16,19 @@ interface LaunchHeaderProps {
     telegram_url: string | null;
     website_url: string | null;
     platform?: string | null;
+    hook?: string | null;
+    profile_description?: string | null;
+    twitter_handle?: string | null;
+    category?: string | null;
+    meme_images?: string[] | null;
+    launch_checklist?: any;
+    launch_window?: string | null;
   };
 }
 
-const LaunchHeader = ({ launch }: LaunchHeaderProps) => (
+const LaunchHeader = ({ launch }: LaunchHeaderProps) => {
+  const tier = getPreparednessTier(launch);
+  return (
   <section className="border-b border-border bg-card">
     <div className="container mx-auto flex flex-col gap-6 px-4 py-8 md:flex-row md:items-center">
       <div className="h-20 w-20 flex-shrink-0 overflow-hidden rounded-sm bg-muted">
@@ -42,9 +54,11 @@ const LaunchHeader = ({ launch }: LaunchHeaderProps) => (
               Bags.fm
             </span>
           )}
+          <CategoryBadge category={launch.category} />
+          <PreparednessBadge tier={tier} />
         </div>
-        {launch.description && (
-          <p className="mt-2 text-sm text-muted-foreground">{launch.description}</p>
+        {launch.hook && (
+          <p className="mt-2 text-sm font-medium text-foreground">{launch.hook}</p>
         )}
         <div className="mt-3 flex gap-2">
           {[launch.twitter_url, launch.telegram_url, launch.website_url]
@@ -60,6 +74,7 @@ const LaunchHeader = ({ launch }: LaunchHeaderProps) => (
       </div>
     </div>
   </section>
-);
+  );
+};
 
 export default LaunchHeader;
