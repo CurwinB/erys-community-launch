@@ -325,6 +325,8 @@ const Index = () => {
                       minContributionLamports={Number(launch.min_contribution_lamports)}
                       status="scheduled"
                       platform={(launch.platform as "bags" | "pumpfun") || "bags"}
+                      preparednessTier={getPreparednessTier(launch as any)}
+                      category={(launch as any).category}
                       animationDelay={Math.min(i, 10) * 30}
                       variant="row"
                     />
@@ -348,6 +350,8 @@ const Index = () => {
                       minContributionLamports={Number(launch.min_contribution_lamports)}
                       status="scheduled"
                       platform={(launch.platform as "bags" | "pumpfun") || "bags"}
+                      preparednessTier={getPreparednessTier(launch as any)}
+                      category={(launch as any).category}
                       animationDelay={i * 100}
                     />
                   );
@@ -425,6 +429,8 @@ const Index = () => {
                     minContributionLamports={Number(launch.min_contribution_lamports)}
                     status="launched"
                     platform={(launch.platform as "bags" | "pumpfun") || "bags"}
+                    preparednessTier={getPreparednessTier(launch as any)}
+                    category={(launch as any).category}
                     animationDelay={Math.min(i, 10) * 30}
                     variant="row"
                   />
@@ -448,6 +454,8 @@ const Index = () => {
                     minContributionLamports={Number(launch.min_contribution_lamports)}
                     status="launched"
                     platform={(launch.platform as "bags" | "pumpfun") || "bags"}
+                    preparednessTier={getPreparednessTier(launch as any)}
+                    category={(launch as any).category}
                     animationDelay={i * 100}
                   />
                   );
