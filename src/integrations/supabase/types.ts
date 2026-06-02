@@ -249,6 +249,7 @@ export type Database = {
       }
       launches: {
         Row: {
+          category: string | null
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
@@ -273,20 +274,25 @@ export type Database = {
           fee_harvest_worker_id: string | null
           fee_share_config_key: string | null
           fee_treasury_total_lamports: number
+          hook: string | null
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
+          launch_checklist: Json | null
           launch_datetime: string | null
+          launch_window: string | null
           lightning_wallet_encrypted_api_key: string | null
           lightning_wallet_encrypted_private_key: string | null
           lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
+          meme_images: string[]
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
           processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
+          profile_description: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
           pumpfun_creator_vault_balance_lamports: number | null
@@ -318,12 +324,14 @@ export type Database = {
           token_name: string
           token_symbol: string
           total_tokens_distributed: number | null
+          twitter_handle: string | null
           twitter_url: string | null
           website_url: string | null
           worker_id: string | null
           worker_locked_at: string | null
         }
         Insert: {
+          category?: string | null
           claimer_count?: number | null
           created_at?: string
           created_by_wallet: string
@@ -348,20 +356,25 @@ export type Database = {
           fee_harvest_worker_id?: string | null
           fee_share_config_key?: string | null
           fee_treasury_total_lamports?: number
+          hook?: string | null
           id?: string
           image_url?: string | null
           ipfs_metadata_url?: string | null
           is_sponsored?: boolean | null
+          launch_checklist?: Json | null
           launch_datetime?: string | null
+          launch_window?: string | null
           lightning_wallet_encrypted_api_key?: string | null
           lightning_wallet_encrypted_private_key?: string | null
           lightning_wallet_public_key?: string | null
           max_contribution_lamports?: number | null
+          meme_images?: string[]
           min_contribution_lamports: number
           platform?: string
           processing_fee_lamports?: number
           processing_fee_refund_owed_lamports?: number | null
           processing_fee_tx_signature?: string | null
+          profile_description?: string | null
           pumpfun_consecutive_empty_claims?: number
           pumpfun_creator_fees_distributed?: number | null
           pumpfun_creator_vault_balance_lamports?: number | null
@@ -393,12 +406,14 @@ export type Database = {
           token_name: string
           token_symbol: string
           total_tokens_distributed?: number | null
+          twitter_handle?: string | null
           twitter_url?: string | null
           website_url?: string | null
           worker_id?: string | null
           worker_locked_at?: string | null
         }
         Update: {
+          category?: string | null
           claimer_count?: number | null
           created_at?: string
           created_by_wallet?: string
@@ -423,20 +438,25 @@ export type Database = {
           fee_harvest_worker_id?: string | null
           fee_share_config_key?: string | null
           fee_treasury_total_lamports?: number
+          hook?: string | null
           id?: string
           image_url?: string | null
           ipfs_metadata_url?: string | null
           is_sponsored?: boolean | null
+          launch_checklist?: Json | null
           launch_datetime?: string | null
+          launch_window?: string | null
           lightning_wallet_encrypted_api_key?: string | null
           lightning_wallet_encrypted_private_key?: string | null
           lightning_wallet_public_key?: string | null
           max_contribution_lamports?: number | null
+          meme_images?: string[]
           min_contribution_lamports?: number
           platform?: string
           processing_fee_lamports?: number
           processing_fee_refund_owed_lamports?: number | null
           processing_fee_tx_signature?: string | null
+          profile_description?: string | null
           pumpfun_consecutive_empty_claims?: number
           pumpfun_creator_fees_distributed?: number | null
           pumpfun_creator_vault_balance_lamports?: number | null
@@ -468,6 +488,7 @@ export type Database = {
           token_name?: string
           token_symbol?: string
           total_tokens_distributed?: number | null
+          twitter_handle?: string | null
           twitter_url?: string | null
           website_url?: string | null
           worker_id?: string | null
@@ -641,6 +662,7 @@ export type Database = {
       }
       launches_public: {
         Row: {
+          category: string | null
           claimer_count: number | null
           created_at: string | null
           created_by_wallet: string | null
@@ -649,14 +671,19 @@ export type Database = {
           distribution_completed_at: string | null
           escrow_wallet_public_key: string | null
           fee_share_config_key: string | null
+          hook: string | null
           id: string | null
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
+          launch_checklist: Json | null
           launch_datetime: string | null
+          launch_window: string | null
           max_contribution_lamports: number | null
+          meme_images: string[] | null
           min_contribution_lamports: number | null
           platform: string | null
+          profile_description: string | null
           pumpfun_launch_signature: string | null
           sponsored_amount_lamports: number | null
           status: Database["public"]["Enums"]["launch_status"] | null
@@ -665,10 +692,12 @@ export type Database = {
           token_name: string | null
           token_symbol: string | null
           total_tokens_distributed: number | null
+          twitter_handle: string | null
           twitter_url: string | null
           website_url: string | null
         }
         Insert: {
+          category?: string | null
           claimer_count?: number | null
           created_at?: string | null
           created_by_wallet?: string | null
@@ -677,14 +706,19 @@ export type Database = {
           distribution_completed_at?: string | null
           escrow_wallet_public_key?: string | null
           fee_share_config_key?: string | null
+          hook?: string | null
           id?: string | null
           image_url?: string | null
           ipfs_metadata_url?: string | null
           is_sponsored?: boolean | null
+          launch_checklist?: Json | null
           launch_datetime?: string | null
+          launch_window?: string | null
           max_contribution_lamports?: number | null
+          meme_images?: string[] | null
           min_contribution_lamports?: number | null
           platform?: string | null
+          profile_description?: string | null
           pumpfun_launch_signature?: string | null
           sponsored_amount_lamports?: number | null
           status?: Database["public"]["Enums"]["launch_status"] | null
@@ -693,10 +727,12 @@ export type Database = {
           token_name?: string | null
           token_symbol?: string | null
           total_tokens_distributed?: number | null
+          twitter_handle?: string | null
           twitter_url?: string | null
           website_url?: string | null
         }
         Update: {
+          category?: string | null
           claimer_count?: number | null
           created_at?: string | null
           created_by_wallet?: string | null
@@ -705,14 +741,19 @@ export type Database = {
           distribution_completed_at?: string | null
           escrow_wallet_public_key?: string | null
           fee_share_config_key?: string | null
+          hook?: string | null
           id?: string | null
           image_url?: string | null
           ipfs_metadata_url?: string | null
           is_sponsored?: boolean | null
+          launch_checklist?: Json | null
           launch_datetime?: string | null
+          launch_window?: string | null
           max_contribution_lamports?: number | null
+          meme_images?: string[] | null
           min_contribution_lamports?: number | null
           platform?: string | null
+          profile_description?: string | null
           pumpfun_launch_signature?: string | null
           sponsored_amount_lamports?: number | null
           status?: Database["public"]["Enums"]["launch_status"] | null
@@ -721,6 +762,7 @@ export type Database = {
           token_name?: string | null
           token_symbol?: string | null
           total_tokens_distributed?: number | null
+          twitter_handle?: string | null
           twitter_url?: string | null
           website_url?: string | null
         }
@@ -777,6 +819,7 @@ export type Database = {
       admin_list_launches: {
         Args: { p_admin_wallet: string }
         Returns: {
+          category: string | null
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
@@ -801,20 +844,25 @@ export type Database = {
           fee_harvest_worker_id: string | null
           fee_share_config_key: string | null
           fee_treasury_total_lamports: number
+          hook: string | null
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
+          launch_checklist: Json | null
           launch_datetime: string | null
+          launch_window: string | null
           lightning_wallet_encrypted_api_key: string | null
           lightning_wallet_encrypted_private_key: string | null
           lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
+          meme_images: string[]
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
           processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
+          profile_description: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
           pumpfun_creator_vault_balance_lamports: number | null
@@ -846,6 +894,7 @@ export type Database = {
           token_name: string
           token_symbol: string
           total_tokens_distributed: number | null
+          twitter_handle: string | null
           twitter_url: string | null
           website_url: string | null
           worker_id: string | null
@@ -875,6 +924,7 @@ export type Database = {
       admin_list_pumpfun_fee_health: {
         Args: { p_admin_wallet: string }
         Returns: {
+          category: string | null
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
@@ -899,20 +949,25 @@ export type Database = {
           fee_harvest_worker_id: string | null
           fee_share_config_key: string | null
           fee_treasury_total_lamports: number
+          hook: string | null
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
+          launch_checklist: Json | null
           launch_datetime: string | null
+          launch_window: string | null
           lightning_wallet_encrypted_api_key: string | null
           lightning_wallet_encrypted_private_key: string | null
           lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
+          meme_images: string[]
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
           processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
+          profile_description: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
           pumpfun_creator_vault_balance_lamports: number | null
@@ -944,6 +999,7 @@ export type Database = {
           token_name: string
           token_symbol: string
           total_tokens_distributed: number | null
+          twitter_handle: string | null
           twitter_url: string | null
           website_url: string | null
           worker_id: string | null
@@ -980,6 +1036,7 @@ export type Database = {
       claim_executing_launch_for_worker: {
         Args: { p_lock_expiry_seconds?: number; p_worker_id: string }
         Returns: {
+          category: string | null
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
@@ -1004,20 +1061,25 @@ export type Database = {
           fee_harvest_worker_id: string | null
           fee_share_config_key: string | null
           fee_treasury_total_lamports: number
+          hook: string | null
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
+          launch_checklist: Json | null
           launch_datetime: string | null
+          launch_window: string | null
           lightning_wallet_encrypted_api_key: string | null
           lightning_wallet_encrypted_private_key: string | null
           lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
+          meme_images: string[]
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
           processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
+          profile_description: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
           pumpfun_creator_vault_balance_lamports: number | null
@@ -1049,6 +1111,7 @@ export type Database = {
           token_name: string
           token_symbol: string
           total_tokens_distributed: number | null
+          twitter_handle: string | null
           twitter_url: string | null
           website_url: string | null
           worker_id: string | null
@@ -1068,6 +1131,7 @@ export type Database = {
           p_worker_id: string
         }
         Returns: {
+          category: string | null
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
@@ -1092,20 +1156,25 @@ export type Database = {
           fee_harvest_worker_id: string | null
           fee_share_config_key: string | null
           fee_treasury_total_lamports: number
+          hook: string | null
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
+          launch_checklist: Json | null
           launch_datetime: string | null
+          launch_window: string | null
           lightning_wallet_encrypted_api_key: string | null
           lightning_wallet_encrypted_private_key: string | null
           lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
+          meme_images: string[]
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
           processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
+          profile_description: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
           pumpfun_creator_vault_balance_lamports: number | null
@@ -1137,6 +1206,7 @@ export type Database = {
           token_name: string
           token_symbol: string
           total_tokens_distributed: number | null
+          twitter_handle: string | null
           twitter_url: string | null
           website_url: string | null
           worker_id: string | null
@@ -1156,6 +1226,7 @@ export type Database = {
           p_worker_id: string
         }
         Returns: {
+          category: string | null
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
@@ -1180,20 +1251,25 @@ export type Database = {
           fee_harvest_worker_id: string | null
           fee_share_config_key: string | null
           fee_treasury_total_lamports: number
+          hook: string | null
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
+          launch_checklist: Json | null
           launch_datetime: string | null
+          launch_window: string | null
           lightning_wallet_encrypted_api_key: string | null
           lightning_wallet_encrypted_private_key: string | null
           lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
+          meme_images: string[]
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
           processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
+          profile_description: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
           pumpfun_creator_vault_balance_lamports: number | null
@@ -1225,6 +1301,7 @@ export type Database = {
           token_name: string
           token_symbol: string
           total_tokens_distributed: number | null
+          twitter_handle: string | null
           twitter_url: string | null
           website_url: string | null
           worker_id: string | null
@@ -1244,6 +1321,7 @@ export type Database = {
           p_worker_id: string
         }
         Returns: {
+          category: string | null
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
@@ -1268,20 +1346,25 @@ export type Database = {
           fee_harvest_worker_id: string | null
           fee_share_config_key: string | null
           fee_treasury_total_lamports: number
+          hook: string | null
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
+          launch_checklist: Json | null
           launch_datetime: string | null
+          launch_window: string | null
           lightning_wallet_encrypted_api_key: string | null
           lightning_wallet_encrypted_private_key: string | null
           lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
+          meme_images: string[]
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
           processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
+          profile_description: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
           pumpfun_creator_vault_balance_lamports: number | null
@@ -1313,6 +1396,7 @@ export type Database = {
           token_name: string
           token_symbol: string
           total_tokens_distributed: number | null
+          twitter_handle: string | null
           twitter_url: string | null
           website_url: string | null
           worker_id: string | null
@@ -1336,6 +1420,7 @@ export type Database = {
       claim_pumpfun_launch_for_worker: {
         Args: { p_lock_expiry_seconds?: number; p_worker_id: string }
         Returns: {
+          category: string | null
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
@@ -1360,20 +1445,25 @@ export type Database = {
           fee_harvest_worker_id: string | null
           fee_share_config_key: string | null
           fee_treasury_total_lamports: number
+          hook: string | null
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
+          launch_checklist: Json | null
           launch_datetime: string | null
+          launch_window: string | null
           lightning_wallet_encrypted_api_key: string | null
           lightning_wallet_encrypted_private_key: string | null
           lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
+          meme_images: string[]
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
           processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
+          profile_description: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
           pumpfun_creator_vault_balance_lamports: number | null
@@ -1405,6 +1495,7 @@ export type Database = {
           token_name: string
           token_symbol: string
           total_tokens_distributed: number | null
+          twitter_handle: string | null
           twitter_url: string | null
           website_url: string | null
           worker_id: string | null
@@ -1425,6 +1516,7 @@ export type Database = {
               p_worker_id: string
             }
             Returns: {
+              category: string | null
               claimer_count: number | null
               created_at: string
               created_by_wallet: string
@@ -1449,20 +1541,25 @@ export type Database = {
               fee_harvest_worker_id: string | null
               fee_share_config_key: string | null
               fee_treasury_total_lamports: number
+              hook: string | null
               id: string
               image_url: string | null
               ipfs_metadata_url: string | null
               is_sponsored: boolean | null
+              launch_checklist: Json | null
               launch_datetime: string | null
+              launch_window: string | null
               lightning_wallet_encrypted_api_key: string | null
               lightning_wallet_encrypted_private_key: string | null
               lightning_wallet_public_key: string | null
               max_contribution_lamports: number | null
+              meme_images: string[]
               min_contribution_lamports: number
               platform: string
               processing_fee_lamports: number
               processing_fee_refund_owed_lamports: number | null
               processing_fee_tx_signature: string | null
+              profile_description: string | null
               pumpfun_consecutive_empty_claims: number
               pumpfun_creator_fees_distributed: number | null
               pumpfun_creator_vault_balance_lamports: number | null
@@ -1494,6 +1591,7 @@ export type Database = {
               token_name: string
               token_symbol: string
               total_tokens_distributed: number | null
+              twitter_handle: string | null
               twitter_url: string | null
               website_url: string | null
               worker_id: string | null
@@ -1514,6 +1612,7 @@ export type Database = {
               p_worker_id: string
             }
             Returns: {
+              category: string | null
               claimer_count: number | null
               created_at: string
               created_by_wallet: string
@@ -1538,20 +1637,25 @@ export type Database = {
               fee_harvest_worker_id: string | null
               fee_share_config_key: string | null
               fee_treasury_total_lamports: number
+              hook: string | null
               id: string
               image_url: string | null
               ipfs_metadata_url: string | null
               is_sponsored: boolean | null
+              launch_checklist: Json | null
               launch_datetime: string | null
+              launch_window: string | null
               lightning_wallet_encrypted_api_key: string | null
               lightning_wallet_encrypted_private_key: string | null
               lightning_wallet_public_key: string | null
               max_contribution_lamports: number | null
+              meme_images: string[]
               min_contribution_lamports: number
               platform: string
               processing_fee_lamports: number
               processing_fee_refund_owed_lamports: number | null
               processing_fee_tx_signature: string | null
+              profile_description: string | null
               pumpfun_consecutive_empty_claims: number
               pumpfun_creator_fees_distributed: number | null
               pumpfun_creator_vault_balance_lamports: number | null
@@ -1583,6 +1687,7 @@ export type Database = {
               token_name: string
               token_symbol: string
               total_tokens_distributed: number | null
+              twitter_handle: string | null
               twitter_url: string | null
               website_url: string | null
               worker_id: string | null
@@ -1598,6 +1703,7 @@ export type Database = {
       claim_sponsor_funding_for_worker: {
         Args: { p_lock_expiry_seconds?: number; p_worker_id: string }
         Returns: {
+          category: string | null
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
@@ -1622,20 +1728,25 @@ export type Database = {
           fee_harvest_worker_id: string | null
           fee_share_config_key: string | null
           fee_treasury_total_lamports: number
+          hook: string | null
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
+          launch_checklist: Json | null
           launch_datetime: string | null
+          launch_window: string | null
           lightning_wallet_encrypted_api_key: string | null
           lightning_wallet_encrypted_private_key: string | null
           lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
+          meme_images: string[]
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
           processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
+          profile_description: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
           pumpfun_creator_vault_balance_lamports: number | null
@@ -1667,6 +1778,7 @@ export type Database = {
           token_name: string
           token_symbol: string
           total_tokens_distributed: number | null
+          twitter_handle: string | null
           twitter_url: string | null
           website_url: string | null
           worker_id: string | null
@@ -1682,6 +1794,7 @@ export type Database = {
       claim_sponsor_recovery_for_worker: {
         Args: { p_lock_expiry_seconds?: number; p_worker_id: string }
         Returns: {
+          category: string | null
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
@@ -1706,20 +1819,25 @@ export type Database = {
           fee_harvest_worker_id: string | null
           fee_share_config_key: string | null
           fee_treasury_total_lamports: number
+          hook: string | null
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
+          launch_checklist: Json | null
           launch_datetime: string | null
+          launch_window: string | null
           lightning_wallet_encrypted_api_key: string | null
           lightning_wallet_encrypted_private_key: string | null
           lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
+          meme_images: string[]
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
           processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
+          profile_description: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
           pumpfun_creator_vault_balance_lamports: number | null
@@ -1751,6 +1869,7 @@ export type Database = {
           token_name: string
           token_symbol: string
           total_tokens_distributed: number | null
+          twitter_handle: string | null
           twitter_url: string | null
           website_url: string | null
           worker_id: string | null
@@ -1766,6 +1885,7 @@ export type Database = {
       claim_sweep_recovery_launch_for_worker: {
         Args: { p_lock_expiry_seconds?: number; p_worker_id: string }
         Returns: {
+          category: string | null
           claimer_count: number | null
           created_at: string
           created_by_wallet: string
@@ -1790,20 +1910,25 @@ export type Database = {
           fee_harvest_worker_id: string | null
           fee_share_config_key: string | null
           fee_treasury_total_lamports: number
+          hook: string | null
           id: string
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
+          launch_checklist: Json | null
           launch_datetime: string | null
+          launch_window: string | null
           lightning_wallet_encrypted_api_key: string | null
           lightning_wallet_encrypted_private_key: string | null
           lightning_wallet_public_key: string | null
           max_contribution_lamports: number | null
+          meme_images: string[]
           min_contribution_lamports: number
           platform: string
           processing_fee_lamports: number
           processing_fee_refund_owed_lamports: number | null
           processing_fee_tx_signature: string | null
+          profile_description: string | null
           pumpfun_consecutive_empty_claims: number
           pumpfun_creator_fees_distributed: number | null
           pumpfun_creator_vault_balance_lamports: number | null
@@ -1835,6 +1960,7 @@ export type Database = {
           token_name: string
           token_symbol: string
           total_tokens_distributed: number | null
+          twitter_handle: string | null
           twitter_url: string | null
           website_url: string | null
           worker_id: string | null
@@ -1875,6 +2001,7 @@ export type Database = {
       get_launch_public: {
         Args: { p_id: string }
         Returns: {
+          category: string | null
           claimer_count: number | null
           created_at: string | null
           created_by_wallet: string | null
@@ -1883,14 +2010,19 @@ export type Database = {
           distribution_completed_at: string | null
           escrow_wallet_public_key: string | null
           fee_share_config_key: string | null
+          hook: string | null
           id: string | null
           image_url: string | null
           ipfs_metadata_url: string | null
           is_sponsored: boolean | null
+          launch_checklist: Json | null
           launch_datetime: string | null
+          launch_window: string | null
           max_contribution_lamports: number | null
+          meme_images: string[] | null
           min_contribution_lamports: number | null
           platform: string | null
+          profile_description: string | null
           pumpfun_launch_signature: string | null
           sponsored_amount_lamports: number | null
           status: Database["public"]["Enums"]["launch_status"] | null
@@ -1899,6 +2031,7 @@ export type Database = {
           token_name: string | null
           token_symbol: string | null
           total_tokens_distributed: number | null
+          twitter_handle: string | null
           twitter_url: string | null
           website_url: string | null
         }
