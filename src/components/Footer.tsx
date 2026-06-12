@@ -81,7 +81,7 @@ const Footer = () => {
               </span>
             </Link>
             <p className="mt-3 max-w-sm text-sm text-muted-foreground">
-              Erys turns launch into a shared start where contributors enter early and benefit as the token rises. Developers get an instant base of aligned supporters from day one.
+              Erys turns launches into a shared start where contributors enter early and benefit as the token rises. Developers get an instant base of aligned supporters from day one.
             </p>
           </div>
 
