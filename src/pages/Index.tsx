@@ -145,7 +145,7 @@ const Index = () => {
     {
       icon: Coins,
       title: "Escrowed on-chain",
-      body: "Set a name, ticker, and target raise. The launch is live. Contributors can start pooling immediately.",
+      body: "No one can access your SOL before launch. Not the dev. Not Erys.",
     },
     {
       icon: Clock,
