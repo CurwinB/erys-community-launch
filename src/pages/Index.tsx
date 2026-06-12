@@ -180,7 +180,7 @@ const Index = () => {
         <div className="pointer-events-none absolute -left-1/4 -top-1/4 h-[1000px] w-[1000px] rounded-full bg-primary/5 blur-[120px]" />
         <div className="pointer-events-none absolute -right-1/4 -top-1/4 h-[800px] w-[800px] rounded-full bg-primary/5 blur-[120px]" />
         
-        <div className="container relative mx-auto px-4 pb-20 pt-24 text-center md:pb-32 md:pt-40">
+        <div className="container relative mx-auto px-4 pb-12 pt-16 text-center md:pb-16 md:pt-20">
           <div className="mx-auto max-w-3xl">
             <div className="mb-6 inline-flex animate-fade-in items-center border border-primary/20 bg-primary/5 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.2em] text-primary">
               <span className="relative flex h-2 w-2 mr-2">
