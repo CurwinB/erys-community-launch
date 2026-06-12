@@ -144,105 +144,12 @@ const Index = () => {
   const features = [
     {
       icon: Coins,
-      title: "Two Launchpads. One Presale Flow.",
+      title: "Escrowed on-chain",
       body: "Set a name, ticker, and target raise. The launch is live. Contributors can start pooling immediately.",
     },
-    {
-      icon: Clock,
-      title: "Community pools SOL",
-      body: "Anyone can contribute a minimum of 0.1 SOL. All contributions are escrowed on-chain — no one can move that SOL until launch. The raise needs to hit 0.3 SOL total to execute; if it doesn't, every contributor gets their SOL back proportionally.",
-    },
-    {
-      icon: Shield,
-      title: "Everyone in at block one, proportionally",
-      body: "When the raise closes, the pooled SOL hits Pump.fun or Bags simultaneously. Every contributor gets in at the same block, at the same price — with tokens distributed by their share of the pool. Fully transparent, fully on-chain.",
-    },
-  ];
-
-  return (
-    <main className="min-h-screen">
-      <Seo
-        title="Erys — Fair-Launch Presales for Solana Tokens"
-         description="Run a fair-launch presale on Bags.fm or Pump.fun. Let your community ape in early, lock in allocations on-chain, and launch on the DEX automatically."
-        path="/"
-        jsonLd={{
-          "@context": "https://schema.org",
-          "@type": "WebSite",
-          name: "Erys",
-          url: "https://erys.live",
-          description:
-            "Fair-launch presale platform for Solana tokens on Bags.fm and Pump.fun.",
-        }}
-      />
-      {/* Hero */}
-      <section className="relative overflow-hidden border-b border-border">
-        {/* Ambient glow */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 -z-10"
-          style={{
-            background:
-              "radial-gradient(60% 50% at 50% 0%, hsl(var(--primary) / 0.15) 0%, transparent 70%)",
-          }}
-        />
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-px"
-          style={{
-            background:
-              "linear-gradient(90deg, transparent, hsl(var(--primary) / 0.6), transparent)",
-          }}
-        />
-        <div className="container mx-auto px-4 py-6 md:py-8">
-          <div className="mx-auto max-w-3xl text-center">
-            <div className="mx-auto mb-4 inline-flex items-center gap-2 border border-border bg-card/60 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-muted-foreground backdrop-blur md:text-[11px]">
-              <span className="text-primary">Bags.fm</span>
-              <span className="text-border">/</span>
-              <span className="text-primary">Pump.fun</span>
-              <span className="text-border">·</span>
-              <span>Fair-launch infrastructure</span>
-            </div>
-            <h1 className="text-2xl font-bold leading-[1.1] tracking-tight text-foreground md:text-2xl">
-              Every Multiple From{" "}
-              <span className="text-primary [text-shadow:0_0_30px_hsl(var(--primary)/0.5)]">
-                Block one.
-              </span>
-            </h1>
-            <p className="mx-auto mt-2 max-w-xl text-xs text-muted-foreground md:text-sm">
-              The biggest gains in any token's life happen in the first minutes. Erys puts you in before the first minute exists — so whatever the token does, you captured all of it.
-            </p>
-            <div className="mt-3 flex flex-col items-center justify-center gap-2 sm:flex-row">
-              <Button
-                className="w-full px-6 shadow-[0_0_20px_hsl(var(--primary)/0.35)] sm:w-auto"
-                onClick={() =>
-                  document.getElementById("launches")?.scrollIntoView({ behavior: "smooth" })
-                }
-              >
-                Pool into a launch
-              </Button>
-              <Link to="/schedule" className="w-full sm:w-auto">
-                <Button variant="outline" className="w-full sm:w-auto">
-                  Schedule a Launch
-                </Button>
-              </Link>
-            </div>
-
-            {/* Identity blocks */}
-            <div className="mx-auto mt-4 grid max-w-2xl grid-cols-2 gap-2">
-              <button
-                onClick={() =>
-                  document.getElementById("launches")?.scrollIntoView({ behavior: "smooth" })
-                }
-                className="group border border-border bg-card/60 px-3 py-2 text-left backdrop-blur transition-all hover:border-primary/60 hover:bg-card"
-              >
-                <div className="mb-0.5 flex items-center gap-1.5">
-                  <TrendingUp className="h-3 w-3 text-primary" />
-                  <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground group-hover:text-primary">
-                    For Traders
-                  </span>
-                </div>
+...
                 <p className="text-xs font-semibold text-foreground">
-                  Rug-proof entry position. First candle is yours.
+                  You get every multiple it hits
                 </p>
               </button>
               <Link
@@ -497,7 +404,7 @@ const Index = () => {
       {/* How it works */}
       <section id="how-it-works" className="border-t border-border">
         <div className="container mx-auto px-4 py-16">
-          <h2 className="mb-8 text-2xl font-bold text-foreground">How Launches work</h2>
+          <h2 className="mb-8 text-2xl font-bold text-foreground">On-chain until launch. No exceptions.</h2>
           <div className="grid gap-4 md:grid-cols-3">
             {features.map((f) => (
               <div
