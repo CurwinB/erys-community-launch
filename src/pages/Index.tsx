@@ -203,13 +203,13 @@ const Index = () => {
               <span>Fair-launch infrastructure</span>
             </div>
             <h1 className="text-2xl font-bold leading-[1.1] tracking-tight text-foreground md:text-2xl">
-              Every multiple from{" "}
+              From Block One{" "}
               <span className="text-primary [text-shadow:0_0_30px_hsl(var(--primary)/0.5)]">
-                Block one.
+                You're in
               </span>
             </h1>
             <p className="mx-auto mt-2 max-w-xl text-xs text-muted-foreground md:text-sm">
-              The biggest gains in any token's life happen in the first minutes. Erys puts you in before the first minute exists so whatever the token does, you captured all of it.
+              The biggest gains go to those who get in first. Erys puts you in before the charts start moving.
             </p>
             <div className="mt-3 flex flex-col items-center justify-center gap-2 sm:flex-row">
               <Button
