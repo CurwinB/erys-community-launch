@@ -256,7 +256,7 @@ const Index = () => {
                   </span>
                 </div>
                 <p className="text-xs font-semibold text-foreground">
-                  Built-in shill army from block one.
+                  Launch with committed supporters from block one
                 </p>
               </Link>
             </div>
