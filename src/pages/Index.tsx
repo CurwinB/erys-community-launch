@@ -147,7 +147,71 @@ const Index = () => {
       title: "Escrowed on-chain",
       body: "Set a name, ticker, and target raise. The launch is live. Contributors can start pooling immediately.",
     },
-...
+    {
+      icon: Clock,
+      title: "Community pools SOL",
+      body: "Anyone can contribute a minimum of 0.1 SOL. All contributions are escrowed on-chain — no one can move that SOL until launch. The raise needs to hit 0.3 SOL total to execute; if it doesn't, every contributor gets their SOL back proportionally.",
+    },
+    {
+      icon: Shield,
+      title: "Everyone in at block one, proportionally",
+      body: "When the raise closes, the pooled SOL hits Pump.fun or Bags simultaneously. Every contributor gets in at the same block, at the same price — with tokens distributed by their share of the pool. Fully transparent, fully on-chain.",
+    },
+  ];
+
+  return (
+    <main className="min-h-screen">
+      <Seo
+        title="Erys — Fair-Launch Presales for Solana Tokens"
+         description="Run a fair-launch presale on Bags.fm or Pump.fun. Let your community ape in early, lock in allocations on-chain, and launch on the DEX automatically."
+        path="/"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "WebSite",
+          name: "Erys",
+          url: "https://erys.live",
+          description:
+            "Fair-launch presale platform for Solana tokens on Bags.fm and Pump.fun.",
+        }}
+      />
+      {/* Hero */}
+      <section className="relative overflow-hidden border-b border-border">
+        {/* Ambient glow */}
+        <div className="pointer-events-none absolute -left-1/4 -top-1/4 h-[1000px] w-[1000px] rounded-full bg-primary/5 blur-[120px]" />
+        <div className="pointer-events-none absolute -right-1/4 -top-1/4 h-[800px] w-[800px] rounded-full bg-primary/5 blur-[120px]" />
+        
+        <div className="container relative mx-auto px-4 pb-20 pt-24 text-center md:pb-32 md:pt-40">
+          <div className="mx-auto max-w-3xl">
+            <div className="mb-6 inline-flex animate-fade-in items-center border border-primary/20 bg-primary/5 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.2em] text-primary">
+              <span className="relative flex h-2 w-2 mr-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+              </span>
+              Solana Fair Launch Protocol
+            </div>
+            
+            <h1 className="text-2xl font-bold leading-[1.1] tracking-tight text-foreground sm:text-4xl md:text-5xl lg:text-6xl">
+              Every Multiple From&nbsp;Block one.
+            </h1>
+            
+            <p className="mx-auto mt-6 max-w-2xl text-base text-muted-foreground md:text-lg">
+              The biggest gains in any token's life happen in the first minutes. Erys puts you in before the first minute exists — so whatever the token does, you captured all of it.
+            </p>
+            
+            {/* Identity blocks */}
+            <div className="mx-auto mt-4 grid max-w-2xl grid-cols-2 gap-2">
+              <button
+                onClick={() =>
+                  document.getElementById("launches")?.scrollIntoView({ behavior: "smooth" })
+                }
+                className="group border border-border bg-card/60 px-3 py-2 text-left backdrop-blur transition-all hover:border-primary/60 hover:bg-card"
+              >
+                <div className="mb-0.5 flex items-center gap-1.5">
+                  <TrendingUp className="h-3 w-3 text-primary" />
+                  <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-muted-foreground group-hover:text-primary">
+                    For Traders
+                  </span>
+                </div>
                 <p className="text-xs font-semibold text-foreground">
                   You get every multiple it hits
                 </p>
