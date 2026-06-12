@@ -242,7 +242,7 @@ const Index = () => {
                   </span>
                 </div>
                 <p className="text-xs font-semibold text-foreground">
-                  Rug-proof entry position. First candle is yours.
+                  When the token doubles, triples, and beyond, you're already in.
                 </p>
               </button>
               <Link
