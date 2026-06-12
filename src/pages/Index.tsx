@@ -209,7 +209,7 @@ const Index = () => {
               </span>
             </h1>
             <p className="mx-auto mt-2 max-w-xl text-xs text-muted-foreground md:text-sm">
-              Tired of buying the top? On Erys, the community pools SOL before launch on Bags and Pump.fun. No snipers. No insider allocations. No pre-launch dumps. Your bag is locked on-chain before the token exists.
+              The biggest gains in any token's life happen in the first minutes. Erys puts you in before the first minute exists so whatever the token does, you captured all of it.
             </p>
             <div className="mt-3 flex flex-col items-center justify-center gap-2 sm:flex-row">
               <Button
