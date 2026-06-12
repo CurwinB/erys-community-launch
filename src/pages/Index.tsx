@@ -154,7 +154,7 @@ const Index = () => {
     },
     {
       icon: Shield,
-      title: "Everyone in at block one, proportionally",
+      title: "No custody",
       body: "When the raise closes, the pooled SOL hits Pump.fun or Bags simultaneously. Every contributor gets in at the same block, at the same price — with tokens distributed by their share of the pool. Fully transparent, fully on-chain.",
     },
   ];
