@@ -81,7 +81,7 @@ const Footer = () => {
               </span>
             </Link>
             <p className="mt-3 max-w-sm text-sm text-muted-foreground">
-              When you launch on Erys, you're not just minting a token. You're building a community of contributors who chose to be there from block one. They know they got a fair entry. That's loyalty you can't manufacture.
+              Erys turns launch into a shared start where contributors enter early and benefit as the token rises. Developers get an instant base of aligned supporters from day one.
             </p>
           </div>
 
