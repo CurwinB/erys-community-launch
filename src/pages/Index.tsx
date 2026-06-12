@@ -203,7 +203,7 @@ const Index = () => {
               <span>Fair-launch infrastructure</span>
             </div>
             <h1 className="text-2xl font-bold leading-[1.1] tracking-tight text-foreground md:text-2xl">
-              Everyone gets in at the same price.{" "}
+              Every multiple from{" "}
               <span className="text-primary [text-shadow:0_0_30px_hsl(var(--primary)/0.5)]">
                 Block one.
               </span>
