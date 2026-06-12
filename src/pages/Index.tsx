@@ -144,7 +144,7 @@ const Index = () => {
   const features = [
     {
       icon: Coins,
-      title: "Escrowed on-chain",
+      title: "Two Launchpads. One Presale Flow.",
       body: "Set a name, ticker, and target raise. The launch is live. Contributors can start pooling immediately.",
     },
     {
@@ -177,27 +177,56 @@ const Index = () => {
       {/* Hero */}
       <section className="relative overflow-hidden border-b border-border">
         {/* Ambient glow */}
-        <div className="pointer-events-none absolute -left-1/4 -top-1/4 h-[1000px] w-[1000px] rounded-full bg-primary/5 blur-[120px]" />
-        <div className="pointer-events-none absolute -right-1/4 -top-1/4 h-[800px] w-[800px] rounded-full bg-primary/5 blur-[120px]" />
-        
-        <div className="container relative mx-auto px-4 pb-12 pt-16 text-center md:pb-16 md:pt-20">
-          <div className="mx-auto max-w-3xl">
-            <div className="mb-6 inline-flex animate-fade-in items-center border border-primary/20 bg-primary/5 px-3 py-1 text-[10px] font-medium uppercase tracking-[0.2em] text-primary">
-              <span className="relative flex h-2 w-2 mr-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
-              </span>
-              Solana Fair Launch Protocol
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 -z-10"
+          style={{
+            background:
+              "radial-gradient(60% 50% at 50% 0%, hsl(var(--primary) / 0.15) 0%, transparent 70%)",
+          }}
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-px"
+          style={{
+            background:
+              "linear-gradient(90deg, transparent, hsl(var(--primary) / 0.6), transparent)",
+          }}
+        />
+        <div className="container mx-auto px-4 py-6 md:py-8">
+          <div className="mx-auto max-w-3xl text-center">
+            <div className="mx-auto mb-4 inline-flex items-center gap-2 border border-border bg-card/60 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-muted-foreground backdrop-blur md:text-[11px]">
+              <span className="text-primary">Bags.fm</span>
+              <span className="text-border">/</span>
+              <span className="text-primary">Pump.fun</span>
+              <span className="text-border">·</span>
+              <span>Fair-launch infrastructure</span>
             </div>
-            
-            <h1 className="text-2xl font-bold leading-[1.1] tracking-tight text-foreground sm:text-4xl md:text-5xl lg:text-6xl">
-              Every Multiple From&nbsp;Block one.
+            <h1 className="text-2xl font-bold leading-[1.1] tracking-tight text-foreground md:text-2xl">
+              Everyone gets in at the same price.{" "}
+              <span className="text-primary [text-shadow:0_0_30px_hsl(var(--primary)/0.5)]">
+                Block one.
+              </span>
             </h1>
-            
-            <p className="mx-auto mt-6 max-w-2xl text-base text-muted-foreground md:text-lg">
-              The biggest gains in any token's life happen in the first minutes. Erys puts you in before the first minute exists — so whatever the token does, you captured all of it.
+            <p className="mx-auto mt-2 max-w-xl text-xs text-muted-foreground md:text-sm">
+              Tired of buying the top? On Erys, the community pools SOL before launch on Bags and Pump.fun. No snipers. No insider allocations. No pre-launch dumps. Your bag is locked on-chain before the token exists.
             </p>
-            
+            <div className="mt-3 flex flex-col items-center justify-center gap-2 sm:flex-row">
+              <Button
+                className="w-full px-6 shadow-[0_0_20px_hsl(var(--primary)/0.35)] sm:w-auto"
+                onClick={() =>
+                  document.getElementById("launches")?.scrollIntoView({ behavior: "smooth" })
+                }
+              >
+                Pool into a launch
+              </Button>
+              <Link to="/schedule" className="w-full sm:w-auto">
+                <Button variant="outline" className="w-full sm:w-auto">
+                  Schedule a Launch
+                </Button>
+              </Link>
+            </div>
+
             {/* Identity blocks */}
             <div className="mx-auto mt-4 grid max-w-2xl grid-cols-2 gap-2">
               <button
@@ -213,7 +242,7 @@ const Index = () => {
                   </span>
                 </div>
                 <p className="text-xs font-semibold text-foreground">
-                  You get every multiple it hits
+                  Rug-proof entry position. First candle is yours.
                 </p>
               </button>
               <Link
@@ -468,7 +497,7 @@ const Index = () => {
       {/* How it works */}
       <section id="how-it-works" className="border-t border-border">
         <div className="container mx-auto px-4 py-16">
-          <h2 className="mb-8 text-2xl font-bold text-foreground">On-chain until launch. No exceptions.</h2>
+          <h2 className="mb-8 text-2xl font-bold text-foreground">How Launches work</h2>
           <div className="grid gap-4 md:grid-cols-3">
             {features.map((f) => (
               <div
