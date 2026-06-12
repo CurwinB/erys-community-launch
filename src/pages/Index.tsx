@@ -497,7 +497,7 @@ const Index = () => {
       {/* How it works */}
       <section id="how-it-works" className="border-t border-border">
         <div className="container mx-auto px-4 py-16">
-          <h2 className="mb-8 text-2xl font-bold text-foreground">How Launches work</h2>
+          <h2 className="mb-8 text-2xl font-bold text-foreground">On-chain until launch. No exceptions.</h2>
           <div className="grid gap-4 md:grid-cols-3">
             {features.map((f) => (
               <div
