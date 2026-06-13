@@ -250,7 +250,7 @@ const HowItWorksPage = () => {
                 <h3 className="mt-3 text-sm font-semibold text-foreground">Pump.fun</h3>
                 <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                   One of the largest memecoin launchpads on Solana. Tokens launch with a bonding
-                  curve mechanism and graduate to Raydium once they reach a market cap threshold.
+                  curve mechanism and graduate to PumpSwap once they reach a market cap threshold.
                 </p>
               </div>
               <div className="border border-border bg-card p-4">
