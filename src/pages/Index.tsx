@@ -209,7 +209,7 @@ const Index = () => {
               </span>
             </h1>
             <p className="mx-auto mt-2 max-w-xl text-xs text-muted-foreground md:text-sm">
-              The biggest gains go to those who get in first.&nbsp;Contributors commit before launch and automatically receive tokens at launch
+              The biggest gains go to those who get in first.&nbsp;Contributors commit Sol before launch and automatically receive tokens at launch
             </p>
             <div className="mt-3 flex flex-col items-center justify-center gap-2 sm:flex-row">
               <Button
