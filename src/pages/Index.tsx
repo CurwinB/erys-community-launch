@@ -203,9 +203,9 @@ const Index = () => {
               <span>Fair-launch infrastructure</span>
             </div>
             <h1 className="text-2xl font-bold leading-[1.1] tracking-tight text-foreground md:text-2xl">
-              From Block One{" "}
+              If it goes 10x, you were in,{" "}
               <span className="text-primary [text-shadow:0_0_30px_hsl(var(--primary)/0.5)]">
-                You're in
+                From Zero
               </span>
             </h1>
             <p className="mx-auto mt-2 max-w-xl text-xs text-muted-foreground md:text-sm">
