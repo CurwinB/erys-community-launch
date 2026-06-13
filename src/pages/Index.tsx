@@ -200,7 +200,7 @@ const Index = () => {
               <span className="text-border">/</span>
               <span className="text-primary">Pump.fun</span>
               <span className="text-border">·</span>
-              <span>Fair-launch infrastructure</span>
+              <span>BLOCK ONE ACCESS</span>
             </div>
             <h1 className="text-2xl font-bold leading-[1.1] tracking-tight text-foreground md:text-2xl">
               If it goes 10x, you were in,{" "}
