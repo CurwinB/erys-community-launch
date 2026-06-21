@@ -32,6 +32,120 @@ export type Database = {
         }
         Relationships: []
       }
+      affiliate_earnings: {
+        Row: {
+          affiliate_id: string
+          amount_lamports: number
+          created_at: string
+          id: string
+          launch_id: string
+          status: string
+          tx_signature: string | null
+          wallet_address: string
+        }
+        Insert: {
+          affiliate_id: string
+          amount_lamports: number
+          created_at?: string
+          id?: string
+          launch_id: string
+          status?: string
+          tx_signature?: string | null
+          wallet_address: string
+        }
+        Update: {
+          affiliate_id?: string
+          amount_lamports?: number
+          created_at?: string
+          id?: string
+          launch_id?: string
+          status?: string
+          tx_signature?: string | null
+          wallet_address?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "affiliate_earnings_affiliate_id_fkey"
+            columns: ["affiliate_id"]
+            isOneToOne: false
+            referencedRelation: "affiliates"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "affiliate_earnings_launch_id_fkey"
+            columns: ["launch_id"]
+            isOneToOne: false
+            referencedRelation: "launches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "affiliate_earnings_launch_id_fkey"
+            columns: ["launch_id"]
+            isOneToOne: false
+            referencedRelation: "launches_public"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      affiliate_referrals: {
+        Row: {
+          affiliate_id: string
+          attributed_at: string
+          referral_code: string
+          wallet_address: string
+        }
+        Insert: {
+          affiliate_id: string
+          attributed_at?: string
+          referral_code: string
+          wallet_address: string
+        }
+        Update: {
+          affiliate_id?: string
+          attributed_at?: string
+          referral_code?: string
+          wallet_address?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "affiliate_referrals_affiliate_id_fkey"
+            columns: ["affiliate_id"]
+            isOneToOne: false
+            referencedRelation: "affiliates"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      affiliates: {
+        Row: {
+          created_at: string
+          created_by_admin_wallet: string | null
+          id: string
+          referral_code: string
+          status: string
+          updated_at: string
+          wallet_address: string
+        }
+        Insert: {
+          created_at?: string
+          created_by_admin_wallet?: string | null
+          id?: string
+          referral_code: string
+          status?: string
+          updated_at?: string
+          wallet_address: string
+        }
+        Update: {
+          created_at?: string
+          created_by_admin_wallet?: string | null
+          id?: string
+          referral_code?: string
+          status?: string
+          updated_at?: string
+          wallet_address?: string
+        }
+        Relationships: []
+      }
       app_settings: {
         Row: {
           key: string
@@ -305,6 +419,7 @@ export type Database = {
           pumpfun_low_volume_throttle_until: string | null
           pumpfun_mint_keypair_encrypted: string | null
           pumpportal_wallet_pubkey: string | null
+          referred_by_affiliate_id: string | null
           sponsor_funding_attempts: number
           sponsor_funding_error: string | null
           sponsor_link_claimed_at: string | null
@@ -387,6 +502,7 @@ export type Database = {
           pumpfun_low_volume_throttle_until?: string | null
           pumpfun_mint_keypair_encrypted?: string | null
           pumpportal_wallet_pubkey?: string | null
+          referred_by_affiliate_id?: string | null
           sponsor_funding_attempts?: number
           sponsor_funding_error?: string | null
           sponsor_link_claimed_at?: string | null
@@ -469,6 +585,7 @@ export type Database = {
           pumpfun_low_volume_throttle_until?: string | null
           pumpfun_mint_keypair_encrypted?: string | null
           pumpportal_wallet_pubkey?: string | null
+          referred_by_affiliate_id?: string | null
           sponsor_funding_attempts?: number
           sponsor_funding_error?: string | null
           sponsor_link_claimed_at?: string | null
@@ -494,7 +611,15 @@ export type Database = {
           worker_id?: string | null
           worker_locked_at?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "launches_referred_by_affiliate_id_fkey"
+            columns: ["referred_by_affiliate_id"]
+            isOneToOne: false
+            referencedRelation: "affiliates"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       lightning_wallets: {
         Row: {
@@ -770,6 +895,38 @@ export type Database = {
       }
     }
     Functions: {
+      _gen_affiliate_code: { Args: never; Returns: string }
+      admin_create_affiliate: {
+        Args: { p_admin_wallet: string; p_wallet: string }
+        Returns: {
+          created_at: string
+          created_by_admin_wallet: string | null
+          id: string
+          referral_code: string
+          status: string
+          updated_at: string
+          wallet_address: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "affiliates"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      admin_list_affiliates: {
+        Args: { p_admin_wallet: string }
+        Returns: {
+          attributed_launches: number
+          created_at: string
+          id: string
+          paid_out_lamports: number
+          referral_code: string
+          referred_wallets: number
+          status: string
+          wallet_address: string
+        }[]
+      }
       admin_list_contributions: {
         Args: { p_admin_wallet: string }
         Returns: {
@@ -875,6 +1032,7 @@ export type Database = {
           pumpfun_low_volume_throttle_until: string | null
           pumpfun_mint_keypair_encrypted: string | null
           pumpportal_wallet_pubkey: string | null
+          referred_by_affiliate_id: string | null
           sponsor_funding_attempts: number
           sponsor_funding_error: string | null
           sponsor_link_claimed_at: string | null
@@ -980,6 +1138,7 @@ export type Database = {
           pumpfun_low_volume_throttle_until: string | null
           pumpfun_mint_keypair_encrypted: string | null
           pumpportal_wallet_pubkey: string | null
+          referred_by_affiliate_id: string | null
           sponsor_funding_attempts: number
           sponsor_funding_error: string | null
           sponsor_link_claimed_at: string | null
@@ -1012,9 +1171,36 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      admin_set_affiliate_status: {
+        Args: {
+          p_admin_wallet: string
+          p_affiliate_id: string
+          p_status: string
+        }
+        Returns: {
+          created_at: string
+          created_by_admin_wallet: string | null
+          id: string
+          referral_code: string
+          status: string
+          updated_at: string
+          wallet_address: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "affiliates"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
       admin_set_app_setting: {
         Args: { p_admin_wallet: string; p_key: string; p_value: string }
         Returns: undefined
+      }
+      affiliate_dashboard: { Args: { p_wallet: string }; Returns: Json }
+      attribute_wallet_to_affiliate: {
+        Args: { p_code: string; p_wallet: string }
+        Returns: Json
       }
       claim_allocation_for_user: {
         Args: {
@@ -1092,6 +1278,7 @@ export type Database = {
           pumpfun_low_volume_throttle_until: string | null
           pumpfun_mint_keypair_encrypted: string | null
           pumpportal_wallet_pubkey: string | null
+          referred_by_affiliate_id: string | null
           sponsor_funding_attempts: number
           sponsor_funding_error: string | null
           sponsor_link_claimed_at: string | null
@@ -1187,6 +1374,7 @@ export type Database = {
           pumpfun_low_volume_throttle_until: string | null
           pumpfun_mint_keypair_encrypted: string | null
           pumpportal_wallet_pubkey: string | null
+          referred_by_affiliate_id: string | null
           sponsor_funding_attempts: number
           sponsor_funding_error: string | null
           sponsor_link_claimed_at: string | null
@@ -1282,6 +1470,7 @@ export type Database = {
           pumpfun_low_volume_throttle_until: string | null
           pumpfun_mint_keypair_encrypted: string | null
           pumpportal_wallet_pubkey: string | null
+          referred_by_affiliate_id: string | null
           sponsor_funding_attempts: number
           sponsor_funding_error: string | null
           sponsor_link_claimed_at: string | null
@@ -1377,6 +1566,7 @@ export type Database = {
           pumpfun_low_volume_throttle_until: string | null
           pumpfun_mint_keypair_encrypted: string | null
           pumpportal_wallet_pubkey: string | null
+          referred_by_affiliate_id: string | null
           sponsor_funding_attempts: number
           sponsor_funding_error: string | null
           sponsor_link_claimed_at: string | null
@@ -1476,6 +1666,7 @@ export type Database = {
           pumpfun_low_volume_throttle_until: string | null
           pumpfun_mint_keypair_encrypted: string | null
           pumpportal_wallet_pubkey: string | null
+          referred_by_affiliate_id: string | null
           sponsor_funding_attempts: number
           sponsor_funding_error: string | null
           sponsor_link_claimed_at: string | null
@@ -1572,6 +1763,7 @@ export type Database = {
               pumpfun_low_volume_throttle_until: string | null
               pumpfun_mint_keypair_encrypted: string | null
               pumpportal_wallet_pubkey: string | null
+              referred_by_affiliate_id: string | null
               sponsor_funding_attempts: number
               sponsor_funding_error: string | null
               sponsor_link_claimed_at: string | null
@@ -1668,6 +1860,7 @@ export type Database = {
               pumpfun_low_volume_throttle_until: string | null
               pumpfun_mint_keypair_encrypted: string | null
               pumpportal_wallet_pubkey: string | null
+              referred_by_affiliate_id: string | null
               sponsor_funding_attempts: number
               sponsor_funding_error: string | null
               sponsor_link_claimed_at: string | null
@@ -1759,6 +1952,7 @@ export type Database = {
           pumpfun_low_volume_throttle_until: string | null
           pumpfun_mint_keypair_encrypted: string | null
           pumpportal_wallet_pubkey: string | null
+          referred_by_affiliate_id: string | null
           sponsor_funding_attempts: number
           sponsor_funding_error: string | null
           sponsor_link_claimed_at: string | null
@@ -1850,6 +2044,7 @@ export type Database = {
           pumpfun_low_volume_throttle_until: string | null
           pumpfun_mint_keypair_encrypted: string | null
           pumpportal_wallet_pubkey: string | null
+          referred_by_affiliate_id: string | null
           sponsor_funding_attempts: number
           sponsor_funding_error: string | null
           sponsor_link_claimed_at: string | null
@@ -1941,6 +2136,7 @@ export type Database = {
           pumpfun_low_volume_throttle_until: string | null
           pumpfun_mint_keypair_encrypted: string | null
           pumpportal_wallet_pubkey: string | null
+          referred_by_affiliate_id: string | null
           sponsor_funding_attempts: number
           sponsor_funding_error: string | null
           sponsor_link_claimed_at: string | null
@@ -1988,6 +2184,18 @@ export type Database = {
       force_pumpfun_fee_claim_retry: {
         Args: { p_launch_id: string }
         Returns: undefined
+      }
+      get_launch_fee_split: {
+        Args: { p_launch_id: string }
+        Returns: {
+          affiliate_bps: number
+          affiliate_id: string
+          affiliate_wallet: string
+          creator_bps: number
+          creator_wallet: string
+          launch_id: string
+          treasury_bps: number
+        }[]
       }
       get_launch_platform_status: {
         Args: never
@@ -2042,6 +2250,16 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      get_my_affiliate: {
+        Args: { p_wallet: string }
+        Returns: {
+          created_at: string
+          id: string
+          referral_code: string
+          status: string
+          wallet_address: string
+        }[]
+      }
       get_sponsor_slot_by_token: {
         Args: { p_token: string }
         Returns: {
@@ -2054,6 +2272,7 @@ export type Database = {
           token_symbol: string
         }[]
       }
+      get_wallet_affiliate: { Args: { p_wallet: string }; Returns: string }
       increment_pumpfun_fees_claimed: {
         Args: { amount: number; launch_id: string }
         Returns: undefined
@@ -2099,6 +2318,15 @@ export type Database = {
       mark_pumpfun_fee_claim_attempt: {
         Args: { p_launch_id: string }
         Returns: undefined
+      }
+      record_affiliate_earning: {
+        Args: {
+          p_amount_lamports: number
+          p_launch_id: string
+          p_status?: string
+          p_tx_signature: string
+        }
+        Returns: string
       }
       record_harvest_cycle: {
         Args: {
@@ -2161,6 +2389,13 @@ export type Database = {
         Returns: undefined
       }
       reset_all_pumpfun_fee_throttles: { Args: never; Returns: number }
+      resolve_referral_code: {
+        Args: { p_code: string }
+        Returns: {
+          affiliate_id: string
+          status: string
+        }[]
+      }
       set_app_setting: {
         Args: { p_key: string; p_value: string }
         Returns: undefined
