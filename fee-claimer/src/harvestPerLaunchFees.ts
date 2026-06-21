@@ -491,37 +491,40 @@ async function runHarvestCriticalSection(
       affiliateSig = sentSig;
     } catch (err: any) {
       // Affiliate transfer failing should NOT block creator/treasury, the
-      // creator has already been paid above. Log and fall through; this
-      // cycle's affiliate cut gets rolled into the treasury transfer below
-      // instead of being left stranded in the lightning wallet.
+      // creator has already been paid above. Fail closed: this cycle's
+      // affiliate cut is NEVER rolled into the treasury transfer below. It
+      // stays unsent in the lightning wallet and is logged as pending/failed
+      // for manual reconciliation or a future retry job, the affiliate is
+      // still owed it rather than having it quietly absorbed by treasury.
       console.error(
         `[HARVEST] ${launch.id}: affiliate transfer failed (claim ${claimSig}, creator ${creatorSig}): ${
           err?.message ?? err
         }`
       );
-      if (broadcastSig) {
-        // A tx was actually sent but didn't confirm, or reverted. Log it as
-        // failed so the affiliate dashboard shows the attempt rather than
-        // the cut just silently vanishing into treasury for this cycle.
-        await recordAffiliateEarning({
-          launchId: launch.id,
-          amountLamports: affiliateLamports,
-          txSignature: broadcastSig,
-          status: "failed",
-        });
-      }
+      await recordAffiliateEarning({
+        launchId: launch.id,
+        amountLamports: affiliateLamports,
+        // broadcastSig set means a tx was actually sent but didn't confirm
+        // or reverted ("failed"); null means it never made it onto the
+        // chain at all, still owed and awaiting a retry ("pending").
+        txSignature: broadcastSig,
+        status: broadcastSig ? "failed" : "pending",
+      });
       affiliateSig = null;
     }
   }
 
   // ---- Treasury transfer ----
+  // Always exactly treasuryLamports — never absorbs a failed/pending
+  // affiliate cut. That amount stays in the lightning wallet, owed to the
+  // affiliate, until it's retried.
   let treasurySig: string;
   try {
     const tx = new Transaction().add(
       SystemProgram.transfer({
         fromPubkey: lightningKp.publicKey,
         toPubkey: treasuryPubkey,
-        lamports: Number(affiliateSig ? treasuryLamports : treasuryLamports + affiliateLamports),
+        lamports: Number(treasuryLamports),
       })
     );
     tx.feePayer = lightningKp.publicKey;
@@ -554,7 +557,7 @@ async function runHarvestCriticalSection(
   await recordCycle({
     launchId: launch.id,
     gross,
-    treasury: affiliateSig ? treasuryLamports : treasuryLamports + affiliateLamports,
+    treasury: treasuryLamports,
     // contributor column repurposed to record creator share (no schema change).
     contributor: creatorLamports,
     claimSig,
@@ -566,7 +569,7 @@ async function runHarvestCriticalSection(
     notes:
       `path=${resolutionPath} creator=${creatorPubkey.toBase58()} creator_tx=${creatorSig}` +
       (hasAffiliate
-        ? ` affiliate=${affiliatePubkey?.toBase58()} affiliate_tx=${affiliateSig ?? "FAILED_retained_in_treasury_this_cycle"}`
+        ? ` affiliate=${affiliatePubkey?.toBase58()} affiliate_tx=${affiliateSig ?? "FAILED_pending_retry_in_lightning_wallet"}`
         : ""),
   });
 
@@ -576,28 +579,22 @@ async function runHarvestCriticalSection(
       `creator_wallet=${creatorPubkey.toBase58()} creator_tx=${creatorSig} ` +
       (hasAffiliate
         ? `affiliate_bps=${affiliateBps} affiliate_lamports=${affiliateLamports.toString()} ` +
-          `affiliate_wallet=${affiliatePubkey?.toBase58()} affiliate_tx=${affiliateSig ?? "FAILED"} `
+          `affiliate_wallet=${affiliatePubkey?.toBase58()} affiliate_tx=${affiliateSig ?? "FAILED_PENDING_RETRY"} `
         : "") +
-      `treasury_bps=${treasuryBps} treasury_lamports=${(affiliateSig
-        ? treasuryLamports
-        : treasuryLamports + affiliateLamports
-      ).toString()} ` +
+      `treasury_bps=${treasuryBps} treasury_lamports=${treasuryLamports.toString()} ` +
       `treasury_wallet=${treasuryPubkey.toBase58()} treasury_tx=${treasurySig}`
   );
 
-  const finalTreasuryLamports = affiliateSig
-    ? treasuryLamports
-    : treasuryLamports + affiliateLamports;
   console.log(
     `[HARVEST] ${launch.id}: cycle done. gross=${Number(gross) / LAMPORTS_PER_SOL} SOL, creator=${
       Number(creatorLamports) / LAMPORTS_PER_SOL
     } SOL (${creatorBps / 100}%), treasury=${
-      Number(finalTreasuryLamports) / LAMPORTS_PER_SOL
-    } SOL (intended ${treasuryBps / 100}%)` +
+      Number(treasuryLamports) / LAMPORTS_PER_SOL
+    } SOL (${treasuryBps / 100}%)` +
       (hasAffiliate
         ? `, affiliate=${Number(affiliateLamports) / LAMPORTS_PER_SOL} SOL (${
             affiliateBps / 100
-          }%)${affiliateSig ? "" : " [transfer failed, rolled into treasury this cycle]"}`
+          }%)${affiliateSig ? "" : " [transfer failed, still owed, left in lightning wallet pending retry]"}`
         : "")
   );
 }
