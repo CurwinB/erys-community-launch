@@ -97,6 +97,19 @@ Deno.serve(async (req) => {
       ESCROW_ENCRYPTION_KEY
     );
 
+    // Look up affiliate attribution (if the creator wallet was attributed
+    // via a referral link). Snapshotted onto the launch row so revoking the
+    // affiliate later does not change the split for past launches.
+    let referredByAffiliateId: string | null = null;
+    try {
+      const { data: affId } = await supabase.rpc("get_wallet_affiliate", {
+        p_wallet: created_by_wallet,
+      });
+      if (typeof affId === "string") referredByAffiliateId = affId;
+    } catch (e) {
+      console.warn("[create-launch] affiliate lookup failed", e);
+    }
+
     // Step 3: Allocate a slot + insert atomically under platform lock so two
     // concurrent submissions can't both grab the same minute.
     const { data, slot } = await withScheduleLock(supabase, "bags", async () => {
@@ -118,6 +131,7 @@ Deno.serve(async (req) => {
         token_mint_address: null,
         ipfs_metadata_url: null,
         status: "scheduled",
+        referred_by_affiliate_id: referredByAffiliateId,
       }).select("id").single();
       if (inserted.error) {
         throw new Error(`Failed to create launch: ${inserted.error.message}`);
