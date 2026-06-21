@@ -23,8 +23,16 @@ import HowItWorksPage from "./pages/HowItWorksPage";
 import AntiSniperPage from "./pages/AntiSniperPage";
 import FairLaunchPage from "./pages/FairLaunchPage";
 import FaqPage from "./pages/FaqPage";
+import ReferralRedirectPage from "./pages/ReferralRedirectPage";
+import AffiliatePage from "./pages/AffiliatePage";
 import NotFound from "./pages/NotFound";
 import { useLocation } from "react-router-dom";
+import { useReferralCapture } from "@/hooks/useReferralCapture";
+
+const ReferralCapture = () => {
+  useReferralCapture();
+  return null;
+};
 
 const ConditionalNavbar = () => {
   const location = useLocation();
@@ -104,10 +112,13 @@ const App = () => (
             <Route path="/anti-sniper" element={<AntiSniperPage />} />
             <Route path="/fair-launch" element={<FairLaunchPage />} />
             <Route path="/faq" element={<FaqPage />} />
+            <Route path="/r/:code" element={<ReferralRedirectPage />} />
+            <Route path="/affiliate" element={<AffiliatePage />} />
             <Route path="*" element={<NotFound />} />
             </Routes>
           </ErrorBoundary>
           <ConditionalFooter />
+          <ReferralCapture />
         </BrowserRouter>
       </TooltipProvider>
     </QueryClientProvider>

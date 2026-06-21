@@ -18,7 +18,7 @@ import { isSolanaWallet } from "@dynamic-labs/solana";
 import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 import { useWallet } from "@/hooks/useWallet";
 import { supabase } from "@/integrations/supabase/client";
-import { Copy, Send, ChevronDown, Loader2, X, LayoutDashboard } from "lucide-react";
+import { Copy, Send, ChevronDown, Loader2, X, LayoutDashboard, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
@@ -111,6 +111,7 @@ const WalletDropdown = () => {
   const { handleLogOut, setShowDynamicUserProfile } = useDynamicContext();
 
   const [open, setOpen] = useState(false);
+  const [isAffiliate, setIsAffiliate] = useState(false);
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [erysTokens, setErysTokens] = useState<ErysToken[]>([]);
   const [loadingBalances, setLoadingBalances] = useState(false);
@@ -522,6 +523,31 @@ const WalletDropdown = () => {
     return () => clearTimeout(timer);
   }, [sendMode, sendTo, selectedToken]);
 
+  // Check whether the connected wallet is an active affiliate so we can show
+  // the dashboard link. Cheap RPC, runs once per wallet change.
+  useEffect(() => {
+    if (!publicKey) {
+      setIsAffiliate(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await supabase.rpc("get_my_affiliate" as any, {
+          p_wallet: publicKey,
+        } as any);
+        if (cancelled) return;
+        const row = Array.isArray(data) ? data[0] : data;
+        setIsAffiliate(!!row);
+      } catch {
+        if (!cancelled) setIsAffiliate(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [publicKey]);
+
   if (!connected || !publicKey) return null;
 
   return (
@@ -759,6 +785,16 @@ const WalletDropdown = () => {
                 <LayoutDashboard className="h-3 w-3" />
                 Dashboard
               </Link>
+              {isAffiliate && (
+                <Link
+                  to="/affiliate"
+                  onClick={() => setOpen(false)}
+                  className="flex w-full items-center justify-center gap-2 text-center text-xs text-primary hover:text-foreground transition-colors py-2 border-t border-border"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  Affiliate
+                </Link>
+              )}
               <p className="px-3 pt-2 pb-1 text-[10px] text-center text-muted-foreground/70 leading-relaxed">
                 Your keys are non-custodial. Export to use in any Solana wallet.
               </p>
