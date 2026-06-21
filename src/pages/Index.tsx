@@ -162,7 +162,7 @@ const Index = () => {
   return (
     <main className="min-h-screen">
       <Seo
-        title="Erys — Fair-Launch Presales for Solana Tokens"
+        title="Erys: In from zero"
          description="Run a fair-launch presale on Bags.fm or Pump.fun. Let your community ape in early, lock in allocations on-chain, and launch on the DEX automatically."
         path="/"
         jsonLd={{
