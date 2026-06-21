@@ -394,8 +394,8 @@ export async function getLaunchFeeSplit(
 export async function recordAffiliateEarning(args: {
   launchId: string;
   amountLamports: bigint;
-  txSignature: string;
-  status: "paid" | "failed";
+  txSignature: string | null;
+  status: "paid" | "pending" | "failed";
 }): Promise<void> {
   const { error } = await supabase.rpc("record_affiliate_earning", {
     p_launch_id: args.launchId,
@@ -405,7 +405,7 @@ export async function recordAffiliateEarning(args: {
   });
   if (error) {
     console.error(
-      `[AFFILIATE] record_affiliate_earning failed for launch ${args.launchId} (tx ${args.txSignature}, status ${args.status}):`,
+      `[AFFILIATE] record_affiliate_earning failed for launch ${args.launchId} (tx ${args.txSignature ?? "none"}, status ${args.status}):`,
       error.message
     );
   }
