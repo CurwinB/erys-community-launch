@@ -347,6 +347,70 @@ export async function recordPumpfunCreatorVaultBalance(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Affiliate program (per-launch fee split)
+// ---------------------------------------------------------------------------
+
+export interface LaunchFeeSplit {
+  launch_id?: string;
+  creator_wallet: string;
+  creator_bps: number;
+  treasury_bps: number;
+  affiliate_id?: string | null;
+  affiliate_wallet: string | null;
+  affiliate_bps: number;
+}
+
+// Resolves how a launch's harvested fees should be split. Returns the
+// standard 7000/3000/0 (creator/treasury/affiliate) split for launches with
+// no affiliate attribution, or 7000/1500/1500 when launches.referred_by_affiliate_id
+// is set. Falls back to null on RPC error so callers can fail closed to the
+// hardcoded default split rather than risk misrouting funds.
+export async function getLaunchFeeSplit(
+  launchId: string
+): Promise<LaunchFeeSplit | null> {
+  const { data, error } = await supabase.rpc("get_launch_fee_split", {
+    p_launch_id: launchId,
+  });
+  if (error) {
+    console.error(
+      `[AFFILIATE] get_launch_fee_split failed for launch ${launchId}:`,
+      error.message
+    );
+    return null;
+  }
+  // RPC returns a single row (function, not a set-returning query in our usage).
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) return null;
+  return row as LaunchFeeSplit;
+}
+
+// Appends a row to the affiliate earnings ledger after an affiliate payout
+// attempt. Idempotent on (launch_id, tx_signature), so safe to call even if
+// a retry re-runs this harvest cycle. status should be 'paid' on a
+// confirmed on-chain transfer, or 'failed' if a tx was broadcast but
+// reverted/never confirmed (this keeps the failure visible on the affiliate
+// dashboard instead of silently disappearing into that cycle's treasury cut).
+export async function recordAffiliateEarning(args: {
+  launchId: string;
+  amountLamports: bigint;
+  txSignature: string;
+  status: "paid" | "failed";
+}): Promise<void> {
+  const { error } = await supabase.rpc("record_affiliate_earning", {
+    p_launch_id: args.launchId,
+    p_amount_lamports: args.amountLamports.toString() as any,
+    p_tx_signature: args.txSignature,
+    p_status: args.status,
+  });
+  if (error) {
+    console.error(
+      `[AFFILIATE] record_affiliate_earning failed for launch ${args.launchId} (tx ${args.txSignature}, status ${args.status}):`,
+      error.message
+    );
+  }
+}
+
 // Reset launches stuck in "executing" status whose scheduled launch_datetime
 // is well in the past AND no worker is actively holding the lock. Flips
 // them to "execution_failed" so the existing pg_cron retry job will pick
