@@ -18,7 +18,7 @@ import { isSolanaWallet } from "@dynamic-labs/solana";
 import { useDynamicContext } from "@dynamic-labs/sdk-react-core";
 import { useWallet } from "@/hooks/useWallet";
 import { supabase } from "@/integrations/supabase/client";
-import { Copy, Send, ChevronDown, Loader2, X, LayoutDashboard } from "lucide-react";
+import { Copy, Send, ChevronDown, Loader2, X, LayoutDashboard, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
@@ -111,6 +111,7 @@ const WalletDropdown = () => {
   const { handleLogOut, setShowDynamicUserProfile } = useDynamicContext();
 
   const [open, setOpen] = useState(false);
+  const [isAffiliate, setIsAffiliate] = useState(false);
   const [solBalance, setSolBalance] = useState<number | null>(null);
   const [erysTokens, setErysTokens] = useState<ErysToken[]>([]);
   const [loadingBalances, setLoadingBalances] = useState(false);
@@ -521,6 +522,31 @@ const WalletDropdown = () => {
 
     return () => clearTimeout(timer);
   }, [sendMode, sendTo, selectedToken]);
+
+  // Check whether the connected wallet is an active affiliate so we can show
+  // the dashboard link. Cheap RPC, runs once per wallet change.
+  useEffect(() => {
+    if (!publicKey) {
+      setIsAffiliate(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await supabase.rpc("get_my_affiliate" as any, {
+          p_wallet: publicKey,
+        } as any);
+        if (cancelled) return;
+        const row = Array.isArray(data) ? data[0] : data;
+        setIsAffiliate(!!row);
+      } catch {
+        if (!cancelled) setIsAffiliate(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [publicKey]);
 
   if (!connected || !publicKey) return null;
 
