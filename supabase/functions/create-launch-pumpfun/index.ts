@@ -274,6 +274,17 @@ Deno.serve(async (req) => {
       ESCROW_ENCRYPTION_KEY
     );
 
+    // Affiliate attribution snapshot (if any). See create-launch for rationale.
+    let referredByAffiliateId: string | null = null;
+    try {
+      const { data: affId } = await supabase.rpc("get_wallet_affiliate", {
+        p_wallet: created_by_wallet,
+      });
+      if (typeof affId === "string") referredByAffiliateId = affId;
+    } catch (e) {
+      console.warn("[create-launch-pumpfun] affiliate lookup failed", e);
+    }
+
     // Step 4: Allocate slot + insert atomically under platform lock.
     const { data, slot } = await withScheduleLock(supabase, "pumpfun", async () => {
       const slot = await findNextAvailableSlot(supabase, "pumpfun", launch_datetime);
@@ -301,6 +312,7 @@ Deno.serve(async (req) => {
         platform: "pumpfun",
         pumpfun_mint_keypair_encrypted: encryptedMintPk,
         status: "scheduled",
+        referred_by_affiliate_id: referredByAffiliateId,
       }).select("id").single();
       if (inserted.error) {
         throw new Error(`Failed to create launch: ${inserted.error.message}`);
