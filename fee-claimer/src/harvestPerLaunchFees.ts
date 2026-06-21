@@ -9,7 +9,13 @@ import {
   ComputeBudgetProgram,
 } from "@solana/web3.js";
 import { decryptEscrowKey } from "./decrypt";
-import { Launch, supabase, releaseLaunchLock } from "./db";
+import {
+  Launch,
+  supabase,
+  releaseLaunchLock,
+  getLaunchFeeSplit,
+  recordAffiliateEarning,
+} from "./db";
 import { withCustodialLock } from "./custodialLock";
 
 // =====================================================================
@@ -55,9 +61,13 @@ const MIN_HARVEST_MULTIPLIER = BigInt(
 );
 const MIN_HARVEST_LAMPORTS = GAS_ESTIMATE_LAMPORTS * MIN_HARVEST_MULTIPLIER;
 
-// Per-launch Pump.fun fee split: 70% to creator (launches.created_by_wallet),
-// 30% to platform treasury. Sponsored launches follow the same routing —
-// creator share NEVER re-routes to treasury based on sponsor identity.
+// Default per-launch Pump.fun fee split: 70% to creator (launches.created_by_wallet),
+// 30% to platform treasury. This is the fallback used only if the
+// get_launch_fee_split RPC call fails. Normal operation reads the live
+// split from that RPC instead, which becomes 70/15/15 with an affiliate cut
+// when the launch is affiliate-attributed. Sponsored launches follow the
+// same routing — creator share NEVER re-routes to treasury based on sponsor
+// identity.
 const CREATOR_BPS = 7000; // 70%
 const TREASURY_BPS = 3000; // 30%
 
@@ -303,6 +313,33 @@ async function runHarvestCriticalSection(
       `path=${resolutionPath} creator=${creatorPubkey.toBase58()}`
   );
 
+  // ---- Resolve fee split (creator/treasury/affiliate) ----
+  // Reads the live split from Supabase. Falls back to the hardcoded 70/30
+  // default if the RPC call fails, so a transient DB issue never blocks a
+  // harvest, it just means an affiliate-attributed launch would (rarely,
+  // and only on RPC failure) skip its affiliate cut for that one cycle
+  // rather than misroute funds on bad data.
+  const liveSplit = await getLaunchFeeSplit(launch.id);
+  const creatorBps = liveSplit?.creator_bps ?? CREATOR_BPS;
+  const treasuryBps = liveSplit?.treasury_bps ?? TREASURY_BPS;
+  const affiliateBps = liveSplit?.affiliate_bps ?? 0;
+  let affiliatePubkey: PublicKey | null = null;
+  if (affiliateBps > 0) {
+    affiliatePubkey = tryParsePubkey(liveSplit?.affiliate_wallet);
+    if (!affiliatePubkey) {
+      console.error(
+        `[HARVEST][AFFILIATE_RESOLVE] launch=${launch.id} affiliate_bps=${affiliateBps} ` +
+          `but affiliate_wallet is missing or unparseable: ${JSON.stringify(liveSplit?.affiliate_wallet)}`
+      );
+      await recordFailure(
+        launch.id,
+        "Affiliate split present but affiliate destination wallet could not be resolved"
+      );
+      return;
+    }
+  }
+  const hasAffiliate = affiliatePubkey !== null;
+
   const vaultPda = getCreatorVaultPda(lightningKp.publicKey);
   let vaultLamports = 0n;
   try {
@@ -323,13 +360,17 @@ async function runHarvestCriticalSection(
   const escrowBefore = BigInt(
     await connection.getBalance(lightningKp.publicKey, "confirmed")
   );
-  // Need to cover claim tx + creator transfer tx + treasury transfer tx
-  // (3 tx fees + priority).
-  const requiredBudget = TX_FEE_RESERVE * 3n + 100_000n;
+  // Need to cover claim tx + creator transfer tx + treasury transfer tx,
+  // plus a 4th affiliate transfer tx when this launch is affiliate-attributed
+  // (3 or 4 tx fees + priority).
+  const requiredTxCount = hasAffiliate ? 4n : 3n;
+  const requiredBudget = TX_FEE_RESERVE * requiredTxCount + 100_000n;
   if (escrowBefore < requiredBudget) {
     await recordFailure(
       launch.id,
-      `Lightning wallet balance ${escrowBefore} below required ${requiredBudget} for claim+creator+treasury tx fees`
+      `Lightning wallet balance ${escrowBefore} below required ${requiredBudget} for claim+creator+treasury${
+        hasAffiliate ? "+affiliate" : ""
+      } tx fees`
     );
     return;
   }
@@ -377,10 +418,14 @@ async function runHarvestCriticalSection(
     return;
   }
 
-  // 70/30 split. Treasury absorbs the rounding remainder so creator gets
-  // exactly floor(gross * 0.7) and treasury gets the rest.
-  const creatorLamports = (gross * BigInt(CREATOR_BPS)) / 10000n;
-  const treasuryLamports = gross - creatorLamports;
+  // Split: treasury absorbs the rounding remainder so creator (and affiliate,
+  // when present) get exactly floor(gross * their bps) and treasury gets
+  // whatever's left.
+  const creatorLamports = (gross * BigInt(creatorBps)) / 10000n;
+  const affiliateLamports = hasAffiliate
+    ? (gross * BigInt(affiliateBps)) / 10000n
+    : 0n;
+  const treasuryLamports = gross - creatorLamports - affiliateLamports;
 
   // ---- Creator transfer (paid first) ----
   let creatorSig: string;
@@ -412,6 +457,63 @@ async function runHarvestCriticalSection(
     return;
   }
 
+  // ---- Affiliate transfer (only when this launch is affiliate-attributed) ----
+  let affiliateSig: string | null = null;
+  if (hasAffiliate && affiliatePubkey) {
+    let broadcastSig: string | null = null;
+    try {
+      const tx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: lightningKp.publicKey,
+          toPubkey: affiliatePubkey,
+          lamports: Number(affiliateLamports),
+        })
+      );
+      tx.feePayer = lightningKp.publicKey;
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      tx.recentBlockhash = blockhash;
+      tx.sign(lightningKp);
+      const sentSig: string = await connection.sendRawTransaction(tx.serialize(), {
+        preflightCommitment: "confirmed",
+      });
+      broadcastSig = sentSig;
+      await connection.confirmTransaction(
+        { signature: sentSig, blockhash, lastValidBlockHeight },
+        "confirmed"
+      );
+      console.log(`[HARVEST] ${launch.id}: affiliate tx https://solscan.io/tx/${sentSig}`);
+      await recordAffiliateEarning({
+        launchId: launch.id,
+        amountLamports: affiliateLamports,
+        txSignature: sentSig,
+        status: "paid",
+      });
+      affiliateSig = sentSig;
+    } catch (err: any) {
+      // Affiliate transfer failing should NOT block creator/treasury, the
+      // creator has already been paid above. Log and fall through; this
+      // cycle's affiliate cut gets rolled into the treasury transfer below
+      // instead of being left stranded in the lightning wallet.
+      console.error(
+        `[HARVEST] ${launch.id}: affiliate transfer failed (claim ${claimSig}, creator ${creatorSig}): ${
+          err?.message ?? err
+        }`
+      );
+      if (broadcastSig) {
+        // A tx was actually sent but didn't confirm, or reverted. Log it as
+        // failed so the affiliate dashboard shows the attempt rather than
+        // the cut just silently vanishing into treasury for this cycle.
+        await recordAffiliateEarning({
+          launchId: launch.id,
+          amountLamports: affiliateLamports,
+          txSignature: broadcastSig,
+          status: "failed",
+        });
+      }
+      affiliateSig = null;
+    }
+  }
+
   // ---- Treasury transfer ----
   let treasurySig: string;
   try {
@@ -419,7 +521,7 @@ async function runHarvestCriticalSection(
       SystemProgram.transfer({
         fromPubkey: lightningKp.publicKey,
         toPubkey: treasuryPubkey,
-        lamports: Number(treasuryLamports),
+        lamports: Number(affiliateSig ? treasuryLamports : treasuryLamports + affiliateLamports),
       })
     );
     tx.feePayer = lightningKp.publicKey;
@@ -452,7 +554,7 @@ async function runHarvestCriticalSection(
   await recordCycle({
     launchId: launch.id,
     gross,
-    treasury: treasuryLamports,
+    treasury: affiliateSig ? treasuryLamports : treasuryLamports + affiliateLamports,
     // contributor column repurposed to record creator share (no schema change).
     contributor: creatorLamports,
     claimSig,
@@ -461,20 +563,41 @@ async function runHarvestCriticalSection(
     escrowBefore,
     escrowAfter,
     allocations,
-    notes: `path=${resolutionPath} creator=${creatorPubkey.toBase58()} creator_tx=${creatorSig}`,
+    notes:
+      `path=${resolutionPath} creator=${creatorPubkey.toBase58()} creator_tx=${creatorSig}` +
+      (hasAffiliate
+        ? ` affiliate=${affiliatePubkey?.toBase58()} affiliate_tx=${affiliateSig ?? "FAILED_retained_in_treasury_this_cycle"}`
+        : ""),
   });
 
   console.log(
     `[HARVEST][SPLIT] launch=${launch.id} sponsored=${!!launch.is_sponsored} gross=${gross.toString()} ` +
-      `creator_bps=${CREATOR_BPS} creator_lamports=${creatorLamports.toString()} ` +
+      `creator_bps=${creatorBps} creator_lamports=${creatorLamports.toString()} ` +
       `creator_wallet=${creatorPubkey.toBase58()} creator_tx=${creatorSig} ` +
-      `treasury_bps=${TREASURY_BPS} treasury_lamports=${treasuryLamports.toString()} ` +
+      (hasAffiliate
+        ? `affiliate_bps=${affiliateBps} affiliate_lamports=${affiliateLamports.toString()} ` +
+          `affiliate_wallet=${affiliatePubkey?.toBase58()} affiliate_tx=${affiliateSig ?? "FAILED"} `
+        : "") +
+      `treasury_bps=${treasuryBps} treasury_lamports=${(affiliateSig
+        ? treasuryLamports
+        : treasuryLamports + affiliateLamports
+      ).toString()} ` +
       `treasury_wallet=${treasuryPubkey.toBase58()} treasury_tx=${treasurySig}`
   );
 
+  const finalTreasuryLamports = affiliateSig
+    ? treasuryLamports
+    : treasuryLamports + affiliateLamports;
   console.log(
     `[HARVEST] ${launch.id}: cycle done. gross=${Number(gross) / LAMPORTS_PER_SOL} SOL, creator=${
       Number(creatorLamports) / LAMPORTS_PER_SOL
-    } SOL (70%), treasury=${Number(treasuryLamports) / LAMPORTS_PER_SOL} SOL (30%)`
+    } SOL (${creatorBps / 100}%), treasury=${
+      Number(finalTreasuryLamports) / LAMPORTS_PER_SOL
+    } SOL (intended ${treasuryBps / 100}%)` +
+      (hasAffiliate
+        ? `, affiliate=${Number(affiliateLamports) / LAMPORTS_PER_SOL} SOL (${
+            affiliateBps / 100
+          }%)${affiliateSig ? "" : " [transfer failed, rolled into treasury this cycle]"}`
+        : "")
   );
 }
