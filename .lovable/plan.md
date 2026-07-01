@@ -1,123 +1,136 @@
-## Erys Affiliate Program — Implementation Plan
+# Erys Co-Dev Fee Sharing (Revised)
 
-Adds an admin-controlled affiliate referral system. When someone signs up via `erys.live/r/CODE`, attribution sticks to their wallet and to every launch they ever create. At sweep time, affiliated launches split 70/15/15 (creator / Erys / affiliate) instead of 70/30.
+Opt-in per launch. When enabled, harvested Pump.fun creator fees split **50% creator / 20% co-dev pool / 15% affiliate (if any) / 15% treasury** (treasury absorbs the affiliate slot when no affiliate). When disabled, the existing 70/30 or 70/15/15 behavior is unchanged.
 
-This app owns the **data layer + UI**. The actual on-chain payout change lives in the external `fee-claimer` Railway service and will be a follow-up there — but this plan ships the schema and queryable API it will need.
-
----
-
-### 1. Data model (single migration)
-
-Erys has no traditional auth/profile table — identity = wallet address. Attribution is therefore keyed by wallet.
-
-**New tables (all in `public`, with GRANTs + RLS):**
-
-- `affiliates`
-  - `id uuid pk`, `wallet_address text unique not null` (lowercased), `referral_code text unique not null` (8-char base32, generated server-side), `status text` (`active` | `revoked`), `created_at`, `created_by_admin_wallet text`
-  - RLS: public `SELECT` on `(referral_code, status, id)` via a `SECURITY DEFINER` lookup function only — full row reads are admin-only. No client writes.
-
-- `affiliate_referrals` (wallet → affiliate mapping, the "permanent on signup" record)
-  - `wallet_address text pk` (lowercased), `affiliate_id uuid not null references affiliates(id)`, `referral_code text not null`, `attributed_at timestamptz`
-  - Written exactly once per wallet by an edge function (see §2). Never updated.
-  - RLS: a wallet can read its own row; admins can read all. No client writes.
-
-- `affiliate_earnings` (ledger)
-  - `id`, `affiliate_id`, `launch_id`, `wallet_address` (affiliate payout wallet, snapshotted), `amount_lamports bigint`, `tx_signature text`, `status text` default `paid`, `created_at`
-  - RLS: affiliate can read their own rows; admins read all. Inserts only by `service_role` (fee-claimer / edge function).
-
-**New column on existing `launches` table:**
-
-- `referred_by_affiliate_id uuid null references affiliates(id)` — set at launch creation by copying from `affiliate_referrals` for `created_by_wallet`. Null = unchanged 70/30 split.
-
-**Helper SQL:**
-
-- `SECURITY DEFINER` function `resolve_referral_code(p_code text)` → returns `{ affiliate_id, status }` for the signup landing page (no need to expose the table).
-- `SECURITY DEFINER` function `attribute_wallet_to_affiliate(p_wallet, p_code)` — idempotent insert into `affiliate_referrals`; rejects if `p_wallet` is itself the affiliate's wallet (self-referral block); no-op if wallet already has a row (first attribution wins, never overwritten).
-- `SECURITY DEFINER` function `get_launch_fee_split(p_launch_id uuid)` → returns `{ creator_wallet, creator_bps, treasury_bps, affiliate_wallet, affiliate_bps }`. This is the single API the fee-claimer will call to know how to split each sweep. Returns 7000/3000/0 when no affiliate, 7000/1500/1500 when set.
-- Admin RPCs: `admin_create_affiliate(p_admin_wallet, p_wallet)`, `admin_revoke_affiliate(p_admin_wallet, p_affiliate_id)`, `admin_list_affiliates(p_admin_wallet)` (joins counts of referred wallets, launches, and total earnings). All gated by existing `is_admin_wallet`.
+Gas is subtracted from gross **before** any bps math so every party's payout equals their bps of net. Co-dev payouts go out in batched transfers (15 per tx). Under-floor shares accrue on the co-dev row instead of being dropped.
 
 ---
 
-### 2. Signup / attribution flow
+## 1. Database
 
-There is no email signup — "signing up" = first time a wallet connects. Flow:
+New migration adds:
 
-1. **Landing route `/r/:code`** — new React route that:
-   - Calls `resolve_referral_code` → if invalid/revoked, redirects to `/` with a toast.
-   - Stores the code in `localStorage` under `erys_ref_code` (survives wallet connect / redirects).
-   - Redirects to `/`.
+**`public.launches` columns**
+- `codev_sharing_enabled boolean not null default false`
+- `codev_mode text not null default 'proportional'` — `'proportional' | 'fcfs'` (see §3 for what these mean now)
+- `codev_roster_locked_at timestamptz` — set when 100th codev joins OR when the launch executes, whichever first
 
-2. **Wallet connect hook** — after Dynamic reports a connected wallet, if `localStorage.erys_ref_code` is set, call edge function `attribute-referral` with `{ wallet, code }`. Function calls `attribute_wallet_to_affiliate` and clears the code on success. Idempotent: if the wallet already has an attribution (any prior code), this is a no-op and the stored code is cleared.
+**`public.launch_codevs` table**
+```
+id uuid pk
+launch_id uuid fk launches(id) on delete cascade
+wallet_address text not null          -- base58, NO lower()/case-folding, ever
+contribution_lamports bigint not null default 0
+pending_lamports bigint not null default 0        -- accrual balance
+paid_lamports bigint not null default 0           -- lifetime paid
+joined_at timestamptz not null default now()
+unique (launch_id, wallet_address)
+```
+No `bps_override` column — both modes use the same proportional math (see §3). Grants: `SELECT, INSERT, UPDATE, DELETE` to `authenticated`; `ALL` to `service_role`. RLS: public `SELECT` (needed by the launch page), writes only via SECURITY DEFINER RPCs. Trigger-enforced 100-row hard cap per `launch_id`.
 
-This satisfies "permanent, never overwritten, no retroactive" requirements.
+**`public.codev_payouts` ledger**
+```
+id uuid pk, launch_id uuid, wallet_address text, cycle_id uuid null,
+amount_lamports bigint not null, tx_signature text not null, created_at timestamptz default now()
+unique (launch_id, wallet_address, tx_signature)
+```
+Grants + RLS: read-only for `authenticated` filtered by their own wallet via RPC; `service_role` full access.
 
----
+**Extended RPC: `public.get_launch_fee_split(p_launch_id)`**
+Returns existing columns plus:
+- `codev_bps int` — `2000` when enabled else `0`
+- `creator_bps` becomes `5000` when enabled, `7000` otherwise
+- `codev_allocations jsonb` — `[{wallet_address, weight}]` where `weight` is always `contribution_lamports`. Empty array when disabled or when roster is empty at lock time.
 
-### 3. Launch creation
-
-Update `create-launch` and `create-launch-pumpfun` edge functions: before insert, look up `affiliate_referrals` by `created_by_wallet` and copy `affiliate_id` into the new `launches.referred_by_affiliate_id` column. Revoking an affiliate later does NOT touch existing launch rows.
-
----
-
-### 4. Fee split — data contract for external `fee-claimer`
-
-This app does NOT modify the Railway fee-claimer code (it lives outside this repo and the user will update it separately). What we ship:
-
-- The `get_launch_fee_split` RPC above (single call, returns everything claimer needs).
-- An `affiliates_insert_earning(p_launch_id, p_amount_lamports, p_tx_signature)` `SECURITY DEFINER` RPC the claimer can call after a successful sweep tx to append to `affiliate_earnings`. Idempotent on `(launch_id, tx_signature)`.
-
-The plan documents these endpoints in a short `AFFILIATES_INTEGRATION.md` so the fee-claimer change is a 1:1 mechanical update.
-
----
-
-### 5. Affiliate dashboard (`/affiliate`)
-
-New page, visible only when the connected wallet has a row in `affiliates` with status `active` (or `revoked`, read-only):
-
-- Referral link with copy button (`erys.live/r/CODE`) and small QR.
-- KPI cards: total referred wallets, total launches from referred wallets, total lifetime earnings (SOL).
-- Table: referred creators (wallet, attribution date, # launches, total earned from them).
-- Table: per-launch earnings (launch token, date swept, amount, tx signature link to Solscan).
-- Simple earnings-over-time line chart (recharts, already in stack) grouped by day.
-
-Powered by two new `SECURITY DEFINER` RPCs that filter by `lower(auth wallet) = affiliate wallet`: `affiliate_dashboard_summary` and `affiliate_dashboard_earnings`.
-
-Link in the user dropdown (`WalletDropdown.tsx`) shown only when wallet is an active affiliate.
+New RPCs:
+- `enable_codev_sharing(p_launch_id, p_wallet, p_mode)` — only the launch's `created_by_wallet` (case-sensitive compare) may call; blocked once the launch has been harvested at least once.
+- `upsert_launch_codev(p_launch_id, p_wallet_address, p_contribution_lamports)` — SECURITY DEFINER. Adds `p_contribution_lamports` to the row's `contribution_lamports` (upsert). Rejects when `codev_roster_locked_at is not null`. Rejects new wallets when `codev_mode = 'fcfs'` and the roster already has 100 entries; existing wallets can still top up until the roster locks. Rejects any insert past 100 regardless of mode (hard ceiling).
+- `lock_codev_roster(p_launch_id)` — sets `codev_roster_locked_at = now()` idempotently. Called by the executor on successful launch and by the upsert trigger the moment count hits 100.
+- `record_codev_batch(p_launch_id, p_cycle_id, p_tx_signature, p_payouts jsonb)` — atomically inserts N `codev_payouts` rows, decrements matching `launch_codevs.pending_lamports`, bumps `paid_lamports`. Idempotent on `(launch_id, wallet, tx_signature)`.
+- `accrue_codev_pending(p_launch_id, p_deltas jsonb)` — bulk increment of `pending_lamports` for wallets whose share this cycle did not clear the floor or whose batch tx failed.
+- `codev_dashboard(p_wallet)` — lists a co-dev's launches, pending, paid, recent payouts.
 
 ---
 
-### 6. Admin additions
+## 2. Harvester (`fee-claimer/src/harvestPerLaunchFees.ts`)
 
-New `Affiliates` tab in `AdminPage.tsx`:
+Between the existing creator-transfer block and the treasury-transfer block, insert a co-dev batch-payout stage. Full flow per launch when `codev_bps > 0`:
 
-- Table of affiliates: wallet, code, status, # referred wallets, # attributed launches, total paid out, created date.
-- "Add affiliate" dialog: paste wallet → server generates code → row created.
-- Per-row "Revoke" action (sets `status='revoked'`; existing attributions and launches keep paying).
-- Re-activate action for revoked rows.
+1. **Read allocations** via `get_launch_fee_split`. If `codev_bps=0`, skip the whole stage — behaves exactly like today.
+2. **Single gas constant, one derived**:
+   ```
+   PER_TX_GAS_LAMPORTS              = 50_000     // env-tunable base unit
+   PER_RECIPIENT_BATCH_GAS_LAMPORTS = PER_TX_GAS_LAMPORTS / 15  // derived, never separately configured
+   ```
+   No second env var. If the base is tuned later, the per-wallet floor moves with it.
+3. **Dynamic gas budget**:
+   ```
+   batchCount    = ceil(activeCodevs / 15)
+   totalTxs      = 1 claim + 1 creator + (hasAffiliate?1:0) + batchCount + 1 treasury
+   gasEstimate   = totalTxs * PER_TX_GAS_LAMPORTS
+   MIN_HARVEST   = gasEstimate * PER_LAUNCH_MIN_HARVEST_MULTIPLIER  (default 20)
+   ```
+4. **Gross-minus-gas split**: subtract `gasEstimate` from `gross` first, then apply bps. Existing rounding-remainder-to-treasury rule preserved.
+5. **Compute per-co-dev shares** with BigInt math over `codev_allocations`. Both modes use the same formula (calculateSharesFromBalance pattern):
+   ```
+   share_i = codevPool * contribution_lamports_i / sum(contribution_lamports)
+   remainder → largest contributor
+   ```
+   This guarantees the full 20% pool is always distributed regardless of roster size. Add each wallet's current `pending_lamports` to `share_i`.
+6. **Per-wallet floor**: `PER_CODEV_FLOOR_LAMPORTS = 20 * PER_RECIPIENT_BATCH_GAS_LAMPORTS`. Wallets below floor → not batched, their `share_i` is written via `accrue_codev_pending`. Wallets at/above floor → batch.
+7. **Batching**: chunk cleared wallets into groups of 15, one tx per chunk with N `SystemProgram.transfer` ixs + compute-budget + priority-fee ixs. Sign+send via the existing lightning-wallet path.
+8. **Failure isolation**: each batch tx is independent. Batch failure → those wallets get their `share_i` re-accrued to `pending_lamports`. Other batches proceed. Errors logged per-batch into `fee_harvest_last_error` (semicolon-joined).
+9. **Treasury transfer** runs last on whatever remains.
+10. **Cycle recording**: `record_harvest_cycle` continues to run; co-dev totals are stamped via `record_codev_batch` per successful batch and via `accrue_codev_pending` for under-floor/failed wallets.
+
+`db.ts` gains typed helpers: `getCodevAllocations`, `recordCodevBatch`, `accrueCodevPending`. Affiliate transfer logic unchanged.
 
 ---
 
-### 7. Edge cases (handled in SQL)
+## 3. Assigning Co-Devs at Launch Time
 
-- Self-referral: `attribute_wallet_to_affiliate` raises if `p_wallet = affiliates.wallet_address` for that code.
-- No retroactive attribution: function only inserts; never updates. Wallet with no prior `affiliate_referrals` row that creates a launch gets `referred_by_affiliate_id = null` permanently for that launch.
-- Revocation: only blocks NEW `attribute_wallet_to_affiliate` calls; existing referrals + launches keep their attribution and continue to earn.
+Both modes use identical split math. **Mode only controls eligibility for a roster seat, never how the pool is split.**
+
+- **`proportional` (open)**: every contributing wallet is upserted into `launch_codevs` until the hard 100-wallet ceiling or roster lock.
+- **`fcfs` (capped proportional)**: only the first 100 unique wallets to contribute get a seat. Contributor #101+ still gets their normal token allocation — they just don't join `launch_codevs`. Existing seated wallets can keep topping up their `contribution_lamports` until the roster locks.
+
+**Roster lock cutoff** — locked the moment either happens first:
+- 100 unique wallets have joined `launch_codevs` (enforced by upsert trigger calling `lock_codev_roster`), OR
+- the token launches on Pump.fun. The existing executor success path calls `lock_codev_roster(launch_id)`; no new event needed.
+
+Once `codev_roster_locked_at` is set, `upsert_launch_codev` rejects all writes for that launch.
+
+**Field-name mapping (source vs destination)**: the `contribute` edge function writes each contribution's `amount_lamports` into `contributions.amount_lamports` (existing table, unchanged). When the same edge function then calls `upsert_launch_codev`, it passes that same value as `p_contribution_lamports`, which is added to `launch_codevs.contribution_lamports`. These are two distinct columns on two distinct tables — `contributions.amount_lamports` (source) and `launch_codevs.contribution_lamports` (destination) — not the same field reused. The upsert only fires when `launches.codev_sharing_enabled = true` and `codev_roster_locked_at is null`.
+
+The `create-launch` and `create-launch-pumpfun` edge functions accept an optional `codev` block: `{ enabled, mode }`. `max` is no longer a parameter — the 100 hard ceiling is fixed. Validated: `mode in ('proportional','fcfs')`.
 
 ---
 
-### Technical summary
+## 4. Frontend
 
-| Area | Change |
-|---|---|
-| Migration | 3 new tables + 1 column on `launches` + 6 RPCs + GRANTs + RLS |
-| Edge functions | New `attribute-referral`; update `create-launch` & `create-launch-pumpfun` to copy attribution |
-| Frontend routes | New `/r/:code` (redirect) and `/affiliate` (dashboard) |
-| Frontend components | `AffiliateDashboard`, `AdminAffiliatesTab`, attribution hook in wallet provider, dropdown link |
-| External | `AFFILIATES_INTEGRATION.md` documenting the two RPCs the Railway `fee-claimer` must call (no code change in this repo) |
+- **Launch creation form**: a "Share fees with co-devs" toggle plus a mode picker — Open Proportional vs. Capped Proportional (first 100). Copy explains the 50/20/15/15 vs 70/30 tradeoff and that both modes split the pool proportionally by contribution size; mode only controls whether seats are capped at 100.
+- **Launch page** (`src/pages/LaunchPage.tsx` / `HowItWorks.tsx`): when `codev_sharing_enabled`, show a co-dev panel — mode, seat count / cap, roster lock status/time, live pool percentage, top co-devs by paid+pending (truncated wallets).
+- **Dashboard** (`src/pages/DashboardPage.tsx`): new "Co-dev earnings" section pulling from `codev_dashboard(wallet)` — one row per launch: pending, lifetime paid, last payout tx.
+- **Admin** (`src/pages/AdminPage.tsx` + new `CodevTab.tsx`): per-launch view of the co-dev roster with pending/paid, plus a force-payout retry button.
+- **HowItWorks page**: short section describing the 50/20/15/15 opt-in split and the two modes.
 
-### Out of scope (explicit)
+No shared UI component or color needs to change; use the existing accent + card tokens.
 
-- Modifying the `fee-claimer/` Railway service code — documented as a follow-up.
-- Email notifications to affiliates.
-- Self-serve affiliate signup (admin-controlled per spec).
-- Payout-pending / unpaid states in the ledger (spec says payout is instant ⇒ status is always `paid`).
+---
+
+## 5. Edge cases & guardrails
+
+- Case sensitivity: every query touching `wallet_address` uses exact-match. No `lower()`, no `citext`.
+- Idempotency: `record_codev_batch` upserts by `(launch_id, wallet_address, tx_signature)`.
+- Enable-window lock: `enable_codev_sharing` refuses if `fee_harvest_total_lamports > 0`.
+- 100-wallet ceiling: DB trigger + RPC-side guard.
+- Roster lock: enforced by RPC on every insert; auto-set by the executor on launch and by the trigger at the 100th seat.
+- Sub-floor forever: out of scope, but `pending_lamports` remains queryable.
+- Full pool always distributed: proportional-with-remainder ensures no dead bps regardless of seat count.
+- No changes to affiliate math, treasury math when disabled, or the existing 70/30 default.
+
+---
+
+## Out of scope
+
+Vesting/cliffs, per-launch harvest cadence, dust-cleanup policy for dead launches, creator-tunable per-seat weights.
