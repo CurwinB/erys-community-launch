@@ -15,6 +15,10 @@ import {
   releaseLaunchLock,
   getLaunchFeeSplit,
   recordAffiliateEarning,
+  recordCodevBatch,
+  accrueCodevPending,
+  CodevAllocation,
+  CodevPayoutRecord,
 } from "./db";
 import { withCustodialLock } from "./custodialLock";
 
@@ -52,7 +56,10 @@ const TX_FEE_RESERVE = 5_000n;
 const ESCROW_RENT_FLOOR_LAMPORTS = 2_000_000n;
 
 // 20x estimated gas. Estimated gas = collect tx + treasury transfer +
-// safety buffer ~110k lamports default.
+// safety buffer ~110k lamports default. This is the base (no co-dev) case;
+// launches with co-dev sharing enabled compute a bigger, dynamic estimate —
+// see estimateGasLamports() below — that scales with batch count instead of
+// using this fixed constant directly.
 const GAS_ESTIMATE_LAMPORTS = BigInt(
   process.env.PER_LAUNCH_HARVEST_GAS_ESTIMATE_LAMPORTS || "110000"
 );
@@ -60,6 +67,38 @@ const MIN_HARVEST_MULTIPLIER = BigInt(
   process.env.PER_LAUNCH_MIN_HARVEST_MULTIPLIER || "20"
 );
 const MIN_HARVEST_LAMPORTS = GAS_ESTIMATE_LAMPORTS * MIN_HARVEST_MULTIPLIER;
+
+// =====================================================================
+// Co-dev fee sharing constants.
+//
+// Single source of truth: PER_TX_GAS_LAMPORTS is the only tunable. Every
+// other gas figure (per-recipient floor, per-launch dynamic estimate) is
+// derived from it so they can never drift out of sync with each other.
+// =====================================================================
+const PER_TX_GAS_LAMPORTS = BigInt(
+  process.env.PER_TX_GAS_LAMPORTS || "50000"
+);
+const CODEV_BATCH_SIZE = 15;
+// Derived, never independently configured.
+const PER_RECIPIENT_BATCH_GAS_LAMPORTS =
+  PER_TX_GAS_LAMPORTS / BigInt(CODEV_BATCH_SIZE);
+// Layer 2 floor: a co-dev's share (current + accrued pending) must be worth
+// at least 20x their pro-rata slice of batch gas, or it accrues instead of
+// being sent this cycle.
+const PER_CODEV_FLOOR_LAMPORTS =
+  MIN_HARVEST_MULTIPLIER * PER_RECIPIENT_BATCH_GAS_LAMPORTS;
+
+// Dynamic per-cycle gas estimate: claim + creator + treasury (+ affiliate)
+// + however many 15-wide co-dev batches this launch needs this cycle.
+// Replaces the flat GAS_ESTIMATE_LAMPORTS whenever codevCount > 0.
+function estimateGasLamports(codevCount: number, hasAffiliate: boolean): bigint {
+  const batchCount = Math.ceil(codevCount / CODEV_BATCH_SIZE);
+  const totalTxs = 1n /* claim */ + 1n /* creator */ +
+    (hasAffiliate ? 1n : 0n) +
+    BigInt(batchCount) +
+    1n /* treasury */;
+  return totalTxs * PER_TX_GAS_LAMPORTS;
+}
 
 // Default per-launch Pump.fun fee split: 70% to creator (launches.created_by_wallet),
 // 30% to platform treasury. This is the fallback used only if the
@@ -115,6 +154,90 @@ function buildCollectCreatorFeeIx(creator: PublicKey): TransactionInstruction {
     ],
     data: COLLECT_CREATOR_FEE_DISCRIMINATOR,
   });
+}
+
+// Proportional share of the co-dev pool, BigInt math, remainder dumped to
+// the largest contributor. Mirrors calculateSharesFromBalance in
+// distributor/src/distribute.ts. Adds each wallet's currently-accrued
+// pending_lamports on top of their new share for this cycle, since accrual
+// is "owed but not yet paid," not a separate pool.
+function computeCodevShares(
+  allocations: CodevAllocation[],
+  codevPoolLamports: bigint
+): Map<string, bigint> {
+  const shares = new Map<string, bigint>();
+  if (codevPoolLamports <= 0n || allocations.length === 0) return shares;
+
+  const totalWeight = allocations.reduce(
+    (sum, a) => sum + BigInt(a.weight || "0"),
+    0n
+  );
+  if (totalWeight === 0n) return shares;
+
+  const rawShares = allocations.map((a) => ({
+    wallet: a.wallet_address,
+    share:
+      (BigInt(a.weight || "0") * codevPoolLamports) / totalWeight +
+      BigInt(a.pending_lamports || "0"),
+    weight: BigInt(a.weight || "0"),
+  }));
+
+  // Remainder from the pool-only (non-pending) portion goes to the largest
+  // contributor by weight, so the full pool is always distributed with no
+  // dead bps regardless of roster size.
+  const poolOnlyTotal = rawShares.reduce(
+    (sum, s) => sum + (s.weight * codevPoolLamports) / totalWeight,
+    0n
+  );
+  const remainder = codevPoolLamports - poolOnlyTotal;
+  if (remainder > 0n && rawShares.length > 0) {
+    const largest = rawShares.reduce((a, b) => (b.weight > a.weight ? b : a));
+    largest.share += remainder;
+  }
+
+  for (const s of rawShares) shares.set(s.wallet, s.share);
+  return shares;
+}
+
+// Sends one batch (up to CODEV_BATCH_SIZE recipients) as a single tx with
+// N transfer instructions. Batches are atomic on Solana: if one recipient
+// in the batch is bad, the whole batch fails together, but other batches
+// are unaffected — the caller re-accrues a failed batch's wallets rather
+// than losing their share.
+async function sendCodevBatch(
+  connection: Connection,
+  payerKp: Keypair,
+  recipients: { wallet: string; amount: bigint }[]
+): Promise<string> {
+  const tx = new Transaction();
+  tx.add(
+    ComputeBudgetProgram.setComputeUnitPrice({
+      microLamports: PRIORITY_FEE_MICRO_LAMPORTS,
+    })
+  );
+  for (const r of recipients) {
+    tx.add(
+      SystemProgram.transfer({
+        fromPubkey: payerKp.publicKey,
+        toPubkey: new PublicKey(r.wallet),
+        lamports: Number(r.amount),
+      })
+    );
+  }
+  tx.feePayer = payerKp.publicKey;
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash(
+    "confirmed"
+  );
+  tx.recentBlockhash = blockhash;
+  tx.sign(payerKp);
+  const sig = await connection.sendRawTransaction(tx.serialize(), {
+    preflightCommitment: "confirmed",
+  });
+  await connection.confirmTransaction(
+    { signature: sig, blockhash, lastValidBlockHeight },
+    "confirmed"
+  );
+  return sig;
 }
 
 async function claimNextLaunch(): Promise<Launch | null> {
@@ -340,6 +463,13 @@ async function runHarvestCriticalSection(
   }
   const hasAffiliate = affiliatePubkey !== null;
 
+  // ---- Co-dev allocations (read once, reused for threshold + payout) ----
+  const codevBps = liveSplit?.codev_bps ?? 0;
+  const codevAllocations: CodevAllocation[] = codevBps > 0
+    ? (liveSplit?.codev_allocations ?? [])
+    : [];
+  const hasCodevs = codevBps > 0 && codevAllocations.length > 0;
+
   const vaultPda = getCreatorVaultPda(lightningKp.publicKey);
   let vaultLamports = 0n;
   try {
@@ -348,9 +478,18 @@ async function runHarvestCriticalSection(
     console.warn(`[HARVEST] ${launch.id}: vault read failed: ${err?.message ?? err}`);
   }
 
-  if (vaultLamports < MIN_HARVEST_LAMPORTS) {
+  // Dynamic threshold: launches with co-dev sharing enabled need a bigger
+  // vault balance before it's worth harvesting, since more batch txs are
+  // required. Non-codev launches keep the existing flat 20x-gas gate.
+  const minHarvestLamports = hasCodevs
+    ? estimateGasLamports(codevAllocations.length, hasAffiliate) * MIN_HARVEST_MULTIPLIER
+    : MIN_HARVEST_LAMPORTS;
+
+  if (vaultLamports < minHarvestLamports) {
     console.log(
-      `[HARVEST] ${launch.id}: vault ${vaultLamports} < threshold ${MIN_HARVEST_LAMPORTS} (20x gas) — skip`
+      `[HARVEST] ${launch.id}: vault ${vaultLamports} < threshold ${minHarvestLamports} (20x gas${
+        hasCodevs ? `, ${codevAllocations.length} co-devs` : ""
+      }) — skip`
     );
     await recordEmpty(launch.id);
     return;
@@ -361,9 +500,13 @@ async function runHarvestCriticalSection(
     await connection.getBalance(lightningKp.publicKey, "confirmed")
   );
   // Need to cover claim tx + creator transfer tx + treasury transfer tx,
-  // plus a 4th affiliate transfer tx when this launch is affiliate-attributed
-  // (3 or 4 tx fees + priority).
-  const requiredTxCount = hasAffiliate ? 4n : 3n;
+  // plus a 4th affiliate transfer tx when this launch is affiliate-attributed,
+  // plus one tx per 15-wide co-dev batch when co-dev sharing is enabled.
+  const codevBatchCount = hasCodevs
+    ? Math.ceil(codevAllocations.length / CODEV_BATCH_SIZE)
+    : 0;
+  const requiredTxCount =
+    (hasAffiliate ? 4n : 3n) + BigInt(codevBatchCount);
   const requiredBudget = TX_FEE_RESERVE * requiredTxCount + 100_000n;
   if (escrowBefore < requiredBudget) {
     await recordFailure(
@@ -418,14 +561,25 @@ async function runHarvestCriticalSection(
     return;
   }
 
-  // Split: treasury absorbs the rounding remainder so creator (and affiliate,
-  // when present) get exactly floor(gross * their bps) and treasury gets
-  // whatever's left.
-  const creatorLamports = (gross * BigInt(creatorBps)) / 10000n;
+  // Gas comes off the top of gross BEFORE any bps math runs, so every
+  // party's payout equals their bps of NET (gross minus gas), not their bps
+  // minus their own gas. The cost is genuinely shared across everyone since
+  // it's deducted once here, not nickel-and-dimed per transfer. Treasury
+  // absorbs both the gas cost and the rounding remainder.
+  const cycleGasEstimate = hasCodevs
+    ? estimateGasLamports(codevAllocations.length, hasAffiliate)
+    : GAS_ESTIMATE_LAMPORTS;
+  const netGross = gross > cycleGasEstimate ? gross - cycleGasEstimate : 0n;
+
+  const creatorLamports = (netGross * BigInt(creatorBps)) / 10000n;
   const affiliateLamports = hasAffiliate
-    ? (gross * BigInt(affiliateBps)) / 10000n
+    ? (netGross * BigInt(affiliateBps)) / 10000n
     : 0n;
-  const treasuryLamports = gross - creatorLamports - affiliateLamports;
+  const codevPoolLamports = hasCodevs
+    ? (netGross * BigInt(codevBps)) / 10000n
+    : 0n;
+  const treasuryLamports =
+    gross - creatorLamports - affiliateLamports - codevPoolLamports;
 
   // ---- Creator transfer (paid first) ----
   let creatorSig: string;
@@ -514,6 +668,77 @@ async function runHarvestCriticalSection(
     }
   }
 
+  // ---- Co-dev batch payouts (only when this launch has co-dev sharing) ----
+  // Runs after creator/affiliate, before treasury, so treasury always ends
+  // up with "whatever's left" — consistent with how it already absorbs gas
+  // and rounding.
+  let codevSig: string | null = null; // last successful batch tx, for cycle notes
+  let codevPaidTotal = 0n;
+  if (hasCodevs && codevPoolLamports > 0n) {
+    const shares = computeCodevShares(codevAllocations, codevPoolLamports);
+
+    const toPay: { wallet: string; amount: bigint }[] = [];
+    const toAccrue: CodevPayoutRecord[] = [];
+    for (const [wallet, amount] of shares) {
+      if (amount >= PER_CODEV_FLOOR_LAMPORTS) {
+        toPay.push({ wallet, amount });
+      } else if (amount > 0n) {
+        // Below floor — don't spend gas moving dust. Accrue it; it's
+        // re-evaluated against the floor next cycle, never dropped.
+        toAccrue.push({ wallet_address: wallet, amount_lamports: amount.toString() });
+      }
+    }
+
+    if (toAccrue.length > 0) {
+      await accrueCodevPending(launch.id, toAccrue);
+      console.log(
+        `[HARVEST][CODEV] ${launch.id}: ${toAccrue.length} wallet(s) below floor (${PER_CODEV_FLOOR_LAMPORTS} lamports), accrued for next cycle`
+      );
+    }
+
+    for (let i = 0; i < toPay.length; i += CODEV_BATCH_SIZE) {
+      const batch = toPay.slice(i, i + CODEV_BATCH_SIZE);
+      try {
+        const sig = await sendCodevBatch(connection, lightningKp, batch);
+        codevSig = sig;
+        const paidRecords: CodevPayoutRecord[] = batch.map((b) => ({
+          wallet_address: b.wallet,
+          amount_lamports: b.amount.toString(),
+        }));
+        await recordCodevBatch({
+          launchId: launch.id,
+          cycleId: null,
+          txSignature: sig,
+          payouts: paidRecords,
+        });
+        codevPaidTotal += batch.reduce((sum, b) => sum + b.amount, 0n);
+        console.log(
+          `[HARVEST][CODEV] ${launch.id}: batch of ${batch.length} paid, tx https://solscan.io/tx/${sig}`
+        );
+      } catch (err: any) {
+        // Batch failed — every wallet in it stays owed. Re-accrue the whole
+        // batch rather than letting a single bad recipient silently cost
+        // 14 good ones their payout; they'll clear on the next cycle's
+        // batching pass (possibly grouped differently).
+        console.error(
+          `[HARVEST][CODEV] ${launch.id}: batch of ${batch.length} failed (claim ${claimSig}, creator ${creatorSig}): ${
+            err?.message ?? err
+          }`
+        );
+        await accrueCodevPending(
+          launch.id,
+          batch.map((b) => ({
+            wallet_address: b.wallet,
+            amount_lamports: b.amount.toString(),
+          }))
+        );
+      }
+      // Small delay between batches, same courtesy as the distributor's
+      // per-contributor loop, to avoid hammering the RPC.
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+
   // ---- Treasury transfer ----
   // Always exactly treasuryLamports — never absorbs a failed/pending
   // affiliate cut. That amount stays in the lightning wallet, owed to the
@@ -570,16 +795,22 @@ async function runHarvestCriticalSection(
       `path=${resolutionPath} creator=${creatorPubkey.toBase58()} creator_tx=${creatorSig}` +
       (hasAffiliate
         ? ` affiliate=${affiliatePubkey?.toBase58()} affiliate_tx=${affiliateSig ?? "FAILED_pending_retry_in_lightning_wallet"}`
+        : "") +
+      (hasCodevs
+        ? ` codev_pool=${codevPoolLamports.toString()} codev_paid=${codevPaidTotal.toString()} codev_last_tx=${codevSig ?? "none"}`
         : ""),
   });
 
   console.log(
-    `[HARVEST][SPLIT] launch=${launch.id} sponsored=${!!launch.is_sponsored} gross=${gross.toString()} ` +
+    `[HARVEST][SPLIT] launch=${launch.id} sponsored=${!!launch.is_sponsored} gross=${gross.toString()} gas=${cycleGasEstimate.toString()} net=${netGross.toString()} ` +
       `creator_bps=${creatorBps} creator_lamports=${creatorLamports.toString()} ` +
       `creator_wallet=${creatorPubkey.toBase58()} creator_tx=${creatorSig} ` +
       (hasAffiliate
         ? `affiliate_bps=${affiliateBps} affiliate_lamports=${affiliateLamports.toString()} ` +
           `affiliate_wallet=${affiliatePubkey?.toBase58()} affiliate_tx=${affiliateSig ?? "FAILED_PENDING_RETRY"} `
+        : "") +
+      (hasCodevs
+        ? `codev_bps=${codevBps} codev_pool_lamports=${codevPoolLamports.toString()} codev_paid_lamports=${codevPaidTotal.toString()} codev_recipients=${codevAllocations.length} `
         : "") +
       `treasury_bps=${treasuryBps} treasury_lamports=${treasuryLamports.toString()} ` +
       `treasury_wallet=${treasuryPubkey.toBase58()} treasury_tx=${treasurySig}`
@@ -595,6 +826,11 @@ async function runHarvestCriticalSection(
         ? `, affiliate=${Number(affiliateLamports) / LAMPORTS_PER_SOL} SOL (${
             affiliateBps / 100
           }%)${affiliateSig ? "" : " [transfer failed, still owed, left in lightning wallet pending retry]"}`
+        : "") +
+      (hasCodevs
+        ? `, codev_pool=${Number(codevPoolLamports) / LAMPORTS_PER_SOL} SOL (${
+            codevBps / 100
+          }%), codev_paid=${Number(codevPaidTotal) / LAMPORTS_PER_SOL} SOL to ${codevAllocations.length} recipient(s)`
         : "")
   );
 }
