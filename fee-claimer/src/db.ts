@@ -351,6 +351,12 @@ export async function recordPumpfunCreatorVaultBalance(
 // Affiliate program (per-launch fee split)
 // ---------------------------------------------------------------------------
 
+export interface CodevAllocation {
+  wallet_address: string;
+  weight: string; // contribution_lamports, bigint as string
+  pending_lamports: string; // bigint as string
+}
+
 export interface LaunchFeeSplit {
   launch_id?: string;
   creator_wallet: string;
@@ -359,6 +365,8 @@ export interface LaunchFeeSplit {
   affiliate_id?: string | null;
   affiliate_wallet: string | null;
   affiliate_bps: number;
+  codev_bps?: number;
+  codev_allocations?: CodevAllocation[];
 }
 
 // Resolves how a launch's harvested fees should be split. Returns the
@@ -411,6 +419,60 @@ export async function recordAffiliateEarning(args: {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Co-dev fee sharing (per-launch, opt-in)
+// ---------------------------------------------------------------------------
+
+export interface CodevPayoutRecord {
+  wallet_address: string;
+  amount_lamports: string; // bigint as string
+}
+
+// Atomically records a successful batch of co-dev payouts: inserts ledger
+// rows (idempotent on launch_id+wallet+tx_signature) and decrements
+// pending_lamports / bumps paid_lamports for each wallet in the batch.
+export async function recordCodevBatch(args: {
+  launchId: string;
+  cycleId: string | null;
+  txSignature: string;
+  payouts: CodevPayoutRecord[];
+}): Promise<void> {
+  if (args.payouts.length === 0) return;
+  const { error } = await supabase.rpc("record_codev_batch", {
+    p_launch_id: args.launchId,
+    p_cycle_id: args.cycleId,
+    p_tx_signature: args.txSignature,
+    p_payouts: args.payouts as any,
+  });
+  if (error) {
+    console.error(
+      `[CODEV] record_codev_batch failed for launch ${args.launchId} (tx ${args.txSignature}):`,
+      error.message
+    );
+  }
+}
+
+// Bulk-accrues pending_lamports for co-devs whose share this cycle either
+// fell below the per-wallet gas-relative floor, or whose batch transfer
+// failed to land. Never drops a share — it stays owed and is re-evaluated
+// against the floor next cycle, same fail-closed pattern as affiliate.
+export async function accrueCodevPending(
+  launchId: string,
+  deltas: CodevPayoutRecord[]
+): Promise<void> {
+  if (deltas.length === 0) return;
+  const { error } = await supabase.rpc("accrue_codev_pending", {
+    p_launch_id: launchId,
+    p_deltas: deltas as any,
+  });
+  if (error) {
+    console.error(
+      `[CODEV] accrue_codev_pending failed for launch ${launchId}:`,
+      error.message
+    );
+  }
+}
+
 // Reset launches stuck in "executing" status whose scheduled launch_datetime
 // is well in the past AND no worker is actively holding the lock. Flips
 // them to "execution_failed" so the existing pg_cron retry job will pick
@@ -438,3 +500,4 @@ export async function resetStaleExecutingLaunches(): Promise<void> {
     console.error("Error resetting stale executing launches:", error.message);
   }
 }
+
