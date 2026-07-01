@@ -136,6 +136,15 @@ export async function setLaunched(launchId: string, signature?: string): Promise
     .eq("id", launchId);
 
   if (error) console.error(`Error marking launch ${launchId} launched:`, error.message);
+
+  // Co-dev roster locks the moment the token launches on-chain — this is the
+  // deterministic cutoff. Idempotent: safe to call even if the 100-seat
+  // autolock trigger already fired earlier.
+  try {
+    await supabase.rpc("lock_codev_roster", { p_launch_id: launchId });
+  } catch (err: any) {
+    console.warn(`[CODEV] lock_codev_roster failed for ${launchId}:`, err?.message ?? err);
+  }
 }
 
 export async function setFailed(launchId: string, reason: string): Promise<void> {

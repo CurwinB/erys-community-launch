@@ -164,6 +164,51 @@ export type Database = {
         }
         Relationships: []
       }
+      codev_payouts: {
+        Row: {
+          amount_lamports: number
+          created_at: string
+          cycle_id: string | null
+          id: string
+          launch_id: string
+          tx_signature: string
+          wallet_address: string
+        }
+        Insert: {
+          amount_lamports: number
+          created_at?: string
+          cycle_id?: string | null
+          id?: string
+          launch_id: string
+          tx_signature: string
+          wallet_address: string
+        }
+        Update: {
+          amount_lamports?: number
+          created_at?: string
+          cycle_id?: string | null
+          id?: string
+          launch_id?: string
+          tx_signature?: string
+          wallet_address?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "codev_payouts_launch_id_fkey"
+            columns: ["launch_id"]
+            isOneToOne: false
+            referencedRelation: "launches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "codev_payouts_launch_id_fkey"
+            columns: ["launch_id"]
+            isOneToOne: false
+            referencedRelation: "launches_public"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       contributions: {
         Row: {
           amount_lamports: number
@@ -361,10 +406,58 @@ export type Database = {
         }
         Relationships: []
       }
+      launch_codevs: {
+        Row: {
+          contribution_lamports: number
+          id: string
+          joined_at: string
+          launch_id: string
+          paid_lamports: number
+          pending_lamports: number
+          wallet_address: string
+        }
+        Insert: {
+          contribution_lamports?: number
+          id?: string
+          joined_at?: string
+          launch_id: string
+          paid_lamports?: number
+          pending_lamports?: number
+          wallet_address: string
+        }
+        Update: {
+          contribution_lamports?: number
+          id?: string
+          joined_at?: string
+          launch_id?: string
+          paid_lamports?: number
+          pending_lamports?: number
+          wallet_address?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "launch_codevs_launch_id_fkey"
+            columns: ["launch_id"]
+            isOneToOne: false
+            referencedRelation: "launches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "launch_codevs_launch_id_fkey"
+            columns: ["launch_id"]
+            isOneToOne: false
+            referencedRelation: "launches_public"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       launches: {
         Row: {
           category: string | null
           claimer_count: number | null
+          codev_mode: string
+          codev_roster_locked_at: string | null
+          codev_sharing_enabled: boolean
           created_at: string
           created_by_wallet: string
           creator_delivery_wallet: string | null
@@ -448,6 +541,9 @@ export type Database = {
         Insert: {
           category?: string | null
           claimer_count?: number | null
+          codev_mode?: string
+          codev_roster_locked_at?: string | null
+          codev_sharing_enabled?: boolean
           created_at?: string
           created_by_wallet: string
           creator_delivery_wallet?: string | null
@@ -531,6 +627,9 @@ export type Database = {
         Update: {
           category?: string | null
           claimer_count?: number | null
+          codev_mode?: string
+          codev_roster_locked_at?: string | null
+          codev_sharing_enabled?: boolean
           created_at?: string
           created_by_wallet?: string
           creator_delivery_wallet?: string | null
@@ -896,6 +995,10 @@ export type Database = {
     }
     Functions: {
       _gen_affiliate_code: { Args: never; Returns: string }
+      accrue_codev_pending: {
+        Args: { p_deltas: Json; p_launch_id: string }
+        Returns: undefined
+      }
       admin_create_affiliate: {
         Args: { p_admin_wallet: string; p_wallet: string }
         Returns: {
@@ -973,11 +1076,24 @@ export type Database = {
           unclaimed_lamports: number
         }[]
       }
+      admin_list_launch_codevs: {
+        Args: { p_admin_wallet: string; p_launch_id: string }
+        Returns: {
+          contribution_lamports: number
+          joined_at: string
+          paid_lamports: number
+          pending_lamports: number
+          wallet_address: string
+        }[]
+      }
       admin_list_launches: {
         Args: { p_admin_wallet: string }
         Returns: {
           category: string | null
           claimer_count: number | null
+          codev_mode: string
+          codev_roster_locked_at: string | null
+          codev_sharing_enabled: boolean
           created_at: string
           created_by_wallet: string
           creator_delivery_wallet: string | null
@@ -1084,6 +1200,9 @@ export type Database = {
         Returns: {
           category: string | null
           claimer_count: number | null
+          codev_mode: string
+          codev_roster_locked_at: string | null
+          codev_sharing_enabled: boolean
           created_at: string
           created_by_wallet: string
           creator_delivery_wallet: string | null
@@ -1224,6 +1343,9 @@ export type Database = {
         Returns: {
           category: string | null
           claimer_count: number | null
+          codev_mode: string
+          codev_roster_locked_at: string | null
+          codev_sharing_enabled: boolean
           created_at: string
           created_by_wallet: string
           creator_delivery_wallet: string | null
@@ -1320,6 +1442,9 @@ export type Database = {
         Returns: {
           category: string | null
           claimer_count: number | null
+          codev_mode: string
+          codev_roster_locked_at: string | null
+          codev_sharing_enabled: boolean
           created_at: string
           created_by_wallet: string
           creator_delivery_wallet: string | null
@@ -1416,6 +1541,9 @@ export type Database = {
         Returns: {
           category: string | null
           claimer_count: number | null
+          codev_mode: string
+          codev_roster_locked_at: string | null
+          codev_sharing_enabled: boolean
           created_at: string
           created_by_wallet: string
           creator_delivery_wallet: string | null
@@ -1512,6 +1640,9 @@ export type Database = {
         Returns: {
           category: string | null
           claimer_count: number | null
+          codev_mode: string
+          codev_roster_locked_at: string | null
+          codev_sharing_enabled: boolean
           created_at: string
           created_by_wallet: string
           creator_delivery_wallet: string | null
@@ -1612,6 +1743,9 @@ export type Database = {
         Returns: {
           category: string | null
           claimer_count: number | null
+          codev_mode: string
+          codev_roster_locked_at: string | null
+          codev_sharing_enabled: boolean
           created_at: string
           created_by_wallet: string
           creator_delivery_wallet: string | null
@@ -1709,6 +1843,9 @@ export type Database = {
             Returns: {
               category: string | null
               claimer_count: number | null
+              codev_mode: string
+              codev_roster_locked_at: string | null
+              codev_sharing_enabled: boolean
               created_at: string
               created_by_wallet: string
               creator_delivery_wallet: string | null
@@ -1806,6 +1943,9 @@ export type Database = {
             Returns: {
               category: string | null
               claimer_count: number | null
+              codev_mode: string
+              codev_roster_locked_at: string | null
+              codev_sharing_enabled: boolean
               created_at: string
               created_by_wallet: string
               creator_delivery_wallet: string | null
@@ -1898,6 +2038,9 @@ export type Database = {
         Returns: {
           category: string | null
           claimer_count: number | null
+          codev_mode: string
+          codev_roster_locked_at: string | null
+          codev_sharing_enabled: boolean
           created_at: string
           created_by_wallet: string
           creator_delivery_wallet: string | null
@@ -1990,6 +2133,9 @@ export type Database = {
         Returns: {
           category: string | null
           claimer_count: number | null
+          codev_mode: string
+          codev_roster_locked_at: string | null
+          codev_sharing_enabled: boolean
           created_at: string
           created_by_wallet: string
           creator_delivery_wallet: string | null
@@ -2082,6 +2228,9 @@ export type Database = {
         Returns: {
           category: string | null
           claimer_count: number | null
+          codev_mode: string
+          codev_roster_locked_at: string | null
+          codev_sharing_enabled: boolean
           created_at: string
           created_by_wallet: string
           creator_delivery_wallet: string | null
@@ -2169,8 +2318,13 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      codev_dashboard: { Args: { p_wallet: string }; Returns: Json }
       complete_allocation_claim: {
         Args: { p_allocation_id: string; p_tx_signature: string }
+        Returns: undefined
+      }
+      enable_codev_sharing: {
+        Args: { p_launch_id: string; p_mode: string; p_wallet: string }
         Returns: undefined
       }
       fail_allocation_claim: {
@@ -2185,12 +2339,15 @@ export type Database = {
         Args: { p_launch_id: string }
         Returns: undefined
       }
+      get_launch_codev_info: { Args: { p_launch_id: string }; Returns: Json }
       get_launch_fee_split: {
         Args: { p_launch_id: string }
         Returns: {
           affiliate_bps: number
           affiliate_id: string
           affiliate_wallet: string
+          codev_allocations: Json
+          codev_bps: number
           creator_bps: number
           creator_wallet: string
           launch_id: string
@@ -2315,6 +2472,7 @@ export type Database = {
           wallet_address: string
         }[]
       }
+      lock_codev_roster: { Args: { p_launch_id: string }; Returns: undefined }
       mark_pumpfun_fee_claim_attempt: {
         Args: { p_launch_id: string }
         Returns: undefined
@@ -2327,6 +2485,15 @@ export type Database = {
           p_tx_signature: string
         }
         Returns: string
+      }
+      record_codev_batch: {
+        Args: {
+          p_cycle_id: string
+          p_launch_id: string
+          p_payouts: Json
+          p_tx_signature: string
+        }
+        Returns: undefined
       }
       record_harvest_cycle: {
         Args: {
@@ -2413,6 +2580,14 @@ export type Database = {
       try_acquire_custodial_row_lock: {
         Args: { p_key: string; p_ttl_seconds?: number; p_worker: string }
         Returns: boolean
+      }
+      upsert_launch_codev: {
+        Args: {
+          p_contribution_lamports: number
+          p_launch_id: string
+          p_wallet_address: string
+        }
+        Returns: undefined
       }
     }
     Enums: {

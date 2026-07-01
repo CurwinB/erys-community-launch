@@ -49,6 +49,7 @@ Deno.serve(async (req) => {
       website_url,
       launch_datetime,
       created_by_wallet,
+      codev,
     } = body;
 
     if (!token_name || !token_symbol || !launch_datetime || !created_by_wallet) {
@@ -110,6 +111,14 @@ Deno.serve(async (req) => {
       console.warn("[create-launch] affiliate lookup failed", e);
     }
 
+    // Optional co-dev sharing config from client. Both values validated;
+    // out-of-range values fall back to the disabled default.
+    const codevEnabled = !!(codev && codev.enabled === true);
+    const codevMode =
+      codev && (codev.mode === "proportional" || codev.mode === "fcfs")
+        ? codev.mode
+        : "proportional";
+
     // Step 3: Allocate a slot + insert atomically under platform lock so two
     // concurrent submissions can't both grab the same minute.
     const { data, slot } = await withScheduleLock(supabase, "bags", async () => {
@@ -132,6 +141,8 @@ Deno.serve(async (req) => {
         ipfs_metadata_url: null,
         status: "scheduled",
         referred_by_affiliate_id: referredByAffiliateId,
+        codev_sharing_enabled: codevEnabled,
+        codev_mode: codevMode,
       }).select("id").single();
       if (inserted.error) {
         throw new Error(`Failed to create launch: ${inserted.error.message}`);

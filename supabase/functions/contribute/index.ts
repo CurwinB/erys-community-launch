@@ -231,6 +231,23 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Co-dev seat upsert. Fires only when the launch has opted in and the
+    // roster is not locked. Field-name mapping is intentional and explicit:
+    // contributions.amount_lamports (source, this table) is added to
+    // launch_codevs.contribution_lamports (destination, separate table).
+    // These are two different columns on two different tables — no field
+    // reuse. Failures here are non-blocking; the contribution itself has
+    // already been recorded on-chain and in the DB.
+    try {
+      await supabase.rpc("upsert_launch_codev", {
+        p_launch_id: launch_id,
+        p_wallet_address: wallet_address,
+        p_contribution_lamports: amount,
+      });
+    } catch (codevErr) {
+      console.warn("[CODEV] upsert_launch_codev failed (non-blocking):", codevErr);
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
