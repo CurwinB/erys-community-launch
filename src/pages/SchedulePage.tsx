@@ -985,6 +985,65 @@ const SchedulePage = () => {
           </div>
 
           <div className="space-y-4 border border-border bg-card p-6">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground">
+                Share creator fees with co-devs (optional)
+              </h3>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Split harvested Pump.fun creator fees 50% you / 20% co-dev pool /
+                15% affiliate / 15% treasury instead of the default 70/30 (or
+                70/15/15 with an affiliate). Once fees are harvested this cannot
+                be changed.
+              </p>
+            </div>
+            <div className="flex items-center justify-between border border-border bg-background px-3 py-2">
+              <span className="text-xs text-foreground">
+                Enable co-dev fee sharing
+              </span>
+              <Switch
+                checked={codevEnabled}
+                onCheckedChange={(v) => setCodevEnabled(!!v)}
+              />
+            </div>
+            {codevEnabled && (
+              <div className="space-y-2">
+                <Label className="text-xs">Roster mode</Label>
+                <div className="flex flex-wrap gap-2">
+                  {(
+                    [
+                      { value: "proportional" as const, label: "Open (proportional)" },
+                      { value: "fcfs" as const, label: "First 100 (proportional)" },
+                    ]
+                  ).map((opt) => {
+                    const active = codevMode === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => setCodevMode(opt.value)}
+                        className={`border px-3 py-1.5 text-xs uppercase tracking-wider transition-colors ${
+                          active
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border bg-background text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  Both modes split the 20% pool proportionally by contribution
+                  size. Mode only controls who gets a seat: open lets every
+                  contributor in (up to 100), capped locks the roster at the
+                  first 100 unique contributors. The roster locks automatically
+                  when the token launches.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-4 border border-border bg-card p-6">
              <h3 className="text-sm font-semibold text-foreground">Launch Time</h3>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
