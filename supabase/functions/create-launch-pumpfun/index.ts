@@ -69,6 +69,7 @@ Deno.serve(async (req) => {
       website_url,
       launch_datetime,
       created_by_wallet,
+      codev,
     } = body;
 
     const token_name = (rawTokenName ?? "").trim();
@@ -285,6 +286,12 @@ Deno.serve(async (req) => {
       console.warn("[create-launch-pumpfun] affiliate lookup failed", e);
     }
 
+    const codevEnabled = !!(codev && codev.enabled === true);
+    const codevMode =
+      codev && (codev.mode === "proportional" || codev.mode === "fcfs")
+        ? codev.mode
+        : "proportional";
+
     // Step 4: Allocate slot + insert atomically under platform lock.
     const { data, slot } = await withScheduleLock(supabase, "pumpfun", async () => {
       const slot = await findNextAvailableSlot(supabase, "pumpfun", launch_datetime);
@@ -313,6 +320,8 @@ Deno.serve(async (req) => {
         pumpfun_mint_keypair_encrypted: encryptedMintPk,
         status: "scheduled",
         referred_by_affiliate_id: referredByAffiliateId,
+        codev_sharing_enabled: codevEnabled,
+        codev_mode: codevMode,
       }).select("id").single();
       if (inserted.error) {
         throw new Error(`Failed to create launch: ${inserted.error.message}`);
