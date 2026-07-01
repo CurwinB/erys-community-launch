@@ -115,6 +115,14 @@ const SchedulePage = () => {
     community_notified: false,
   });
 
+  // Co-dev fee sharing (opt-in). When enabled the launch's harvested Pump.fun
+  // creator fees split 50/20/15/15 (creator/codev pool/affiliate/treasury)
+  // instead of the default 70/30 (or 70/15/15 with an affiliate).
+  const [codevEnabled, setCodevEnabled] = useState(false);
+  const [codevMode, setCodevMode] = useState<"proportional" | "fcfs">(
+    "proportional"
+  );
+
   const handleMemeUpload = async (slot: number, file: File) => {
     if (file.size > 4 * 1024 * 1024) {
       toast({
@@ -478,6 +486,9 @@ const SchedulePage = () => {
           website_url: form.websiteUrl || null,
           launch_datetime: launchDatetime,
           created_by_wallet: publicKey,
+          codev: codevEnabled
+            ? { enabled: true, mode: codevMode }
+            : undefined,
         },
       });
 
